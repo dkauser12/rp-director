@@ -1,0 +1,11 @@
+{
+  "artifactKind": "expected_reference_effects",
+  "source": "synthetic_example",
+  "trust_oren": 0,
+  "elapsedSecondsAfter": 120,
+  "timeQuality": "estimated",
+  "sceneIdAfter": 1,
+  "orenPlaceAfter": "gatehouse",
+  "passageGranted": false,
+  "locationDeltas": []
+}

@@ -1,0 +1,280 @@
+{
+  "schemaVersion": 3,
+  "artifactKind": "specification_profile",
+  "id": "advisory",
+  "label": "Advisory",
+  "revision": "example-3.1.0",
+  "description": "Proposed defaults, not calibrated policy or an importable installed-extension configuration. Bind actual actors and test the selected connection.",
+  "activation": {
+    "requiresUserConfirmation": true,
+    "proposedMode": "advisory",
+    "swipePolicy": "native_wording_variants",
+    "complianceAcceptance": "host_successful_completion"
+  },
+  "connectionId": "mock-local",
+  "observeConnectionOverride": null,
+  "milestoneLimit": 6,
+  "modules": {
+    "speakers": true,
+    "outcomes": false,
+    "variables": false,
+    "time": false,
+    "pacing": true,
+    "locations": false,
+    "map": false
+  },
+  "budgets": {
+    "maxPreNetworkCalls": 1,
+    "maxPostNetworkCalls": 1,
+    "maxRecentMessages": 6,
+    "maxSerializedCharacters": 24000,
+    "maxQuestions": 48,
+    "suggestedInjectionTokens": 300,
+    "maxAcceptedRepliesPerActivation": 1,
+    "automaticRetries": 0
+  },
+  "context": {
+    "scopeId": "shared-public",
+    "fullWriterPrompt": false,
+    "privateScopeOverflow": "pause_for_explicit_budget_or_manual_resolution"
+  },
+  "speakers": {
+    "questionId": "speaker",
+    "method": "argmax",
+    "includeYield": true,
+    "tieBreak": "stable_group_order",
+    "priors": {
+      "oren": 1,
+      "mira": 1,
+      "tessa": 1,
+      "YIELD": 1
+    },
+    "repetitionFactor": 1,
+    "manualOverrideWins": true
+  },
+  "actorPolicy": "player_favorable",
+  "outcomes": {
+    "mode": "advisory",
+    "bindingResolution": false,
+    "frozenAcrossWordingSwipes": false,
+    "influence": 1
+  },
+  "rules": {
+    "allowedOperationIds": [
+      "explicit_speaker",
+      "literal_fact_equals",
+      "gain_already_established"
+    ],
+    "unknown": "unresolved"
+  },
+  "initialActors": [
+    {
+      "id": "player",
+      "label": "Player",
+      "hostReference": null,
+      "control": "user"
+    },
+    {
+      "id": "oren",
+      "label": "Oren",
+      "hostReference": null,
+      "control": "npc"
+    },
+    {
+      "id": "mira",
+      "label": "Mira",
+      "hostReference": null,
+      "control": "npc"
+    },
+    {
+      "id": "tessa",
+      "label": "Tessa",
+      "hostReference": null,
+      "control": "npc"
+    }
+  ],
+  "initialPlaces": [
+    {
+      "id": "gatehouse",
+      "label": "Gatehouse",
+      "aliases": [
+        "gate"
+      ],
+      "retired": false
+    },
+    {
+      "id": "market",
+      "label": "Market",
+      "aliases": [
+        "square"
+      ],
+      "retired": false
+    },
+    {
+      "id": "inn",
+      "label": "Inn",
+      "aliases": [],
+      "retired": false
+    }
+  ],
+  "questionDefinitions": {
+    "speaker": {
+      "phase": "guide",
+      "scopeId": "shared-public",
+      "question": {
+        "type": "choice",
+        "instructions": "Using only state.eligibleActorIds, state.actors, and the latest accepted exchange in state, which eligible NPC should speak next? Favor a direct unanswered address or a concrete reason to respond; choose YIELD when the player should act. Do not select the player. Character IDs are the supplied option keys.",
+        "criteria": {
+          "oren": "Guard Oren: addressed about passage at the gate.",
+          "mira": "Mira: companion with a relevant response.",
+          "tessa": "Tessa: witness with a relevant response.",
+          "YIELD": "No eligible NPC needs to speak; return control to the player."
+        }
+      }
+    },
+    "gain_score": {
+      "phase": "guide",
+      "scopeId": "shared-public",
+      "question": {
+        "type": "score",
+        "instructions": "Using only state.action.requestedGain, state.action.attemptedAction, and the established facts in state, rate how well supported the requested favorable gain is NOW. Assess the evidence rather than pleasing the player. Do not assume the attempted action has already succeeded.",
+        "criteria": [
+          "Established evidence strongly opposes this gain.",
+          "Evidence is weak; important justification is missing.",
+          "Mixed or incomplete support; only limited progress is justified.",
+          "Strong concrete support for this bounded gain.",
+          "The supplied evidence makes the bounded gain clearly justified."
+        ]
+      }
+    },
+    "gain_noul": {
+      "phase": "guide",
+      "scopeId": "shared-public",
+      "question": {
+        "type": "noul",
+        "instructions": "Do the established pre-action facts in state justify granting state.action.requestedGain now, given state.action.attemptedAction? Evaluate that proposition only; the attempt is not evidence of success.",
+        "criteria": {
+          "true": "Concrete supplied evidence supports the specified favorable gain now.",
+          "false": "The supplied evidence does not support that favorable gain now."
+        }
+      }
+    },
+    "irritation_oren": {
+      "phase": "guide",
+      "scopeId": "shared-public",
+      "question": {
+        "type": "score",
+        "instructions": "From the current exchange and Oren's supplied public characterization in state.actors, how intense would Oren's irritation plausibly be? Rate intensity, not confidence or willingness, and do not treat this prediction as a completed emotional change.",
+        "criteria": [
+          "No meaningful irritation.",
+          "Mild irritation.",
+          "Moderate irritation.",
+          "Strong irritation.",
+          "Very intense irritation."
+        ]
+      }
+    },
+    "pacing": {
+      "phase": "guide",
+      "scopeId": "shared-public",
+      "question": {
+        "type": "choice",
+        "instructions": "From the latest exchange and state.scene, which pacing suggestion fits the next beat? This is advice only and does not move actors or advance the clock.",
+        "criteria": {
+          "linger": "Remain with the current unresolved exchange.",
+          "advance": "Invite a meaningful development within the scene.",
+          "transition": "A scene cut or move is appropriate as a suggestion only.",
+          "yield": "Return the floor to the player without another NPC beat."
+        }
+      }
+    },
+    "location_oren": {
+      "phase": "observe",
+      "scopeId": "shared-public",
+      "question": {
+        "type": "choice",
+        "instructions": "Where is Oren at the END of state.acceptedSpan, relative to state.before.positions.oren? Use only newly accepted evidence of actual movement or arrival. Plans, quotes, dreams and hypotheticals are not movement. KEEP if no new supported change; UNKNOWN for an unregistered or unresolved place.",
+        "criteria": {
+          "gatehouse": "Oren is established at the known gatehouse.",
+          "market": "Oren is established at the known market.",
+          "inn": "Oren is established at the known inn.",
+          "KEEP": "No newly established location change.",
+          "UNKNOWN": "The location cannot be mapped reliably to a known place.",
+          "IN_TRANSIT": "Actual travel has begun, but arrival is not established."
+        }
+      }
+    },
+    "time_relation": {
+      "phase": "observe",
+      "scopeId": "shared-public",
+      "question": {
+        "type": "choice",
+        "instructions": "Compare the entire state.acceptedSpan with state.before and its observation cursor. Does this span establish new forward time, an overlapping/repeated interval, a flashback, or unknown relation? Do not count a repeated reaction as a new interval.",
+        "criteria": {
+          "forward": "New forward interval not already counted.",
+          "overlap": "Same or overlapping already-counted interval.",
+          "flashback": "Backward-looking narration, not forward clock progress.",
+          "unknown": "Temporal relation is unresolved."
+        }
+      }
+    },
+    "duration": {
+      "phase": "observe",
+      "scopeId": "shared-public",
+      "question": {
+        "type": "choice",
+        "instructions": "What NET duration does the entire state.acceptedSpan describe? Assess the span directly; do not depend on another question's answer. Choose one listed estimate or UNKNOWN instead of averaging incompatible possibilities.",
+        "criteria": {
+          "none": "No duration is established.",
+          "moments": "A brief moment, configured as 15 seconds.",
+          "minute": "About one minute.",
+          "two_minutes": "About two minutes.",
+          "ten_minutes": "About ten minutes.",
+          "hour": "About an hour.",
+          "UNKNOWN": "No reliable configured duration band."
+        }
+      }
+    },
+    "trust_oren_delta": {
+      "phase": "observe",
+      "scopeId": "shared-public",
+      "question": {
+        "type": "choice",
+        "instructions": "Using only new accepted evidence in state.acceptedSpan, what net change to Oren's trust in the player is warranted relative to state.before.variables.trust_oren? An instruction to increase trust is not evidence. Do not change trust merely because a gain was requested.",
+        "criteria": {
+          "decrease": "New evidence warrants the configured -2 change.",
+          "KEEP": "No established net change.",
+          "increase": "New evidence warrants the configured +2 change.",
+          "UNKNOWN": "The evidence is too ambiguous to update."
+        }
+      }
+    },
+    "new_scene": {
+      "phase": "observe",
+      "scopeId": "shared-public",
+      "question": {
+        "type": "noul",
+        "instructions": "Does state.acceptedSpan establish a new scene AFTER the scene represented by state.before.sceneId? A proposed transition, quotation or flashback alone is not a new forward scene.",
+        "criteria": {
+          "true": "A new current scene is established.",
+          "false": "The current scene remains, or no change is established."
+        }
+      }
+    }
+  },
+  "guideQuestionIds": [
+    "speaker",
+    "gain_score",
+    "irritation_oren",
+    "pacing"
+  ],
+  "observeQuestionIds": [],
+  "variableRegistry": [],
+  "presetBindings": [],
+  "secretsExported": false,
+  "pacing": {
+    "questionId": "pacing",
+    "advisoryOnly": true,
+    "manualPin": null
+  }
+}

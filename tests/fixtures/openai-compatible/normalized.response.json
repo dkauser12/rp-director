@@ -1,0 +1,26 @@
+{
+  "requestId": "structured-demo-001",
+  "provider": "structured",
+  "requestedModel": null,
+  "returnedModel": null,
+  "answers": {
+    "speaker": {
+      "type": "choice",
+      "choice": "oren",
+      "probabilities": null,
+      "confidence": null,
+      "provenance": "model_reported"
+    },
+    "gain_noul": {
+      "type": "noul",
+      "noul": 0.35,
+      "confidence": null,
+      "provenance": "model_reported"
+    }
+  },
+  "unresolvedQuestionIds": [],
+  "inputTokens": null,
+  "outputTokens": null,
+  "durationMs": 0,
+  "transportAttempts": 1
+}

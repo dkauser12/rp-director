@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "presets": [
+    {
+      "id": "my_local_preset",
+      "label": "My local preset",
+      "description": "Copy this document to profiles/local/presets.json and customize it. That path is gitignored.",
+      "actorPolicy": "player_favorable",
+      "resolutionMethod": "threshold",
+      "outcomes": [
+        {
+          "name": "not_yet",
+          "instruction": "The bounded result {{gain}} is not achieved in this reply.",
+          "records": "",
+          "final": false
+        },
+        {
+          "name": "achieved",
+          "instruction": "The bounded result {{gain}} is achieved exactly as declared and nothing beyond it.",
+          "records": "achieved",
+          "final": true
+        }
+      ],
+      "bands": [
+        {
+          "id": "b0",
+          "lowerInclusive": 0,
+          "upper": 0.75,
+          "upperInclusive": false,
+          "thresholdOutcome": "not_yet",
+          "sampleWeights": { "not_yet": 0.8, "achieved": 0.2 }
+        },
+        {
+          "id": "b1",
+          "lowerInclusive": 0.75,
+          "upper": 1,
+          "upperInclusive": true,
+          "thresholdOutcome": "achieved",
+          "sampleWeights": { "not_yet": 0.2, "achieved": 0.8 }
+        }
+      ]
+    }
+  ]
+}

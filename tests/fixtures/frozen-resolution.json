@@ -1,0 +1,21 @@
+{
+  "artifactKind": "synthetic_resolution_fixture",
+  "resolutionId": "resolution-demo-001",
+  "previousResolutionId": null,
+  "actionId": "action-demo-001",
+  "baseCursor": "cursor-before-demo",
+  "baseStateRevision": 4,
+  "profileRevision": "example-3.0.0",
+  "policyBandId": "b1",
+  "assessment": {
+    "type": "noul",
+    "noul": 0.35,
+    "confidence": null,
+    "provenance": "fixture"
+  },
+  "method": "threshold",
+  "draw": null,
+  "outcome": "deferred",
+  "status": "prepared",
+  "effectsCommitted": false
+}

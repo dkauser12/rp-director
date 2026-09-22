@@ -1,0 +1,24 @@
+{
+  "model": "jev-latest",
+  "answers": {
+    "speaker": {
+      "type": "choice",
+      "choice": "oren",
+      "probabilities": {
+        "oren": 1.0,
+        "mira": 0.0,
+        "tessa": 0.0,
+        "YIELD": 0.0
+      },
+      "confidence": 1.0
+    },
+    "gain_noul": {
+      "type": "noul",
+      "noul": 0.35
+    }
+  },
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}

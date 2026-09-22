@@ -1,0 +1,46 @@
+{
+  "actionId": "action-demo-001",
+  "templateId": "obtain_bounded_access",
+  "playerActorId": "player",
+  "targetActorIds": [
+    "oren"
+  ],
+  "attemptedAction": "The player asks Oren to grant immediate passage without presenting a permit.",
+  "requestedGain": "Oren grants permission to pass the gate now.",
+  "applicability": "favorable",
+  "preconditions": [],
+  "outcomeText": {
+    "deferred": {
+      "required": [
+        "The player has not been granted passage now."
+      ],
+      "forbidden": [
+        "Do not depict the player as already admitted.",
+        "Do not erase established unrelated achievements."
+      ]
+    },
+    "progress_only": {
+      "required": [
+        "Only a request for captain review has been submitted.",
+        "No permission to pass has been granted yet."
+      ],
+      "forbidden": [
+        "Do not grant passage or unrelated gains."
+      ]
+    },
+    "achieved": {
+      "required": [
+        "Oren grants permission to pass the gate now."
+      ],
+      "forbidden": [
+        "Do not invent broader allegiance, affection or unrelated benefits."
+      ]
+    }
+  },
+  "effectsByOutcome": {
+    "deferred": [],
+    "progress_only": [],
+    "achieved": []
+  },
+  "note": "At PoC milestone 3 the accepted resolution ledger is authoritative; optional later variable bindings must declare ownership."
+}

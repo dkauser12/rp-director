@@ -1,0 +1,19 @@
+{
+  "name": "rp-director",
+  "version": "0.5.0",
+  "private": true,
+  "description": "RP Director for SillyTavern: native Send and swipes, Jev decisions, reviewed NPC tool results, and a compact interface.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "watch": "node build.mjs --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --test \"tests/unit/**/*.test.ts\"",
+    "verify": "npm run typecheck && npm test && npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.5",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "model": "jev-latest",
+  "answers": {
+    "noul": {
+      "type": "noul",
+      "noul": 0.35
+    }
+  },
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}

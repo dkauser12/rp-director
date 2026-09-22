@@ -1,0 +1,12 @@
+{
+    "display_name": "RP Director",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "RP Director contributors",
+    "version": "0.5.0",
+    "generate_interceptor": "rpDirectorInterceptor",
+    "homePage": "https://github.com/dkauser12/rp-director"
+}

@@ -1,0 +1,20 @@
+{
+  "model": "jev-latest",
+  "answers": {
+    "choice": {
+      "type": "choice",
+      "choice": "oren",
+      "probabilities": {
+        "oren": 1.0,
+        "mira": 0.0,
+        "tessa": 0.0,
+        "YIELD": 0.0
+      },
+      "confidence": 1.0
+    }
+  },
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}

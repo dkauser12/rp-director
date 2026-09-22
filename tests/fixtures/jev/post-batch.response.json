@@ -1,0 +1,62 @@
+{
+  "model": "jev-latest",
+  "answers": {
+    "trust_oren_delta": {
+      "type": "choice",
+      "choice": "KEEP",
+      "probabilities": {
+        "decrease": 0.0,
+        "KEEP": 1.0,
+        "increase": 0.0,
+        "UNKNOWN": 0.0
+      },
+      "confidence": 1.0
+    },
+    "time_relation": {
+      "type": "choice",
+      "choice": "forward",
+      "probabilities": {
+        "forward": 1.0,
+        "overlap": 0.0,
+        "flashback": 0.0,
+        "unknown": 0.0
+      },
+      "confidence": 1.0
+    },
+    "duration": {
+      "type": "choice",
+      "choice": "two_minutes",
+      "probabilities": {
+        "none": 0.0,
+        "moments": 0.0,
+        "minute": 0.0,
+        "two_minutes": 1.0,
+        "ten_minutes": 0.0,
+        "hour": 0.0,
+        "UNKNOWN": 0.0
+      },
+      "confidence": 1.0
+    },
+    "new_scene": {
+      "type": "noul",
+      "noul": 0.0
+    },
+    "location_oren": {
+      "type": "choice",
+      "choice": "KEEP",
+      "probabilities": {
+        "gatehouse": 0.0,
+        "market": 0.0,
+        "inn": 0.0,
+        "KEEP": 1.0,
+        "UNKNOWN": 0.0,
+        "IN_TRANSIT": 0.0
+      },
+      "confidence": 1.0
+    }
+  },
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}

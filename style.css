@@ -1,0 +1,250 @@
+/* RP Director — one compact play control, advanced tools on demand. */
+
+#rpd-bar {
+    display: flex;
+    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 4px;
+    padding: 4px 8px;
+    margin: 0 0 4px 0;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 8px;
+    background-color: var(--SmartThemeBlurTintColor);
+    font-size: calc(var(--mainFontSize) * 0.9);
+}
+
+#rpd-bar.rpd-hidden {
+    display: none;
+}
+
+#rpd-bar .rpd-main,
+#rpd-overflow,
+#rpd-bar .rpd-inline {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+#rpd-bar select,
+#rpd-bar input[type="text"] {
+    max-width: 180px;
+}
+
+#rpd-bar .menu_button {
+    padding: 2px 8px;
+    margin: 0;
+}
+
+#rpd-bar .rpd-status {
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    white-space: nowrap;
+}
+
+#rpd-bar .rpd-status[data-state="Ready"] { opacity: 0.8; }
+#rpd-bar .rpd-status[data-state="Deciding"],
+#rpd-bar .rpd-status[data-state="Writing"] { border-color: var(--SmartThemeQuoteColor); }
+#rpd-bar .rpd-status[data-state="Frozen"] { border-color: var(--SmartThemeQuoteColor); font-weight: bold; }
+#rpd-bar .rpd-status[data-state="Provisional"] { border-color: orange; font-weight: bold; }
+#rpd-bar .rpd-status[data-state="Stale"],
+#rpd-bar .rpd-status[data-state="Error"] { border-color: red; }
+
+#rpd-bar .rpd-accept { border-color: var(--SmartThemeQuoteColor); }
+#rpd-bar .rpd-reject { border-color: red; }
+
+#rpd-overflow {
+    padding-top: 5px;
+    border-top: 1px dashed var(--SmartThemeBorderColor);
+}
+
+.rpd-hidden {
+    display: none;
+}
+
+#rpd-overflow.rpd-hidden {
+    display: none;
+}
+
+/* Settings drawer */
+#rpd-settings .rpd-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 4px 0;
+    flex-wrap: wrap;
+}
+
+#rpd-settings .rpd-note {
+    margin: 6px 0 10px;
+    padding: 8px 10px;
+    border-left: 3px solid var(--SmartThemeQuoteColor);
+    background: var(--black30a);
+}
+
+#rpd-settings .rpd-section {
+    margin-top: 10px;
+    border-top: 1px solid var(--SmartThemeBorderColor);
+    padding-top: 6px;
+}
+
+#rpd-settings .rpd-section > summary {
+    cursor: pointer;
+    padding: 4px 0;
+}
+
+/* ST's .text_pole rule sets width:100%, which in a narrow drawer column makes
+   every select/text input in a .rpd-row fill the whole row and push sibling
+   buttons onto their own line. Bound it so labels, controls and buttons can
+   share a line (or shrink gracefully) instead of always stacking. */
+#rpd-settings .rpd-row > select.text_pole,
+#rpd-settings .rpd-row > input.text_pole[type="text"],
+#rpd-settings .rpd-row > input.text_pole[type="password"] {
+    width: auto;
+    flex: 1 1 160px;
+    min-width: 120px;
+    max-width: 260px;
+}
+
+#rpd-settings label {
+    min-width: 140px;
+}
+
+#rpd-settings table.rpd-bands {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: calc(var(--mainFontSize) * 0.85);
+}
+
+#rpd-settings table.rpd-bands td,
+#rpd-settings table.rpd-bands th {
+    border: 1px solid var(--SmartThemeBorderColor);
+    padding: 2px 4px;
+    text-align: center;
+}
+
+#rpd-settings table.rpd-bands input {
+    width: 60px;
+    /* The "from"/"to"/weight number inputs in tableui.ts carry no class
+       (unlike the name/threshold/records .text_pole inputs), so without this
+       they fall back to the browser's native white input background with
+       the page's light theme text color inherited on top - unreadable.
+       Match .text_pole's theming here so every cell is themed the same. */
+    background-color: var(--black30a);
+    color: var(--SmartThemeBodyColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 5px;
+}
+
+#rpd-inspector {
+    max-height: 320px;
+    overflow: auto;
+    font-family: var(--monoFontFamily);
+    font-size: calc(var(--mainFontSize) * 0.8);
+    white-space: pre-wrap;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 6px;
+    padding: 6px;
+    background-color: var(--black30a);
+}
+
+#rpd-inspector .rpd-entry {
+    border-bottom: 1px dashed var(--SmartThemeBorderColor);
+    padding: 4px 0;
+}
+
+#rpd-inspector .rpd-entry summary {
+    cursor: pointer;
+}
+
+.rpd-muted {
+    opacity: 0.7;
+}
+
+/* Policy table editor */
+#rpd-bands .rpd-help {
+    font-size: calc(var(--mainFontSize) * 0.85);
+    opacity: 0.85;
+    margin: 4px 0 8px 0;
+    padding: 6px 8px;
+    border-left: 2px solid var(--SmartThemeQuoteColor);
+}
+
+#rpd-bands .rpd-help > div { margin: 2px 0; }
+
+#rpd-bands .rpd-table-scroll {
+    overflow-x: auto;
+    padding-bottom: 4px;
+}
+
+#rpd-settings table.rpd-bands input[type="number"] { width: 70px; }
+#rpd-settings table.rpd-bands input[type="text"] { width: 120px; min-width: 90px; }
+#rpd-settings table.rpd-bands select { min-width: 110px; }
+
+#rpd-bands .rpd-colhead {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    justify-content: center;
+    white-space: nowrap;
+}
+
+#rpd-bands .rpd-prefix {
+    font-family: var(--monoFontFamily);
+    opacity: 0.75;
+    user-select: none;
+    cursor: help;
+}
+
+#rpd-bands .rpd-x {
+    cursor: pointer;
+    padding: 0 5px;
+    border-radius: 4px;
+    opacity: 0.7;
+}
+
+#rpd-bands .rpd-x:hover { opacity: 1; color: red; }
+
+#rpd-bands .rpd-readonly { opacity: 0.6; cursor: not-allowed; }
+#rpd-bands .rpd-dim { opacity: 0.45; }
+#rpd-bands .rpd-bad { outline: 1px solid red; color: red; }
+#rpd-bands td.rpd-bad { outline: none; font-weight: bold; }
+#rpd-bands .rpd-meta-label { text-align: right; opacity: 0.75; font-style: italic; white-space: nowrap; }
+#rpd-bands .rpd-sum { font-family: var(--monoFontFamily); }
+
+#rpd-bands .rpd-table-result {
+    margin: 6px 0;
+    padding: 6px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    font-size: calc(var(--mainFontSize) * 0.85);
+}
+
+#rpd-bands .rpd-table-result[data-status="none"] { display: none; }
+#rpd-bands .rpd-table-result[data-status="pass"] { border-color: #3a9d5d; }
+#rpd-bands .rpd-table-result[data-status="pass"] .rpd-result-head { color: #3a9d5d; font-weight: bold; }
+#rpd-bands .rpd-table-result[data-status="fail"] { border-color: red; }
+#rpd-bands .rpd-table-result[data-status="fail"] .rpd-result-head { color: red; font-weight: bold; }
+#rpd-bands .rpd-table-result[data-status="local_only"] .rpd-result-head,
+#rpd-bands .rpd-table-result[data-status="info"] .rpd-result-head { font-weight: bold; }
+#rpd-bands .rpd-result-line { margin-top: 2px; }
+
+#rpd-settings table.rpd-bands textarea.rpd-instruction {
+    width: 190px;
+    min-width: 160px;
+    font-size: calc(var(--mainFontSize) * 0.8);
+    line-height: 1.3;
+    resize: both;
+}
+
+#rpd-bands .rpd-meta td { vertical-align: top; }
+#rpd-bands input.rpd-final { width: auto; }
+
+/* Native ST popup content. Text is inserted with textContent, never model HTML. */
+.rpd-roll-review { text-align: left; }
+.rpd-roll-review section { padding: 0.8rem 0; border-top: 1px solid var(--SmartThemeBorderColor, #666); }
+.rpd-roll-review section p { margin: 0.45rem 0; }
+.rpd-manual-attempt { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; padding-block: 8px; }
+.rpd-field { display: flex; flex-direction: column; gap: 4px; }

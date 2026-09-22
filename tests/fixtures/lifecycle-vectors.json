@@ -1,0 +1,177 @@
+{
+  "artifactKind": "scenario_expectations",
+  "note": "These vectors specify behavior. Their existence or JSON validity does not mean a host implementation passes them.",
+  "cases": [
+    {
+      "id": "duplicate_commit",
+      "initial": {
+        "trust": 0,
+        "applied": []
+      },
+      "operations": [
+        {
+          "kind": "accepted_delta",
+          "operationId": "o1",
+          "delta": 2
+        },
+        {
+          "kind": "accepted_delta",
+          "operationId": "o1",
+          "delta": 2
+        }
+      ],
+      "expected": {
+        "trust": 2,
+        "applied": [
+          "o1"
+        ]
+      }
+    },
+    {
+      "id": "rejected_attempt",
+      "initial": {
+        "trust": 0,
+        "applied": []
+      },
+      "operations": [
+        {
+          "kind": "provisional_delta",
+          "operationId": "o1",
+          "delta": 2
+        },
+        {
+          "kind": "reject",
+          "operationId": "o1"
+        }
+      ],
+      "expected": {
+        "trust": 0,
+        "applied": []
+      }
+    },
+    {
+      "id": "changed_chat",
+      "initial": {
+        "chatId": "a",
+        "trust": 0
+      },
+      "operations": [
+        {
+          "kind": "start",
+          "chatId": "a"
+        },
+        {
+          "kind": "switch",
+          "chatId": "b"
+        },
+        {
+          "kind": "late_result",
+          "chatId": "a",
+          "delta": 2
+        }
+      ],
+      "expected": {
+        "chatId": "b",
+        "trust": 0
+      }
+    },
+    {
+      "id": "wording_swipes",
+      "resolutionId": "r1",
+      "outcome": "deferred",
+      "operations": [
+        {
+          "kind": "wording_swipe"
+        },
+        {
+          "kind": "wording_swipe"
+        },
+        {
+          "kind": "wording_swipe"
+        },
+        {
+          "kind": "wording_swipe"
+        },
+        {
+          "kind": "wording_swipe"
+        }
+      ],
+      "expected": {
+        "resolutionCount": 1,
+        "outcome": "deferred",
+        "providerReassessments": 0
+      }
+    },
+    {
+      "id": "explicit_reroll",
+      "resolutionId": "r1",
+      "operations": [
+        {
+          "kind": "explicit_reroll"
+        }
+      ],
+      "expected": {
+        "resolutionCount": 2,
+        "newPreviousResolutionId": "r1",
+        "differentOutcomeGuaranteed": false
+      }
+    },
+    {
+      "id": "no_erasure",
+      "initial": {
+        "earnedPermit": true,
+        "newRequestedGain": false
+      },
+      "resolvedOutcome": "deferred",
+      "expected": {
+        "earnedPermit": true,
+        "newRequestedGain": false
+      }
+    },
+    {
+      "id": "interval_overlap",
+      "initialElapsedSeconds": 0,
+      "operations": [
+        {
+          "relation": "forward",
+          "durationSeconds": 120
+        },
+        {
+          "relation": "overlap",
+          "durationSeconds": 120
+        }
+      ],
+      "expectedElapsedSeconds": 120
+    },
+    {
+      "id": "intent_not_move",
+      "before": "gatehouse",
+      "acceptedText": "Oren says he plans to go to the market.",
+      "expectedLocation": "gatehouse"
+    },
+    {
+      "id": "rules_owned_then_observation_failure",
+      "initial": {
+        "acceptedResolutionIds": [],
+        "trust": 0,
+        "trackingStatus": "current"
+      },
+      "operations": [
+        {
+          "kind": "accept_resolution",
+          "resolutionId": "r1"
+        },
+        {
+          "kind": "observation_failed"
+        }
+      ],
+      "expected": {
+        "acceptedResolutionIds": [
+          "r1"
+        ],
+        "trust": 0,
+        "trackingStatus": "stale"
+      }
+    }
+  ]
+}

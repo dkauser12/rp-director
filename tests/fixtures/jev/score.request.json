@@ -1,0 +1,63 @@
+{
+  "model": "jev-latest",
+  "state": {
+    "scopeId": "shared-public",
+    "eligibleActorIds": [
+      "oren",
+      "mira",
+      "tessa"
+    ],
+    "actors": {
+      "player": {
+        "control": "user"
+      },
+      "oren": {
+        "control": "npc",
+        "publicCard": "Gate guard. Requires permits and respects clear authorization."
+      },
+      "mira": {
+        "control": "npc",
+        "publicCard": "Practical companion; does not speak for the player."
+      },
+      "tessa": {
+        "control": "npc",
+        "publicCard": "Patient witness."
+      }
+    },
+    "facts": {
+      "permitPresented": false,
+      "passageAlreadyGranted": false,
+      "knownGateRule": "A permit or captain authorization is required."
+    },
+    "action": {
+      "actionId": "action-demo-001",
+      "attemptedAction": "The player asks Oren to grant immediate passage without presenting a permit.",
+      "requestedGain": "Oren grants permission to pass the gate now.",
+      "applicability": "favorable"
+    },
+    "latestInput": "Oren, let me through the gate now.",
+    "scene": {
+      "id": 1,
+      "acceptedReplyCount": 3
+    },
+    "recentAcceptedMessages": [
+      {
+        "actorId": "oren",
+        "text": "Show your permit, or wait for the captain."
+      }
+    ]
+  },
+  "questions": {
+    "score": {
+      "type": "score",
+      "instructions": "Using only state.action.requestedGain, state.action.attemptedAction, and the established facts in state, rate how well supported the requested favorable gain is NOW. Assess the evidence rather than pleasing the player. Do not assume the attempted action has already succeeded.",
+      "criteria": [
+        "Established evidence strongly opposes this gain.",
+        "Evidence is weak; important justification is missing.",
+        "Mixed or incomplete support; only limited progress is justified.",
+        "Strong concrete support for this bounded gain.",
+        "The supplied evidence makes the bounded gain clearly justified."
+      ]
+    }
+  }
+}

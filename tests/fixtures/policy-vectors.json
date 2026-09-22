@@ -1,0 +1,183 @@
+{
+  "artifactKind": "reference_policy_vectors",
+  "notExtensionExecution": true,
+  "weightPrecision": "integer_basis_points",
+  "cases": [
+    {
+      "id": "threshold-0",
+      "method": "threshold",
+      "primitive": "noul",
+      "value": 0,
+      "expectedOutcome": "deferred"
+    },
+    {
+      "id": "threshold-0.2499",
+      "method": "threshold",
+      "primitive": "noul",
+      "value": 0.2499,
+      "expectedOutcome": "deferred"
+    },
+    {
+      "id": "threshold-0.25",
+      "method": "threshold",
+      "primitive": "noul",
+      "value": 0.25,
+      "expectedOutcome": "deferred"
+    },
+    {
+      "id": "threshold-0.4999",
+      "method": "threshold",
+      "primitive": "noul",
+      "value": 0.4999,
+      "expectedOutcome": "deferred"
+    },
+    {
+      "id": "threshold-0.5",
+      "method": "threshold",
+      "primitive": "noul",
+      "value": 0.5,
+      "expectedOutcome": "progress_only"
+    },
+    {
+      "id": "threshold-0.7499",
+      "method": "threshold",
+      "primitive": "noul",
+      "value": 0.7499,
+      "expectedOutcome": "progress_only"
+    },
+    {
+      "id": "threshold-0.75",
+      "method": "threshold",
+      "primitive": "noul",
+      "value": 0.75,
+      "expectedOutcome": "achieved"
+    },
+    {
+      "id": "threshold-1",
+      "method": "threshold",
+      "primitive": "noul",
+      "value": 1,
+      "expectedOutcome": "achieved"
+    },
+    {
+      "id": "score-0",
+      "method": "threshold",
+      "primitive": "score",
+      "value": 0,
+      "levels": 5,
+      "expectedOutcome": "deferred"
+    },
+    {
+      "id": "score-1",
+      "method": "threshold",
+      "primitive": "score",
+      "value": 1,
+      "levels": 5,
+      "expectedOutcome": "deferred"
+    },
+    {
+      "id": "score-2",
+      "method": "threshold",
+      "primitive": "score",
+      "value": 2,
+      "levels": 5,
+      "expectedOutcome": "progress_only"
+    },
+    {
+      "id": "score-3",
+      "method": "threshold",
+      "primitive": "score",
+      "value": 3,
+      "levels": 5,
+      "expectedOutcome": "achieved"
+    },
+    {
+      "id": "score-4",
+      "method": "threshold",
+      "primitive": "score",
+      "value": 4,
+      "levels": 5,
+      "expectedOutcome": "achieved"
+    },
+    {
+      "id": "sample-0.1-0",
+      "method": "sample",
+      "primitive": "noul",
+      "value": 0.1,
+      "draw": 0,
+      "expectedOutcome": "deferred"
+    },
+    {
+      "id": "sample-0.1-0.9",
+      "method": "sample",
+      "primitive": "noul",
+      "value": 0.1,
+      "draw": 0.9,
+      "expectedOutcome": "progress_only"
+    },
+    {
+      "id": "sample-0.35-0.69",
+      "method": "sample",
+      "primitive": "noul",
+      "value": 0.35,
+      "draw": 0.69,
+      "expectedOutcome": "deferred"
+    },
+    {
+      "id": "sample-0.35-0.7",
+      "method": "sample",
+      "primitive": "noul",
+      "value": 0.35,
+      "draw": 0.7,
+      "expectedOutcome": "progress_only"
+    },
+    {
+      "id": "sample-0.35-0.95",
+      "method": "sample",
+      "primitive": "noul",
+      "value": 0.35,
+      "draw": 0.95,
+      "expectedOutcome": "achieved"
+    },
+    {
+      "id": "sample-0.6-0.35",
+      "method": "sample",
+      "primitive": "noul",
+      "value": 0.6,
+      "draw": 0.35,
+      "expectedOutcome": "progress_only"
+    },
+    {
+      "id": "sample-0.6-0.8",
+      "method": "sample",
+      "primitive": "noul",
+      "value": 0.6,
+      "draw": 0.8,
+      "expectedOutcome": "achieved"
+    },
+    {
+      "id": "sample-0.8-0.1",
+      "method": "sample",
+      "primitive": "noul",
+      "value": 0.8,
+      "draw": 0.1,
+      "expectedOutcome": "progress_only"
+    },
+    {
+      "id": "sample-0.8-0.3",
+      "method": "sample",
+      "primitive": "noul",
+      "value": 0.8,
+      "draw": 0.3,
+      "expectedOutcome": "achieved"
+    },
+    {
+      "id": "sample-0.8-0.999999",
+      "method": "sample",
+      "primitive": "noul",
+      "value": 0.8,
+      "draw": 0.999999,
+      "expectedOutcome": "achieved"
+    }
+  ]
+}
