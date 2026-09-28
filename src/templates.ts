@@ -69,6 +69,17 @@ export function templateById(id: string): ActionTemplate | null {
   return ACTION_TEMPLATES.find(t => t.id === canonical) ?? null;
 }
 
+/** Gain of an automatic attempt: the Director has not named it, only located it in the player's message. */
+export const AUTOMATIC_GAIN = 'the first primary uncertain, consequential state change explicitly attempted in the latest user message';
+
+/** How an attempt is labelled for review: automatic gains show the player's own words instead of the generic gain. */
+export function attemptLabel(boundedResult: string, method: string): string {
+  if (boundedResult !== AUTOMATIC_GAIN) return boundedResult;
+  const words = String(method ?? '').replace(/\s+/g, ' ').trim();
+  const excerpt = words.length > 160 ? `${words.slice(0, 159).trimEnd()}…` : words;
+  return `attempt: ${excerpt}`;
+}
+
 export interface DeclareActionInput {
   actionId: string;
   templateId: string;

@@ -18,6 +18,9 @@
 import type { Answer, Question, Provenance } from './types.ts';
 
 const SUM_TOLERANCE = 1e-6;
+/** Rounding to two decimals can move each probability by up to 0.005. */
+const ROUNDING_PER_OPTION = 0.005;
+const ROUNDING_TOLERANCE_CAP = 0.05;
 const EXPECTATION_TOLERANCE = 1e-6;
 
 export function isFiniteNumber(x: unknown): x is number {
@@ -52,7 +55,8 @@ function describe(x: unknown): string {
 
 /**
  * A probability distribution over exactly `keys` (any order): every value is a
- * finite number in [0, 1] and the values sum to 1 within 1e-6.
+ * finite number in [0, 1] and the values sum to 1, allowing two-decimal
+ * rounding (0.005 per option, capped at 0.05); accepted sums are renormalised.
  */
 export function validateProbabilities(
   keys: string[],
@@ -80,9 +84,13 @@ export function validateProbabilities(
     value[key] = p;
     sum += p;
   }
-  if (Math.abs(sum - 1) > SUM_TOLERANCE) {
+  // Providers round to two decimals, so each option may be off by half a
+  // hundredth. Accept that rounding (capped) and renormalise to exactly 1.
+  const tolerance = Math.max(SUM_TOLERANCE, Math.min(ROUNDING_TOLERANCE_CAP, ROUNDING_PER_OPTION * keys.length));
+  if (Math.abs(sum - 1) > tolerance + 1e-9 || sum <= 0) {
     return { ok: false, error: `probabilities must sum to 1 (sum is ${sum})` };
   }
+  if (Math.abs(sum - 1) > SUM_TOLERANCE) for (const key of keys) value[key] = value[key]! / sum;
   return { ok: true, value };
 }
 

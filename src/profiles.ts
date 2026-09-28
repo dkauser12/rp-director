@@ -132,6 +132,12 @@ export function effectiveProfile(settings: DirectorSettings): { profile: Directo
   return { profile: merged, warnings };
 }
 
+/** Stores a profile's resolution method on its own, keeping any applied table. */
+export function setResolutionMethod(settings: DirectorSettings, profileId: string, method: 'threshold' | 'sample'): void {
+  const id = canonicalProfileId(profileId);
+  settings.profileOverrides[id] = { ...(settings.profileOverrides[id] ?? {}), resolutionMethod: method };
+}
+
 /** Short content hash so edits to the policy table produce a new revision (M3-11). */
 export function revisionHash(profile: DirectorProfile): string {
   const payload = JSON.stringify({ outcomes: profile.outcomes, bands: profile.bands, method: profile.resolutionMethod, priors: profile.speakers.priors, rep: profile.speakers.repetitionFactor, driving: profile.drivingQuestionId, mode: profile.mode, actorPolicy: profile.actorPolicy });

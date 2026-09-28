@@ -1,6 +1,8 @@
 /** One-time consolidation and reload recovery. These helpers never touch the host. */
 import type { DirectorChatRecord, DirectorSettings } from './types.ts';
 import { canonicalProfileId, LEGACY_PROFILE_IDS } from './profiles.ts';
+import { normalizeReactionSettings } from './npc-reaction.ts';
+import { normalizeLoreSettings } from './lore/settings.ts';
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -17,9 +19,24 @@ export function normalizeBaseSettings(defaults: DirectorSettings, existing: unkn
     bindingConfirmedAt: typeof saved.bindingConfirmedAt === 'string' || saved.bindingConfirmedAt === null ? saved.bindingConfirmedAt : defaults.bindingConfirmedAt,
     connection: { ...defaults.connection, ...(object(saved.connection) ?? {}) },
     observerConnection: { ...defaults.observerConnection, ...(object(saved.observerConnection) ?? {}) },
+    reactions: normalizeReactionSettings(saved.reactions),
     showBar: typeof saved.showBar === 'boolean' ? saved.showBar : defaults.showBar,
     inspectorOpen: typeof saved.inspectorOpen === 'boolean' ? saved.inspectorOpen : defaults.inspectorOpen,
     profileOverrides: { ...defaults.profileOverrides, ...(object(saved.profileOverrides) ?? {}) },
+    // Revision 2 moved everyone to the staged pipeline once; later choices are kept.
+    pipeline: typeof saved.settingsRevision === 'number' && saved.settingsRevision >= 2 && (saved.pipeline === 'staged' || saved.pipeline === 'legacy') ? saved.pipeline : defaults.pipeline,
+    settingsRevision: Math.max(2, typeof saved.settingsRevision === 'number' ? saved.settingsRevision : 0),
+    modules: {
+      speaker: typeof object(saved.modules)?.speaker === 'boolean' ? object(saved.modules)!.speaker as boolean : defaults.modules.speaker,
+      decisions: typeof object(saved.modules)?.decisions === 'boolean' ? object(saved.modules)!.decisions as boolean : defaults.modules.decisions,
+      meters: typeof object(saved.modules)?.meters === 'boolean' ? object(saved.modules)!.meters as boolean : defaults.modules.meters,
+      secrets: typeof object(saved.modules)?.secrets === 'boolean' ? object(saved.modules)!.secrets as boolean : defaults.modules.secrets,
+      // Lore arrived after the other suites: off for anyone who had switched them all off.
+      lore: typeof object(saved.modules)?.lore === 'boolean' ? object(saved.modules)!.lore as boolean
+        : object(saved.modules) && (['speaker', 'decisions', 'meters', 'secrets'] as const).every(key => object(saved.modules)![key] === false) ? false
+        : defaults.modules.lore,
+    },
+    lore: normalizeLoreSettings(saved.lore),
   }) as DirectorSettings;
   for (const [legacy, current] of Object.entries(LEGACY_PROFILE_IDS)) {
     if (result.profileOverrides[legacy]) {

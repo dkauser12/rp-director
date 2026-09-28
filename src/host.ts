@@ -10,11 +10,20 @@
 import type { DirectorSettings, Json, TurnPermit } from './types.ts';
 import type { RollReviewChoice } from './roll-review.ts';
 import type { FingerprintMessage } from './identity.ts';
+import { uiActorName } from './identity.ts';
 import type { StructuredTransport } from './providers.ts';
 import type { OpenRouterDecisionsTransport } from './providers.ts';
 import { createOpenRouterTransport, ProviderError } from './providers.ts';
 import { DEFAULT_PROFILE_ID } from './profiles.ts';
 import { migrateAutoHistory, normalizeBaseSettings } from './migration.ts';
+import { stripResultFooter, withResultFooter } from './result-footer.ts';
+import { defaultReactionSettings } from './npc-reaction.ts';
+import { defaultLoreSettings } from './lore/settings.ts';
+import type { LorePlan } from './lore/settings.ts';
+import { applyLorePlan, summarizeActivation } from './lore/apply.ts';
+import type { LoreActivation } from './lore/apply.ts';
+import type { LoreEntry, TunnelVisionNode } from './lore/tree.ts';
+import { attemptLabel } from './templates.ts';
 
 export const INJECTION_KEY = 'rp_director_binding';
 export const SETTINGS_KEY = 'rpDirector';
@@ -32,7 +41,7 @@ export interface StContext {
   chatId: string | undefined;
   chatMetadata: Record<string, unknown>;
   extensionSettings: Record<string, unknown>;
-  eventSource: { on: (event: string, handler: (...args: unknown[]) => unknown) => void; removeListener: (event: string, handler: (...args: unknown[]) => unknown) => void };
+  eventSource: { on: (event: string, handler: (...args: unknown[]) => unknown) => void; removeListener: (event: string, handler: (...args: unknown[]) => unknown) => void; emit?: (event: string, ...args: unknown[]) => Promise<unknown> };
   eventTypes: Record<string, string>;
   getCurrentChatId: () => string | undefined;
   getRequestHeaders: () => Record<string, string>;
@@ -41,6 +50,7 @@ export interface StContext {
   stopGeneration: () => void;
   saveMetadata: () => Promise<void>;
   saveChat: () => Promise<void>;
+  updateMessageBlock?: (messageId: number, message: HostChatMessage) => void;
   saveSettingsDebounced: () => void;
   setExtensionPrompt: (key: string, value: string, position: number, depth: number, scan?: boolean, role?: number, filter?: unknown) => void;
   swipe: { right: (event?: unknown, options?: Record<string, unknown>) => Promise<void>; to?: (event: unknown, direction: string, options: Record<string, unknown>) => Promise<void>; state?: () => string };
@@ -84,7 +94,22 @@ export interface HostCharacter {
   name: string;
   avatar: string;
   description?: string;
+  personality?: string;
   chat?: string;
+  data?: { extensions?: { world?: string } };
+}
+
+/** Lorebooks the scan could load for a turn's cast, and their entries. */
+export interface LoreCatalog {
+  books: { world: string; source: 'global' | 'character' | 'chat' | 'persona'; owner: string | null }[];
+  entries: LoreEntry[];
+}
+
+/** The parts of public/scripts/world-info.js this extension reads. */
+interface WorldInfoModule {
+  selected_world_info?: string[];
+  world_info?: { charLore?: { name?: string; extraBooks?: string[] }[] };
+  loadWorldInfo: (name: string) => Promise<{ entries?: Record<string, Record<string, unknown>> } | null>;
 }
 
 export interface HostGroup {
@@ -129,9 +154,14 @@ export function defaultSettings(): DirectorSettings {
     bindingConfirmedAt: null,
     connection: { kind: 'mock', baseUrl: '', model: '', stProfileId: '', mockScenario: 'gate-deferred' },
     observerConnection: { stProfileId: '' },
+    reactions: defaultReactionSettings(),
     showBar: true,
     inspectorOpen: false,
     profileOverrides: {},
+    pipeline: 'staged',
+    settingsRevision: 2,
+    modules: { speaker: true, decisions: true, meters: true, secrets: true, lore: true },
+    lore: defaultLoreSettings(),
   };
 }
 
@@ -269,6 +299,12 @@ export class Host {
     return this.ctx().characters.findIndex(c => c.avatar === avatar);
   }
 
+  /** Full authorial card text (description and personality) for rulings whose family admits it. */
+  cardText(avatar: string): string {
+    const c = this.ctx().characters.find(x => x.avatar === avatar);
+    return [c?.description, c?.personality].map(part => String(part ?? '').trim()).filter(Boolean).join('\n\n');
+  }
+
   /** Bounded public card summary for the decision snapshot. */
   publicCard(avatar: string, maxChars = 400): string {
     const c = this.ctx().characters.find(x => x.avatar === avatar);
@@ -293,7 +329,7 @@ export class Host {
     for (const m of messages) {
       if (!m) continue;
       if (m.is_user) out.push({ role: 'user', actorKey: 'persona', text: m.mes ?? '' });
-      else out.push({ role: 'assistant', actorKey: m.original_avatar ?? `name:${m.name}`, text: m.mes ?? '' });
+      else out.push({ role: 'assistant', actorKey: m.original_avatar ?? `name:${m.name}`, text: stripResultFooter(m.mes ?? '') });
     }
     return out;
   }
@@ -317,7 +353,32 @@ export class Host {
 
   /** Any visible assistant prose saved after an attempt bound to the transcript. */
   assistantProseSince(messageIndex: number): string[] {
-    return this.chat().slice(Math.max(0, messageIndex)).filter(message => !message.is_user && !message.is_system && !['', '...'].includes(String(message.mes ?? '').trim())).map(message => String(message.mes).trim());
+    return this.chat().slice(Math.max(0, messageIndex)).filter(message => !message.is_user && !message.is_system)
+      .map(message => stripResultFooter(String(message.mes ?? '')).trim()).filter(text => !['', '...'].includes(text));
+  }
+
+  /** Update the selected swipe only; saveMetadata persists the chat text too. */
+  writeResultFooter(mesId: number, footer: string): boolean {
+    const ctx = this.ctx();
+    const message = ctx.chat[mesId];
+    if (!message || message.is_user || message.is_system) return false;
+    const next = withResultFooter(message.mes, footer);
+    let changed = next !== message.mes;
+    message.mes = next;
+    const swipe = message.swipe_id ?? 0;
+    if (message.swipes && swipe >= 0 && swipe < message.swipes.length && message.swipes[swipe] !== next) {
+      message.swipes[swipe] = next;
+      changed = true;
+    }
+    if (typeof message.extra?.display_text === 'string') {
+      const display = withResultFooter(message.extra.display_text, footer);
+      changed ||= display !== message.extra.display_text;
+      message.extra.display_text = display;
+      const extra = message.swipe_info?.[swipe]?.extra;
+      if (extra && extra.display_text !== display) { extra.display_text = display; changed = true; }
+    }
+    if (changed) ctx.updateMessageBlock?.(mesId, message);
+    return changed;
   }
 
   // ---- variant markers --------------------------------------------------------
@@ -454,6 +515,153 @@ export class Host {
     }
   }
 
+  // ---- lore -------------------------------------------------------------------
+
+  private lorePlanArmed: (LorePlan & { forced: Record<string, unknown>[] }) | null = null;
+  private loreArmSeq = 0;
+  private loreHookOff: (() => void) | null = null;
+  private lastActivation: LoreActivation | null = null;
+  /** Called after every real World Info scan (set by the controller to refresh the panel). */
+  onLoreActivation: (() => void) | null = null;
+
+  /** What the last real World Info scan activated, per book. */
+  lastLoreActivation(): LoreActivation | null {
+    return this.lastActivation;
+  }
+
+  /**
+   * Books SillyTavern could load for these cast members, with their entries.
+   * Mirrors world-info.js getGlobalLore/getCharacterLore/getChatLore/
+   * getPersonaLore, except that a group lists every given member's books:
+   * SillyTavern itself loads only the current speaker's (this_chid) books per
+   * scan, which is also all a forced activation can reach.
+   */
+  async loreCatalog(avatars: string[]): Promise<LoreCatalog> {
+    const ctx = this.ctx();
+    const wi = await import(/* @vite-ignore */ new URL('../../../world-info.js', import.meta.url).href) as WorldInfoModule;
+    const books: LoreCatalog['books'] = [];
+    const add = (world: unknown, source: LoreCatalog['books'][number]['source'], owner: string | null) => {
+      const name = typeof world === 'string' ? world.trim() : '';
+      if (name && !books.some(b => b.world === name)) books.push({ world: name, source, owner });
+    };
+    for (const world of wi.selected_world_info ?? []) add(world, 'global', null);
+    for (const avatar of avatars) {
+      const character = ctx.characters.find(c => c.avatar === avatar);
+      add(character?.data?.extensions?.world, 'character', avatar);
+      // charLore is keyed by the avatar file name without its extension.
+      const filename = avatar.replace(/\.[^/.]+$/, '');
+      const extra = (wi.world_info?.charLore ?? []).find(item => item?.name === filename)?.extraBooks ?? [];
+      for (const world of extra) add(world, 'character', avatar);
+    }
+    add((ctx.chatMetadata as Record<string, unknown> | undefined)?.world_info, 'chat', null);
+    try {
+      const pu = await import(/* @vite-ignore */ new URL('../../../power-user.js', import.meta.url).href) as { power_user?: { persona_description_lorebook?: unknown } };
+      add(pu.power_user?.persona_description_lorebook, 'persona', null);
+    } catch { /* persona lore is optional */ }
+    const entries: LoreEntry[] = [];
+    for (const book of books) {
+      let data: { entries?: Record<string, Record<string, unknown>> } | null = null;
+      try { data = await wi.loadWorldInfo(book.world); } catch { data = null; }
+      for (const raw of Object.values(data?.entries ?? {})) {
+        const uid = Number(raw.uid);
+        if (!Number.isInteger(uid)) continue;
+        const content = String(raw.content ?? '');
+        const keys = Array.isArray(raw.key) ? raw.key.map(String).filter(k => k.trim()) : [];
+        entries.push({
+          world: book.world, uid, keys, content,
+          title: String(raw.comment ?? '').trim() || keys.slice(0, 3).join(', ') || `Entry ${uid}`,
+          constant: raw.constant === true,
+          // An @@dont_activate decorator blocks forced activation too.
+          disabled: raw.disable === true || /^\s*@@dont_activate\b/.test(content),
+        });
+      }
+    }
+    return { books, entries };
+  }
+
+  /** TunnelVision's stored index roots by book, if the extension has built any. */
+  tunnelVisionRoots(): Record<string, TunnelVisionNode> {
+    const tv = this.ctx().extensionSettings.tunnelvision as { trees?: Record<string, { root?: TunnelVisionNode }> } | undefined;
+    const out: Record<string, TunnelVisionNode> = {};
+    for (const [world, tree] of Object.entries(tv?.trees ?? {})) if (tree?.root && typeof tree.root === 'object') out[world] = tree.root;
+    return out;
+  }
+
+  /** True when TunnelVision is on and suppresses this book's keyword scan itself. */
+  tunnelVisionManages(world: string): boolean {
+    const tv = this.ctx().extensionSettings.tunnelvision as { globalEnabled?: unknown; enabledLorebooks?: Record<string, unknown> } | undefined;
+    return tv?.globalEnabled === true && tv.enabledLorebooks?.[world] === true;
+  }
+
+  /**
+   * SillyTavern's processed World Info entries for the current speaker (group
+   * scans load this_chid's books only), exactly as its scan will see them:
+   * decorators parsed out of content, hash set. Forcing anything else would put
+   * decorator lines in the prompt and break sticky/cooldown, which key on hash.
+   */
+  async sortedEntries(): Promise<Record<string, unknown>[]> {
+    const wi = await import(/* @vite-ignore */ new URL('../../../world-info.js', import.meta.url).href) as { getSortedEntries: () => Promise<Record<string, unknown>[]> };
+    return wi.getSortedEntries();
+  }
+
+  /**
+   * Arms the plan for every World Info scan until disarmed. null disarms at
+   * once; a plan resolves its forced entries first. A later call supersedes an
+   * earlier one that is still resolving.
+   */
+  async armLore(plan: LorePlan | null): Promise<void> {
+    const seq = ++this.loreArmSeq;
+    this.lorePlanArmed = null;
+    if (!plan || (plan.force.size === 0 && plan.managed.size === 0)) return;
+    let forced: Record<string, unknown>[] = [];
+    if (plan.force.size) {
+      try { forced = (await this.sortedEntries()).filter(e => plan.force.has(`${String(e.world)}.${String(e.uid)}`)); }
+      catch (error) { console.warn('[RP Director] could not resolve lore picks; keyword lore only', error); forced = []; }
+    }
+    if (seq === this.loreArmSeq) this.lorePlanArmed = { ...plan, forced };
+  }
+
+  armedLore(): (LorePlan & { forced: Record<string, unknown>[] }) | null {
+    return this.lorePlanArmed;
+  }
+
+  /** Registers the WORLDINFO_ENTRIES_LOADED hook once; false when the host lacks the event. */
+  installLoreHook(): boolean {
+    if (this.loreHookOff) return true;
+    const ctx = this.ctx();
+    const name = ctx.eventTypes.WORLDINFO_ENTRIES_LOADED;
+    const forceName = ctx.eventTypes.WORLDINFO_FORCE_ACTIVATE;
+    if (!name || !forceName || typeof ctx.eventSource.emit !== 'function') return false;
+    const handler = async (payload: unknown) => {
+      const plan = this.lorePlanArmed;
+      if (!plan || !payload || typeof payload !== 'object') return;
+      const lists = payload as Record<string, unknown>;
+      applyLorePlan([lists.globalLore, lists.characterLore, lists.chatLore, lists.personaLore], plan);
+      // Every scan resets external activations, so each load re-emits them.
+      if (plan.forced.length) await ctx.eventSource.emit!(forceName, plan.forced);
+    };
+    ctx.eventSource.on(name, handler);
+    const activatedName = ctx.eventTypes.WORLD_INFO_ACTIVATED;
+    const onActivated = (entries: unknown) => {
+      if (!Array.isArray(entries)) return;
+      this.lastActivation = summarizeActivation(entries, this.lorePlanArmed?.force ?? null);
+      this.onLoreActivation?.();
+    };
+    if (activatedName) ctx.eventSource.on(activatedName, onActivated);
+    this.loreHookOff = () => {
+      ctx.eventSource.removeListener(name, handler);
+      if (activatedName) ctx.eventSource.removeListener(activatedName, onActivated);
+    };
+    return true;
+  }
+
+  removeLoreHook(): void {
+    this.loreHookOff?.();
+    this.loreHookOff = null;
+    this.loreArmSeq += 1;
+    this.lorePlanArmed = null;
+  }
+
   // ---- events -----------------------------------------------------------------
 
   on(event: string, handler: (...args: unknown[]) => unknown): () => void {
@@ -584,7 +792,7 @@ export class Host {
     for (const action of permit.actions) {
       const section = document.createElement('section');
       const heading = document.createElement('strong');
-      heading.textContent = `${names[action.actingActorId] ?? action.actingActorId}: ${action.boundedResult}`;
+      heading.textContent = `${uiActorName(action.actingActorId, names[action.actingActorId])}: ${attemptLabel(action.boundedResult, action.method)}`;
       const result = document.createElement('p');
       result.textContent = `${action.outcome}${typeof action.draw === 'number' ? ` · draw ${action.draw.toFixed(4)}` : ' · threshold assessment (no dice)'}${action.assessment?.type === 'noul' ? ` · support ${action.assessment.noul.toFixed(3)}` : ''}`;
       const instruction = document.createElement('p'); instruction.textContent = action.instruction;

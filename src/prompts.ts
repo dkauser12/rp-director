@@ -29,16 +29,15 @@ export function fillPlaceholders(text: string, values: Record<(typeof INSTRUCTIO
   return String(text ?? '').replace(/\{\{\s*(gain|action|target|player|speaker)\s*\}\}/gi, (_, key: string) => values[key.toLowerCase() as keyof typeof values] ?? '');
 }
 
+/** Placeholder values for one action, shared by the writer's block and the review popup so both read the same. */
+export function placeholderValues(action: Pick<ActionSpec, 'requestedGain' | 'attemptedAction'>, targetNames: string[], speakerName: string | null, playerName: string): Record<(typeof INSTRUCTION_PLACEHOLDERS)[number], string> {
+  const target = targetNames.length ? targetNames.join(' and ') : (speakerName ?? 'the other character');
+  return { gain: action.requestedGain, action: action.attemptedAction, target, player: playerName, speaker: speakerName ?? target };
+}
+
 export function bindingBlock(input: BindingBlockInput): string {
   const { action, outcome } = input;
-  const target = input.targetNames.length ? input.targetNames.join(' and ') : (input.speakerName ?? 'the other character');
-  const instruction = fillPlaceholders(input.instruction, {
-    gain: action.requestedGain,
-    action: action.attemptedAction,
-    target,
-    player: input.playerName,
-    speaker: input.speakerName ?? target,
-  }).trim();
+  const instruction = fillPlaceholders(input.instruction, placeholderValues(action, input.targetNames, input.speakerName, input.playerName)).trim();
   const lines: string[] = [];
   lines.push('[Director ruling — binding for this reply]');
   lines.push('This declared exchange is already adjudicated. Do not roll dice or run another check for it; other dice systems apply only to separate, undeclared actions.');

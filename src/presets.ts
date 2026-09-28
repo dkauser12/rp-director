@@ -144,6 +144,19 @@ export function presetById(id: string): TablePreset | null {
   return p ? structuredClone(p) : null;
 }
 
+/**
+ * What loading a preset puts in the editor. The resolution method is the
+ * player's own mode choice, so a preset never changes it; a preset written for
+ * the other method is reported instead.
+ */
+export function presetDraft(preset: TablePreset, currentMethod: 'threshold' | 'sample'): { table: { outcomes: OutcomeDef[]; bands: PolicyBand[] }; method: 'threshold' | 'sample'; note: string | null } {
+  const label = (m: 'threshold' | 'sample') => m === 'sample' ? 'dice (sample)' : 'threshold';
+  const note = preset.resolutionMethod && preset.resolutionMethod !== currentMethod
+    ? `This preset was written for ${label(preset.resolutionMethod)}; your resolution method stays ${label(currentMethod)}.`
+    : null;
+  return { table: structuredClone({ outcomes: preset.outcomes, bands: preset.bands }), method: currentMethod, note };
+}
+
 const ACTOR_POLICIES: ActorPolicy[] = ['player_favorable', 'player_attempts', 'contested', 'any_declared_actor'];
 
 /**

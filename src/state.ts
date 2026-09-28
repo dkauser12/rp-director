@@ -7,6 +7,8 @@
  * decision), attemptId (one writer generation), variantId (one host message
  * variant), cursor (accepted-prefix fingerprint).
  */
+import { emptyStory, normalizeStory } from './story.ts';
+import type { ReactionResult } from './npc-reaction.ts';
 import type {
   ActionSpec, ActorBinding, CompactState, DirectorChatRecord, FrozenResolution, GenerationAttempt,
   GenerationType, InspectorEntry, ObservationOperation, ObservationRecord, RegisteredEffect, TurnPermit, VariantRecord,
@@ -54,6 +56,7 @@ export function newRecord(seedId: string, profileRevision: string): DirectorChat
     projection: { cursor: null, state: emptyState(), status: 'unknown', reason: 'no checkpoint yet' },
     inspector: [],
     profileRevision,
+    story: emptyStory(),
   };
 }
 
@@ -79,6 +82,7 @@ export function normalizeRecord(raw: unknown, seedId: string, profileRevision: s
     projection: r.projection && typeof r.projection === 'object' ? { ...base.projection, ...r.projection, state: { ...emptyState(), ...obj(r.projection.state, {}), settledGains: obj(r.projection.state?.settledGains, {}), itemOwners: obj(r.projection.state?.itemOwners, {}), conditions: obj(r.projection.state?.conditions, {}), knownFacts: obj(r.projection.state?.knownFacts, {}), revealedSecrets: obj(r.projection.state?.revealedSecrets, {}) } } : base.projection,
     inspector: Array.isArray(r.inspector) ? r.inspector.slice(-INSPECTOR_LIMIT) : [],
     profileRevision: typeof r.profileRevision === 'string' ? r.profileRevision : profileRevision,
+    story: normalizeStory(r.story),
   };
   for (const checkpoint of Object.values(normalized.checkpoints)) {
     checkpoint.stateAfter = { ...emptyState(), ...checkpoint.stateAfter, settledGains: obj(checkpoint.stateAfter?.settledGains, {}), itemOwners: obj(checkpoint.stateAfter?.itemOwners, {}), conditions: obj(checkpoint.stateAfter?.conditions, {}), knownFacts: obj(checkpoint.stateAfter?.knownFacts, {}), revealedSecrets: obj(checkpoint.stateAfter?.revealedSecrets, {}) };
@@ -122,12 +126,12 @@ function hydrateFrozenSettlements(state: CompactState, resolutions: Record<strin
 
 export type DirectorEvent =
   | { type: 'bind_actor'; binding: ActorBinding }
-  | { type: 'prepare'; resolution: FrozenResolution | null; action: ActionSpec | null; attemptId: string; actorId: string | null; epoch: number; composerText: string; now: number }
+  | { type: 'prepare'; resolution: FrozenResolution | null; action: ActionSpec | null; reaction?: ReactionResult | null; attemptId: string; actorId: string | null; epoch: number; composerText: string; now: number }
   | { type: 'bind'; attemptId: string; cursorBefore: string; epoch: number; injectedText: string; toolOffered?: boolean }
   | { type: 'tool_result'; attemptId: string; permit: TurnPermit | null; status: 'permitted' | 'failed' | 'malformed'; error: string | null }
   | { type: 'store_permit'; permit: TurnPermit }
   | { type: 'store_resolution'; resolution: FrozenResolution }
-  | { type: 'regeneration_attempt'; attemptId: string; resolutionId: string | null; permitId?: string | null; cursorBefore: string; epoch: number; generationType: GenerationType; actorId: string | null; injectedText: string; unadjudicated: boolean; now: number }
+  | { type: 'regeneration_attempt'; attemptId: string; resolutionId: string | null; permitId?: string | null; reaction?: ReactionResult | null; cursorBefore: string; epoch: number; generationType: GenerationType; actorId: string | null; injectedText: string; unadjudicated: boolean; now: number }
   | { type: 'completed'; attemptId: string; epoch: number; operationId: string; variantId: string; hostMessageRef: number | null; hostVariantRef: number | null; cursorAfter: string; now: number; actorId?: string | null; observerRequired?: boolean }
   | { type: 'observation_ready'; attemptId: string; variantId: string; observation: ObservationRecord }
   | { type: 'observation_failed'; attemptId: string; variantId: string; error: string }
@@ -251,6 +255,7 @@ export function applyEvent(input: DirectorChatRecord, event: DirectorEvent): App
         attemptId: event.attemptId,
         resolutionId: event.resolution?.resolutionId ?? null,
         permitId: null,
+        reaction: event.reaction ? clone(event.reaction) : null,
         actorId: event.actorId,
         cursorBefore: null,
         status: 'prepared',
@@ -316,6 +321,7 @@ export function applyEvent(input: DirectorChatRecord, event: DirectorEvent): App
         if (event.permit.attemptId !== attempt.attemptId || event.permit.baseCursor !== attempt.cursorBefore) return ignore('tool permit identity did not match the active attempt');
         record.permits[event.permit.permitId] = clone(event.permit);
         attempt.permitId = event.permit.permitId;
+        attempt.reaction = null;
       }
       return done();
     }
@@ -326,6 +332,7 @@ export function applyEvent(input: DirectorChatRecord, event: DirectorEvent): App
         attemptId: event.attemptId,
         resolutionId: event.resolutionId,
         permitId: event.permitId ?? null,
+        reaction: event.reaction ? clone(event.reaction) : null,
         actorId: event.actorId,
         cursorBefore: event.cursorBefore,
         status: 'writing',

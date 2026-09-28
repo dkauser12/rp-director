@@ -13,7 +13,7 @@ const controller = new Controller(host);
   controller.interceptor(chat, contextSize, abort, type);
 
 // Debug handle for the host harness; not a public API.
-(globalThis as unknown as Record<string, unknown>).rpDirector = { controller, host, version: '0.5.0' };
+(globalThis as unknown as Record<string, unknown>).rpDirector = { controller, host, version: '0.7.0' };
 
 async function boot(): Promise<void> {
   try {
@@ -21,7 +21,7 @@ async function boot(): Promise<void> {
     await controller.init();
     mountUi(controller);
     host.saveSettings();
-    console.log('[RP Director] ready (v0.5.0)');
+    console.log('[RP Director] ready (v0.7.0)');
   } catch (error) {
     console.error('[RP Director] failed to initialise', error);
   }

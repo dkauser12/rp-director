@@ -1,12 +1,8 @@
 # RP Director
 
-The consolidated base extension includes the compact UI and automatic workflow developed in the Auto test build. Existing base settings, outcome tables, personal presets and accepted checkpoints remain authoritative.
+A SillyTavern extension that makes a separate decision model (TypeSafe **Jev**) the referee of your roleplay. It decides the things a writer model should not decide for itself: whether an attempt succeeds, who speaks next, how each character feels about you, and who knows which secret. Its decisions are frozen before the writer runs and handed to the writer as instructions, so they change the prose. They are not suggestions.
 
-A streamlined SillyTavern extension that replaces prompt-side dice adjudication with a staged Director pipeline:
-
-1. A pre-generation batch chooses the next speaker and adjudicates the first qualifying user attempt.
-2. If the writer newly plans an uncertain consequential NPC action, it may call one non-stealth `RPDirector_AdjudicateTurn` tool before prose. The tool validates at most three bounded actions and returns attempt-scoped frozen permits.
-3. A separate post-generation observer records only factual changes established by the selected final prose. The ruling or permit itself is never treated as proof.
+The writer never grades its own homework. Jev only picks from options, scores, or gives a probability; code turns those answers into rulings, and dice (when enabled) add real uncertainty.
 
 ## Install
 
@@ -21,72 +17,114 @@ For **OpenRouter Jev Decisions**, also install the companion plugin described be
 
 Code maps judge outputs through the editable outcome table, freezes the ruling before prose, and forces the selected group member to write the reply. Wording swipes reuse the ruling and any permit without another tool or decision call; explicit rerolls create linked rulings.
 
-## Normal use
+## What happens when you press Send
 
-1. Type a message in SillyTavern.
-2. Use SillyTavern's normal **Send**, **Enter**, or **Ctrl+Enter** (when Enter-to-send is enabled).
-3. Read the reply. Continuing from that selected reply implicitly commits its validated observer changes. Swipe first if you want different wording.
+With the default **staged** pipeline, each turn runs a few small, independent judge requests (about a third of a second each):
 
-The strip shows status and **⋯** only. Empty-composer continuation and slash commands retain their native behavior. When a new swipe can reuse or change existing rulings, ST shows a choice before the writer request. Merely selecting a saved swipe does not open that dialog. Cancel/Escape aborts the pending generation. **New scene & continue** commits the selected reply, starts a new scene and runs Director. **Repair selected branch** retries its observer at the correct predecessor; it never copies nonempty later state backwards.
+1. **Move.** The judge selects the exact sentence of your message that is the move, never a paraphrase. Dialogue, feelings and routine actions are not moves.
+2. **Routing.** Who is acting, on whom, and what kind of move it is. Three cases matter:
+   - **Your attempt** ("I pick the lock", "I ask her to stay") is ruled.
+   - **An order to a character** ("Mira, pick that lock") is ruled with that character acting, and that character writes the reply.
+   - **A hand-off** ("go ahead, make me") is not a check. The character you handed the initiative to answers with a frozen reaction: takes the lead, raises the stakes, hands it back with a condition, or declines.
+3. **Ruling.** One probability that the move succeeds, judged only on the evidence its kind allows. That probability goes through your outcome table, with dice if you use them.
+4. **Character state** (in parallel). The judge places each character on the genre pack's meters and records whether any secret was revealed.
+5. **Lore** (in parallel). The judge walks the lorebooks of the chat's cast and picks the entries this turn depends on. Rulings read them; depending on each book's mode, the writer gets them too.
+6. **Write.** The writer gets the ruling, the character state, the knowledge boundaries and the picked lore, and writes the reply.
 
-## What counts as a check
+Anything the judge cannot pin down is left **unruled**, and the writer is simply not told a ruling. There is never a default "not yet".
 
-An action is adjudicated only when it attempts to change fictional state, can genuinely fail, and failure would matter. Ordinary dialogue, feelings, wants, choices, trivial activity, and results already settled by the scene do not receive checks.
+**Swipes** and continues reuse the frozen decisions and the lore picks for free. **Reroll** re-rolls the dice on the same odds. **Reassess** asks only the ruling again, on the same frozen evidence.
 
-The automatic judge recognizes seven broad families: overcome/operate, contest/impose, evade/resist, conceal/deceive, detect/discover, influence/negotiate, and acquire/secure. These labels guide the writer and inspector; the one binding proposition remains whether the first primary intended state change succeeds now.
+## Modules
 
-If a message bundles multiple consequential attempts, only the first is resolved. The writer must leave later attempts pending.
+Every suite is a switch in **Settings → RP Director → Modules**. Turn off what you do not want; with everything off, the Director stands aside and makes no requests.
 
-## Newly planned NPC actions
+| Module | What it does | Cost per turn |
+|---|---|---|
+| Speaker | Picks who replies in a group chat. Off: SillyTavern picks. | 1 request, run in parallel |
+| Decisions | Rules on attempts (move → routing → ruling) and offers the writer an NPC-action tool. | 1 when there is no move; 3 for an attempt |
+| Meters | Judges each character's meters, at most one step at a time. | 1 request, run in parallel |
+| Secrets | Tells the writer who knows each secret and records reveals. | Shares the meters request |
+| NPC reactions | On turns with no ruling, draws how a character responds: presses, changes tactic, keeps or lets slip a secret, notices. | Rides in the move request |
+| Lore | Picks the lorebook entries the turn depends on, for rulings and (per book) the writer. | 1–3 requests, run in parallel |
 
-On writer APIs with ST function calling enabled, the extension exposes the plan-only `RPDirector_AdjudicateTurn` tool during the initial Director generation. The writer may use its normal reasoning first, then submits the bounded action proposal before any prose. No thinking trace is requested or parsed as tool arguments.
+## Lore selection
 
-The tool decides the proposed actions and opens ST's native popup with the results. **Keep & continue** returns the final permit to ST, which then runs the writer continuation. **Reroll** draws again from the same assessment and table in dice mode; **Reassess** makes a new judge call in threshold mode, where no random draw exists. Each new result is shown again. **Cancel generation**, Escape, Stop, and changed chat identity prevent that permit from reaching the continuation. Discarded roll history stays local; only kept values enter the tool response.
+Keyword lore fires on words, not on what the scene needs. One mention of a main character can cascade through recursion into most of a book: in one test chat, a single line naming a main character activated 94 entries (10,617 tokens) on every generation. The Lore module asks the judge instead.
 
-The writer cannot change the speaker, cite evidence outside the frozen snapshot, author feelings/consent/trust/permanent attitude, submit draft prose, or call the tool twice. Tool instructions explain when to call, when to skip, which arguments to send, and how to use the returned permit. Selecting a different saved swipe restores its own rulings, even if another swipe was rerolled later.
+Each turn, beside the move stages, the judge walks each book as a tree: TunnelVision's index when you have built one and the book is larger than 40 entries, otherwise the entries themselves. Each level is one request; every book's frontier is a separate question in it. The judge's distribution is kept as a narrow beam (the options clearly in the running, at most three per level), a section that turns out empty makes the walk try the next-best section once, and at most five entries are kept. On the same line the picks were the gyroscope installation, Kestrel's physical specifications and the installation's success, in 2 requests and about half a second.
 
-If the selected writer backend does not support tools, the injected boundary tells it to leave newly invented consequential NPC actions unresolved. There is no draft → tool → rewrite pass.
+Per book, in **Lore selection**:
 
-## Observation and acceptance
+| Mode | Rulings | Writer |
+|---|---|---|
+| Off | ignore the book | SillyTavern's keyword activation |
+| Rulings only | read the picks | SillyTavern's keyword activation |
+| Rulings + writer (default) | read the picks | keyword activation plus the picks |
+| Director decides | read the picks | only the picks (the book's constant entries stay on) |
 
-Every completed Director reply is observed after generation. The observer has its own connection selection: choose a chat-capable SillyTavern connection profile for strict structured observation, or leave it on **Jev bounded observer** to ask only ruling-entailment questions. Mock/Rules use deterministic local QA behavior. Allowed factual operations are limited to registered time, location, item, condition, knowledge, and secret-reveal updates.
+Each book row also shows what the last reply's World Info scan put into the prompt from that book (entries and an estimate of tokens), so you can see which books are worth switching to **Director decides**.
 
-Observation results stay provisional. They commit once when the user sends the next message or chooses **Commit reply**. Swiping, regenerating, deleting, editing, or switching variants does not implicitly accept the old wording. If observation fails, prose and prior state are preserved. The strip says **Needs repair**, with the reason in its tooltip. Native Send retries a failed selected observation automatically; initial empty-baseline failures can also recover on load. Nonempty unknown history requires an explicit reset or a known saved swipe.
+A group chat's World Info only ever loads the speaking character's books, so a pick from another member's book reaches rulings but not the writer. SillyTavern still applies each entry's disable switch, triggers and character filter to the picks. If TunnelVision is switched on and managing a book, the Director only reads that book for rulings. If the lore stage fails, the turn goes on with SillyTavern's keyword lore.
 
-## Coexistence
+**Public** books may inform discovery rulings (searching, reading someone). Everything else stays out of them: lore often holds secrets and authorial truth, and a discovery ruling must not hand you what the scene has not shown. Public and private books are walked in separate requests for the same reason.
 
-Use **RP Director**. The legacy **RP Director Auto** test copy yields while the base extension is enabled. The base disables a loaded Auto runtime before registering its tool and native controls. Existing Auto-only chat history can migrate as a whole, including saved swipe markers; if a base history already exists, it takes precedence. Legacy pending replies are made retryable for observation without changing accepted history.
+## Genre packs
 
-## Where Jev calls appear
+A pack defines what counts as a move, the kinds of move and what success means for each, and the meters. Each chat has its own pack. The default is **Auto**, where the judge picks one on the chat's first turn and keeps it. Change it any time in **This chat**.
 
-The pre-pass and bounded observer are background decision requests, shown in **Inspector & recovery**, not chat tool messages. The writer-facing function is named **RPDirector_AdjudicateTurn**. A visible ST tool message appears only if the writer invokes it for a newly planned consequential NPC action. Ordinary dialogue and wording swipes reusing saved rulings do not require a fresh tool call. The inspector distinguishes background network calls, tool review and preserved rulings.
+| Pack | Good for | Meters |
+|---|---|---|
+| General | Anything | regard |
+| Romance & slice of life | Closeness, attraction, teasing, pursuit | regard, nerve |
+| Adventure & kingdom | Danger, magic, fights, rulers and followers | loyalty, morale |
+| Investigation & intrigue | Clues, interrogations, cover stories, hacks | trust, suspicion |
+| Politics & factions | Deals, coercion, decrees, schemes | standing, fear |
+
+Meters are plain-language scales, for example regard: cold / guarded / friendly / warm / smitten. **The judge sets them from what happens in play; the writer never does**, and they never jump more than one step in a turn. The writer is told to play each character at their level, and rulings on requests or pressure take the target's level into account.
+
+You can add your own packs in `profiles/local/packs.json` (same format as the built-ins in `src/pack/packs.ts`).
+
+## Outcome table and dice
+
+The ruling's probability picks a row of your **outcome table**. Each outcome's instruction tells the writer what happens. The resolution method sits at the top of the table editor: **threshold** takes the row's outcome directly; **sample** (dice) rolls using the row's weights. The method saves as soon as you change it, and loading a preset never changes it.
+
+Staged rulings on social moves usually score between 0.2 and 0.5. Set your table's bands for that range.
+
+## Evidence rules (the detection firewall)
+
+- Move selection and routing see only the public transcript: no character cards, no secrets.
+- Collapsed `<details>` blocks (private thoughts, trackers) never reach the judge.
+- Rulings on attempts to *discover* something never see character cards, meters or secret text, so the judge cannot hand you hidden truth the scene has not shown.
+- Cards, meters and secret text travel only in requests that cannot feed a discovery ruling.
+- Lore reaches discovery rulings only from books marked public, picked in a request that listed public books alone.
 
 ## Connections
 
-- **Jev:** TypeSafe's native endpoint and a session-only key.
-- **OpenRouter Jev Decisions:** the companion server plugin at `plugins/rp-director-openrouter` calls OpenRouter's `/api/alpha/decisions` endpoint with the OpenRouter key already saved in SillyTavern. It never exposes that key to the UI extension.
-- **Structured judge:** an OpenAI-compatible endpoint, preferably through a SillyTavern connection profile so the extension never sees its key.
-- **Mock:** deterministic local QA only.
+- **OpenRouter Jev Decisions** (recommended): the companion server plugin `plugins/rp-director-openrouter` calls OpenRouter's decisions endpoint with the OpenRouter key already saved in SillyTavern. The key never reaches the browser. Install the plugin directory as `SillyTavern/plugins/rp-director-openrouter`, set `enableServerPlugins: true`, and restart SillyTavern.
+- **Jev** (TypeSafe's native endpoint, session-only key), a **structured judge** (any OpenAI-compatible model through a SillyTavern connection profile), and **Mock** (deterministic, for testing).
 
-Invalid, missing, refused, truncated, or malformed decisions pause before generation; nothing is silently guessed.
+Invalid, refused or missing answers on the move, routing or ruling stages pause the turn; nothing is guessed. A failed character-state request only keeps the previous state.
 
-### Companion plugin installation
+## Legacy pipeline
 
-The repository includes the companion source under `server-plugin/`. Install that directory as `SillyTavern/plugins/rp-director-openrouter`. SillyTavern must have `enableServerPlugins: true` and be restarted after installing the plugin. Director reports an actionable HTTP 404 error if the UI extension is present but the companion plugin is not loaded.
-
-The plugin accepts only bounded TypeSafe Jev decision batches, uses the authenticated user's active server-side OpenRouter key, applies request/response size limits and a timeout, and forwards no writer prompt or credential back to the browser.
+**Modules → Pipeline → Legacy** restores the original one-batch judge: a gate, family and probability over the whole message. Packs, meters and secrets are staged-only.
 
 ## Local-only presets
 
-Optional personal presets are loaded from `profiles/local/presets.json`. That directory is gitignored, fetched only at runtime, and never compiled into `index.js`. Copy `profiles/local.example.json` as a starting point. Loading a preset fills the table editor; **Apply table** remains the explicit activation step.
-
 Character cards, chats, local presets, saved keys, and SillyTavern settings do not belong in this repository. Keep personal presets under the gitignored `profiles/local/` directory. API keys are either session-only or remain in SillyTavern's server-side secret store, depending on the selected connection.
 
-## Build and verify
+## Development
 
 ```text
 npm install
-npm run verify
+npm run verify      # typecheck + unit tests + build
 ```
 
-The built `index.js` is included because SillyTavern loads it directly. Source lives in `src/`; unit tests live in `tests/unit/`.
+`index.js` is the built bundle SillyTavern loads; sources are in `src/`, tests in `tests/unit/`. Layout:
+- `src/pipeline/`: the staged stages.
+- `src/pack/`: genre packs.
+- `src/story.ts`: per-chat pack, meters, secrets and lore picks.
+- `src/lore/`: lore trees, the beam walk, per-book modes, and the World Info hook.
+- `src/controller.ts`: the turn lifecycle.
+

@@ -1,7 +1,79 @@
 // RP Director — built by build.mjs. Edit src/, not this file.
 
+// src/identity.ts
+var PLAYER_LABEL = "{{user}}";
+function uiActorName(actorId, name) {
+  return actorId === "player" ? PLAYER_LABEL : name ?? actorId;
+}
+function hash53(input, seed = 0) {
+  let h1 = 3735928559 ^ seed;
+  let h2 = 1103547991 ^ seed;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507);
+  h1 ^= Math.imul(h2 ^ h2 >>> 13, 3266489909);
+  h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507);
+  h2 ^= Math.imul(h1 ^ h1 >>> 13, 3266489909);
+  const hi = (h2 >>> 0).toString(16).padStart(8, "0");
+  const lo = (h1 >>> 0).toString(16).padStart(8, "0");
+  return hi + lo;
+}
+function canonicalText(text2) {
+  return String(text2 ?? "").replace(/\r\n?/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+function rootCursor(seedId) {
+  return "c_" + hash53("root|" + seedId);
+}
+function extendCursor(parent, message) {
+  return "c_" + hash53(`${parent}|${message.role}|${message.actorKey}|${canonicalText(message.text)}`);
+}
+function cursorChain(seedId, messages) {
+  const chain = [rootCursor(seedId)];
+  for (const message of messages) {
+    chain.push(extendCursor(chain[chain.length - 1], message));
+  }
+  return chain;
+}
+function prefixCursor(seedId, messages) {
+  const chain = cursorChain(seedId, messages);
+  return chain[chain.length - 1];
+}
+var counter = 0;
+function newId(prefix) {
+  const c = globalThis.crypto;
+  if (c && typeof c.randomUUID === "function") {
+    return `${prefix}_${c.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+  }
+  counter += 1;
+  return `${prefix}_${Date.now().toString(36)}${counter.toString(36)}`;
+}
+function actorIdFor(name, durableKey) {
+  const slug = String(name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "actor";
+  return `${slug}-${hash53(durableKey).slice(0, 6)}`;
+}
+function drawFromUint32(n) {
+  return (n >>> 0) / 4294967296;
+}
+function randomDraw() {
+  const c = globalThis.crypto;
+  let uint32;
+  if (c && typeof c.getRandomValues === "function") {
+    const buf = new Uint32Array(1);
+    c.getRandomValues(buf);
+    uint32 = buf[0];
+  } else {
+    uint32 = Math.floor(Math.random() * 4294967296);
+  }
+  return { uint32, u: drawFromUint32(uint32) };
+}
+
 // src/validate.ts
 var SUM_TOLERANCE = 1e-6;
+var ROUNDING_PER_OPTION = 5e-3;
+var ROUNDING_TOLERANCE_CAP = 0.05;
 var EXPECTATION_TOLERANCE = 1e-6;
 function isFiniteNumber(x) {
   return typeof x === "number" && Number.isFinite(x);
@@ -13,19 +85,19 @@ function isPlainObject(x) {
   return typeof x === "object" && x !== null && !Array.isArray(x);
 }
 function describe(x) {
-  let text;
+  let text2;
   if (typeof x === "string") {
-    text = JSON.stringify(x);
+    text2 = JSON.stringify(x);
   } else if (typeof x === "number" || typeof x === "boolean" || x === null || x === void 0) {
-    text = String(x);
+    text2 = String(x);
   } else {
     try {
-      text = JSON.stringify(x) ?? String(x);
+      text2 = JSON.stringify(x) ?? String(x);
     } catch {
-      text = Object.prototype.toString.call(x);
+      text2 = Object.prototype.toString.call(x);
     }
   }
-  return text.length > 80 ? `${text.slice(0, 77)}...` : text;
+  return text2.length > 80 ? `${text2.slice(0, 77)}...` : text2;
 }
 function validateProbabilities(keys, raw) {
   if (!isPlainObject(raw)) {
@@ -50,9 +122,11 @@ function validateProbabilities(keys, raw) {
     value[key] = p;
     sum += p;
   }
-  if (Math.abs(sum - 1) > SUM_TOLERANCE) {
+  const tolerance = Math.max(SUM_TOLERANCE, Math.min(ROUNDING_TOLERANCE_CAP, ROUNDING_PER_OPTION * keys.length));
+  if (Math.abs(sum - 1) > tolerance + 1e-9 || sum <= 0) {
     return { ok: false, error: `probabilities must sum to 1 (sum is ${sum})` };
   }
+  if (Math.abs(sum - 1) > SUM_TOLERANCE) for (const key of keys) value[key] = value[key] / sum;
   return { ok: true, value };
 }
 function validateConfidence(raw) {
@@ -213,8 +287,8 @@ function isPlainObject2(x) {
 function freezeCapabilities(capabilities) {
   return Object.freeze(capabilities);
 }
-function snippet(text, limit = SNIPPET_LIMIT) {
-  const oneLine = text.replace(/\s+/g, " ").trim();
+function snippet(text2, limit = SNIPPET_LIMIT) {
+  const oneLine = text2.replace(/\s+/g, " ").trim();
   return oneLine.length > limit ? `${oneLine.slice(0, limit - 3)}...` : oneLine;
 }
 function now() {
@@ -319,9 +393,9 @@ async function readBodyLimited(res, maxBytes) {
     }
     return new TextDecoder().decode(merged);
   }
-  const text = await res.text();
-  if (new TextEncoder().encode(text).byteLength > maxBytes) throw tooLarge();
-  return text;
+  const text2 = await res.text();
+  if (new TextEncoder().encode(text2).byteLength > maxBytes) throw tooLarge();
+  return text2;
 }
 var SPEAKER_KEYS = ["oren", "mira", "tessa", "YIELD"];
 function oneHot(keys, selected) {
@@ -612,22 +686,22 @@ function createJevProvider(config) {
         } catch (e) {
           throw classifyAbort(signal, combined) ?? new ProviderError("network", `Jev request failed: ${errorMessage(e)}`);
         }
-        let text;
+        let text2;
         try {
-          text = await readBodyLimited(res, maxResponseBytes);
+          text2 = await readBodyLimited(res, maxResponseBytes);
         } catch (e) {
           if (isProviderError(e)) throw e;
           throw classifyAbort(signal, combined) ?? new ProviderError("network", `reading the Jev response failed: ${errorMessage(e)}`);
         }
         if (!res.ok) {
-          const detail = text.length > 0 ? `: ${snippet(text)}` : "";
+          const detail = text2.length > 0 ? `: ${snippet(text2)}` : "";
           throw new ProviderError("http", `Jev endpoint returned HTTP ${res.status}${detail}`, res.status);
         }
         let parsed;
         try {
-          parsed = JSON.parse(text);
+          parsed = JSON.parse(text2);
         } catch {
-          throw new ProviderError("malformed", `Jev response body is not valid JSON: ${snippet(text)}`);
+          throw new ProviderError("malformed", `Jev response body is not valid JSON: ${snippet(text2)}`);
         }
         if (!isPlainObject2(parsed) || !isPlainObject2(parsed.answers)) {
           throw new ProviderError("malformed", "Jev response has no `answers` object");
@@ -853,9 +927,9 @@ function createDirectFetchTransport(config) {
         if (signal.aborted) throw new ProviderError("aborted", "structured request was aborted");
         throw new ProviderError("network", `structured request failed: ${errorMessage(e)}`);
       }
-      let text;
+      let text2;
       try {
-        text = await readBodyLimited(res, maxResponseBytes);
+        text2 = await readBodyLimited(res, maxResponseBytes);
       } catch (e) {
         if (isProviderError(e)) throw e;
         if (signal.aborted) throw new ProviderError("aborted", "structured request was aborted");
@@ -869,14 +943,14 @@ function createDirectFetchTransport(config) {
         );
       }
       if (!res.ok) {
-        const detail = text.length > 0 ? `: ${snippet(text)}` : "";
+        const detail = text2.length > 0 ? `: ${snippet(text2)}` : "";
         throw new ProviderError("http", `endpoint returned HTTP ${res.status}${detail}`, res.status);
       }
       let parsed;
       try {
-        parsed = JSON.parse(text);
+        parsed = JSON.parse(text2);
       } catch {
-        throw new ProviderError("malformed", `endpoint response is not valid JSON: ${snippet(text)}`);
+        throw new ProviderError("malformed", `endpoint response is not valid JSON: ${snippet(text2)}`);
       }
       if (!isPlainObject2(parsed) || !Array.isArray(parsed.choices) || parsed.choices.length === 0) {
         throw new ProviderError("malformed", "endpoint response has no `choices`");
@@ -1325,6 +1399,10 @@ function effectiveProfile(settings) {
   merged.revision = `${base.revision}+user-${revisionHash(merged)}`;
   return { profile: merged, warnings };
 }
+function setResolutionMethod(settings, profileId, method) {
+  const id = canonicalProfileId(profileId);
+  settings.profileOverrides[id] = { ...settings.profileOverrides[id] ?? {}, resolutionMethod: method };
+}
 function revisionHash(profile) {
   const payload = JSON.stringify({ outcomes: profile.outcomes, bands: profile.bands, method: profile.resolutionMethod, priors: profile.speakers.priors, rep: profile.speakers.repetitionFactor, driving: profile.drivingQuestionId, mode: profile.mode, actorPolicy: profile.actorPolicy });
   let h = 2166136261;
@@ -1335,23 +1413,433 @@ function revisionHash(profile) {
   return (h >>> 0).toString(16);
 }
 
-// src/migration.ts
+// src/npc-reaction.ts
+var BOUNDARY = " Apply this only to the selected NPC and the established trigger. Do not decide the player's actions, feelings, consent, or response. Do not invent a new consequential action or override an established outcome.";
+var NPC_REACTION_GROUPS = Object.freeze([
+  {
+    id: "resolve",
+    label: "NPC resolve",
+    options: [
+      { id: "press", label: "Press the objective", instruction: "The NPC maintains the already-established objective and makes its stakes or reasons clearer through dialogue or a non-consequential reaction. Do not intensify force or settle a new contested action." },
+      { id: "change_tactic", label: "Change tactic", instruction: "The NPC changes the conversational approach to the same established objective, without deciding whether the player agrees or starting a new contested action." },
+      { id: "concede", label: "Concede a point", instruction: "The NPC voluntarily concedes one limited point under discussion while retaining the established objective. Do not grant unrelated rewards or decide the player's response." },
+      { id: "withdraw", label: "Withdraw for now", instruction: "The NPC stops pressing the current objective for now. Preserve only consequences already established; do not invent a punishment, debt, or player decision." }
+    ]
+  },
+  {
+    id: "secret",
+    label: "Secret handling",
+    options: [
+      { id: "hold", label: "Hold the secret", instruction: "The NPC keeps the already-established secret undisclosed in this reply. Do not erase an earlier disclosure, remove visible evidence, or invent a new secret." },
+      { id: "slip", label: "Let a clue slip", instruction: "The NPC gives one observable clue tied to the already-established secret. A clue does not establish that anyone noticed or understood it; leave discovery unresolved. Do not invent secret information." },
+      { id: "reveal", label: "Reveal deliberately", instruction: "The NPC deliberately communicates a bounded piece of information that is already established and already known to that NPC, for an established reason. Do not invent information or decide the player's interpretation or response." }
+    ]
+  },
+  {
+    id: "exposure",
+    label: "Exposure",
+    options: [
+      { id: "unnoticed", label: "Unnoticed", instruction: "Resolve only the currently unresolved witnessing opportunity: the established potential witness does not notice this act now. Do not erase evidence or knowledge, or contradict any earlier witnessing." },
+      { id: "suspicion", label: "Suspicion", instruction: "Resolve only the currently unresolved witnessing opportunity: an established potential witness visibly reacts to an observable tell without knowing more than that tell supports. Do not invent a witness, secret knowledge, or retroactive discovery." },
+      { id: "witnessed", label: "Witnessed", instruction: "Resolve only the currently unresolved witnessing opportunity: an established potential witness observes the currently perceptible act. Grant no knowledge beyond what is observable; do not invent a witness or contradict an already-settled outcome." }
+    ]
+  },
+  {
+    // Chosen by routing, not by a trigger question: the player handed this NPC the initiative.
+    id: "initiative",
+    label: "Handed the initiative",
+    options: [
+      { id: "takes_lead", label: "Takes the lead", instruction: "The player handed the NPC the initiative, and the NPC takes it now: the NPC decides how to act, within what the player invited. Describe what the NPC does and what reaches the player." },
+      { id: "raises_stakes", label: "Takes it and raises the stakes", instruction: "The player handed the NPC the initiative, and the NPC takes it on the NPC's own terms: acting on it while adding one condition, price or consequence that makes the moment matter more, within the NPC's established aims." },
+      { id: "hands_back", label: "Hands it back with a condition", instruction: "The player handed the NPC the initiative, and the NPC hands it back: the NPC stays engaged but names one specific thing the player must do or say first. Keep the scene moving; do not stall it." },
+      { id: "declines", label: "Declines for now", instruction: "The player handed the NPC the initiative, and the NPC declines it for now, making the reason visible and carrying on with the NPC's own aims. Do not punish the player or end the scene." }
+    ]
+  }
+].map((group) => Object.freeze({
+  ...group,
+  options: Object.freeze(group.options.map((option) => Object.freeze({ ...option, instruction: option.instruction + BOUNDARY })))
+})));
+function defaultReactionSettings() {
+  return {
+    enabled: true,
+    weights: {
+      resolve: { press: 40, change_tactic: 40, concede: 15, withdraw: 5 },
+      secret: { hold: 75, slip: 20, reveal: 5 },
+      exposure: { unnoticed: 60, suspicion: 30, witnessed: 10 },
+      initiative: { takes_lead: 40, raises_stakes: 25, hands_back: 25, declines: 10 }
+    }
+  };
+}
+function normalizeReactionSettings(existing) {
+  const settings = defaultReactionSettings();
+  if (!existing || typeof existing !== "object" || Array.isArray(existing)) return settings;
+  const saved = existing;
+  if (typeof saved.enabled === "boolean") settings.enabled = saved.enabled;
+  if (!saved.weights || typeof saved.weights !== "object" || Array.isArray(saved.weights)) return settings;
+  const weights = saved.weights;
+  for (const group of NPC_REACTION_GROUPS) {
+    try {
+      settings.weights[group.id] = checkedWeights(group, weights[group.id]);
+    } catch {
+    }
+  }
+  return settings;
+}
+function reactionQuestion(actorId) {
+  return {
+    type: "choice",
+    instructions: (actorId ? `Assess only the NPC with actor ID ${JSON.stringify(actorId)} in state.actors. Ignore triggers belonging only to other actors. ` : "") + "Using state.latestInput and the visible recent exchange in state.recentAcceptedMessages, select at most one concrete NPC reaction trigger. Detect a trigger only; do not choose an outcome or set its odds. Select the first clearly established trigger if more than one applies. Choose none when the evidence is absent, ambiguous, already settled, or would require inventing an objective, secret, witness, or arbitrary escalation. Do not infer a secret from a private thought or infer that another actor knows it. A trigger never grants control over the player's actions, feelings, consent, or response.",
+    criteria: {
+      none: "No concrete unresolved trigger is established in the latest player message and visible exchange, or the event has already been resolved.",
+      resolve: "The player resists, refuses, or deflects an NPC objective that the visible exchange already shows that NPC actively pursuing; a behavioral response remains open.",
+      secret: "The visible exchange establishes pressure on a specific existing secret held by an NPC who already knows it, and whether that NPC discloses it remains unresolved. Do not invent secret content.",
+      exposure: "The assessed NPC is present as a potential witness to a current perceptible act, with an established opportunity to observe it; whether this NPC notices remains unresolved. Do not choose this for a witness other than the assessed NPC."
+    }
+  };
+}
+function checkedWeights(group, value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Missing NPC reaction weights for ${group.id}`);
+  const weights = value;
+  const keys = Object.keys(weights);
+  if (keys.length !== group.options.length || keys.some((key) => !group.options.some((option) => option.id === key))) {
+    throw new Error(`NPC reaction weights for ${group.id} must use exactly its catalog outcome keys`);
+  }
+  let total = 0;
+  const clean = {};
+  for (const option of group.options) {
+    const weight = weights[option.id];
+    if (typeof weight !== "number" || !Number.isFinite(weight) || weight < 0) throw new Error(`Invalid NPC reaction weight for ${group.id}.${option.id}`);
+    clean[option.id] = weight;
+    total += weight;
+  }
+  if (!Number.isFinite(total) || total <= 0) throw new Error(`NPC reaction weights for ${group.id} must have a finite positive total`);
+  return clean;
+}
+function chooseReaction(kind, settings, actorId, draw) {
+  if (!settings?.enabled) throw new Error("NPC reactions are disabled");
+  const group = NPC_REACTION_GROUPS.find((candidate) => candidate.id === kind);
+  if (!group) throw new Error(`Unknown NPC reaction kind: ${String(kind)}`);
+  if (typeof actorId !== "string" || !actorId.trim()) throw new Error("NPC reaction requires an actor ID");
+  if (!Number.isFinite(draw) || draw < 0 || draw >= 1) throw new Error("NPC reaction draw must be finite and in [0, 1)");
+  const weights = checkedWeights(group, settings.weights?.[kind]);
+  const total = Object.values(weights).reduce((sum, weight) => sum + weight, 0);
+  const target = draw * total;
+  let cumulative = 0;
+  let selected;
+  for (const option of group.options) {
+    const weight = weights[option.id];
+    if (weight === 0) continue;
+    selected = option;
+    cumulative += weight;
+    if (target < cumulative) break;
+  }
+  return Object.freeze({ kind, actorId, outcome: selected.id, draw, instruction: selected.instruction });
+}
+
+// src/lore/tree.ts
+var DEFAULT_TREE_OPTIONS = { maxOptions: 40, maxLeafEntries: 3, excerptChars: 240, flatLimit: 40 };
+function selectable(entry) {
+  return !entry.disabled && !entry.constant && entry.content.trim().length > 0;
+}
+function excerpt(text2, max) {
+  const flat = text2.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}\u2026` : flat;
+}
+function cleanSummary(value) {
+  return String(value ?? "").replace(/\n?\[Keywords:[^\]]*\]\s*$/i, "").replace(/\s+/g, " ").trim();
+}
+function entryLeaf(entry, options) {
+  return { id: `e${entry.uid}`, label: entry.title || `Entry ${entry.uid}`, summary: excerpt(entry.content, options.excerptChars), entryUids: [entry.uid], children: [] };
+}
+function uidList(value) {
+  return Array.isArray(value) ? value.map(Number).filter((n) => Number.isInteger(n)) : [];
+}
+function fromTunnelVision(raw, entries, options, claimed, path) {
+  const own = uidList(raw.entryUids).filter((uid) => entries.has(uid) && !claimed.has(uid));
+  const rawChildren = Array.isArray(raw.children) ? raw.children : [];
+  const label = String(raw.label ?? "").trim() || "Untitled section";
+  const summary = cleanSummary(raw.summary);
+  const id = `t${path}`;
+  if (rawChildren.length === 0 && own.length <= options.maxLeafEntries) {
+    if (own.length === 0) return null;
+    own.forEach((uid) => claimed.add(uid));
+    return { id, label, summary, entryUids: own, children: [] };
+  }
+  const children = [];
+  rawChildren.forEach((child, index) => {
+    const node = fromTunnelVision(child, entries, options, claimed, `${path}.${index}`);
+    if (node) children.push(node);
+  });
+  for (const uid of own) {
+    if (claimed.has(uid)) continue;
+    claimed.add(uid);
+    children.push(entryLeaf(entries.get(uid), options));
+  }
+  if (children.length === 0) return null;
+  if (children.length === 1 && path !== "") return { ...children[0], label: `${label}: ${children[0].label}` };
+  return { id, label, summary, entryUids: [], children };
+}
+function bound(node, options) {
+  if (node.children.length === 0) return node;
+  let children = node.children.map((child) => bound(child, options));
+  const width = Math.max(2, options.maxOptions);
+  while (children.length > width) {
+    const size = Math.ceil(children.length / Math.ceil(children.length / width));
+    const groups = [];
+    for (let i = 0; i < children.length; i += size) {
+      const members = children.slice(i, i + size);
+      const titles = members.map((m) => m.label);
+      groups.push({
+        id: `${node.id}.g${groups.length + 1}`,
+        label: members.length > 1 ? `${titles[0]} \u2026 ${titles.at(-1)}` : titles[0],
+        summary: excerpt(`Contains: ${titles.join("; ")}`, 400),
+        entryUids: [],
+        children: members
+      });
+    }
+    children = groups;
+  }
+  return { ...node, children };
+}
+function buildTree(world, allEntries, tunnelVisionRoot, options = DEFAULT_TREE_OPTIONS) {
+  const entries = /* @__PURE__ */ new Map();
+  for (const entry of allEntries) if (entry.world === world && selectable(entry)) entries.set(entry.uid, entry);
+  if (entries.size === 0) return null;
+  const claimed = /* @__PURE__ */ new Set();
+  let root = null;
+  let source = "derived";
+  if (tunnelVisionRoot && typeof tunnelVisionRoot === "object" && entries.size > options.flatLimit) {
+    root = fromTunnelVision(tunnelVisionRoot, entries, options, claimed, "");
+    if (root) source = "tunnelvision";
+  }
+  const loose = [...entries.values()].filter((entry) => !claimed.has(entry.uid)).map((entry) => entryLeaf(entry, options));
+  if (!root) root = { id: "root", label: world, summary: "", entryUids: [], children: loose };
+  else if (root.children.length === 0) root = { id: "root", label: world, summary: "", entryUids: [], children: [root, ...loose] };
+  else root = { ...root, id: "root", children: [...root.children, ...loose] };
+  return { world, source, root: bound(root, options), entries };
+}
+function entriesUnder(node) {
+  if (node.children.length === 0) return node.entryUids.slice();
+  return node.children.flatMap(entriesUnder);
+}
+
+// src/lore/select.ts
+var DEFAULT_BEAM = { width: 3, minProbability: 0.15, maxEntries: 6, maxDepth: 4 };
+var LORE_MAX_QUESTIONS = 16;
+var OPTION_CHARS = 360;
+var CONTENTS_CHARS = 220;
+function contents(node, entries) {
+  const titles = entriesUnder(node).map((uid) => entries?.get(uid)?.title ?? "").filter(Boolean);
+  return [...new Set(titles)];
+}
+function beamFloor(optionCount, minProbability) {
+  return Math.min(minProbability, 2 / (optionCount + 1));
+}
+function beamPicks(answer, optionKeys, beam) {
+  if (!answer || answer.type !== "choice") return [];
+  const probabilities = answer.probabilities;
+  if (!probabilities) return answer.choice !== "NONE" && optionKeys.includes(answer.choice) ? [{ key: answer.choice, p: 1 }] : [];
+  const pNone = probabilities.NONE ?? 0;
+  const ranked = optionKeys.map((key) => ({ key, p: probabilities[key] ?? 0 })).sort((a, b) => b.p - a.p);
+  const leader = ranked[0];
+  if (!leader || leader.p <= pNone) return [];
+  const floor = beamFloor(optionKeys.length, beam.minProbability);
+  return ranked.filter((o) => o.p >= floor && o.p >= leader.p / 2 && o.p > pNone).slice(0, Math.max(1, beam.width));
+}
+function frontierQuestion(world, node, isRoot, hasMove, entries) {
+  const options = {};
+  const criteria = {};
+  node.children.forEach((child, index) => {
+    const key = `n${index + 1}`;
+    options[key] = child.id;
+    const own = excerpt(child.summary ? `${child.label}: ${child.summary}` : child.label, OPTION_CHARS);
+    const inside = child.children.length ? contents(child, entries) : [];
+    criteria[key] = inside.length ? `${own} Includes: ${excerpt(inside.join("; "), CONTENTS_CHARS)}` : own;
+  });
+  criteria.NONE = isRoot ? `Nothing in the lorebook "${world}" is needed for the next reply.` : "None of these parts is needed for the next reply.";
+  const where = isRoot ? `the lorebook "${world}"` : `the section "${node.label}" of the lorebook "${world}"`;
+  return {
+    options,
+    question: {
+      type: "choice",
+      instructions: `The options are the parts of ${where}. Using the public scene in state (state.latestInput and state.recentAcceptedMessages${hasMove ? ", and the move being ruled in state.move" : ""}), choose the part the next reply most depends on to stay accurate: the people, places, objects, abilities, rules, history or relationships the scene is touching now${hasMove ? " or the move relies on" : ""}. Choose NONE when no part is needed for this reply. Prefer what the scene is about now over background that is only loosely related.`,
+      criteria
+    }
+  };
+}
+async function selectLore(trees, evaluate, beam = DEFAULT_BEAM, options = {}) {
+  const { hasMove = false, maxQuestions = LORE_MAX_QUESTIONS, idPrefix = "lore" } = options;
+  const steps = [];
+  const leaves = [];
+  const failed = /* @__PURE__ */ new Set();
+  let frontier = trees.filter((t) => t.root.children.length > 0).map((tree) => ({ tree, node: tree.root, score: 1 }));
+  let requests = 0;
+  let depth = 0;
+  while (frontier.length > 0 && depth < beam.maxDepth) {
+    depth += 1;
+    const records = [];
+    const questions = {};
+    frontier.forEach((open, index) => {
+      const built = frontierQuestion(open.tree.world, open.node, open.node === open.tree.root, hasMove, open.tree.entries);
+      const questionId = `${idPrefix}_${depth}_${index + 1}`;
+      questions[questionId] = built.question;
+      records.push({ questionId, world: open.tree.world, nodeId: open.node.id, label: open.node.label, options: built.options, picked: [] });
+    });
+    const ids = Object.keys(questions);
+    const batches = [];
+    for (let i = 0; i < ids.length; i += maxQuestions) batches.push(Object.fromEntries(ids.slice(i, i + maxQuestions).map((id) => [id, questions[id]])));
+    requests += batches.length;
+    const results = await Promise.all(batches.map((batch) => evaluate(batch)));
+    const answers = Object.assign({}, ...results.map((r) => r.answers));
+    const next = [];
+    const place = (item) => {
+      if (item.node.children.length > 0) next.push(item);
+      else leaves.push(item);
+    };
+    const errors = Object.assign({}, ...results.map((r) => r.errors));
+    records.forEach((record, index) => {
+      const open = frontier[index];
+      const answer = answers[record.questionId];
+      if (!answer || answer.type !== "choice") {
+        record.error = errors[record.questionId] ?? "no valid answer";
+        failed.add(open.tree.world);
+        return;
+      }
+      const picks = beamPicks(answer, Object.keys(record.options), beam);
+      const childOf = (key) => open.node.children.find((c) => c.id === record.options[key]);
+      const picked = picks.map((pick) => ({ child: childOf(pick.key), p: pick.p })).filter((x) => Boolean(x.child));
+      if (picked.length === 0) {
+        const fallback2 = open.fallback;
+        if (fallback2 && !fallback2.used && --fallback2.pending === 0 && fallback2.alternatives.length > 0) {
+          fallback2.used = true;
+          const alt = fallback2.alternatives[0];
+          record.fellBackTo = alt.child.id;
+          place({ tree: open.tree, node: alt.child, score: fallback2.parent.score * alt.p });
+        }
+        return;
+      }
+      const probabilities = answer?.type === "choice" ? answer.probabilities : null;
+      const sections = picked.filter((x) => x.child.children.length > 0);
+      const fallback = probabilities && sections.length === picked.length ? {
+        parent: open,
+        pending: sections.length,
+        used: false,
+        alternatives: Object.keys(record.options).filter((key) => !picks.some((pick) => pick.key === key)).map((key) => ({ child: childOf(key), p: probabilities[key] ?? 0 })).filter((x) => Boolean(x.child) && x.p >= beamFloor(Object.keys(record.options).length, beam.minProbability) / 2 && x.p > (probabilities.NONE ?? 0)).sort((a, b) => b.p - a.p)
+      } : void 0;
+      for (const { child, p } of picked) {
+        record.picked.push(child.id);
+        place({ tree: open.tree, node: child, score: open.score * p, fallback });
+      }
+    });
+    steps.push({ depth, questions, results, frontiers: records });
+    frontier = next;
+  }
+  const refs = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const leaf of leaves.sort((a, b) => b.score - a.score)) {
+    for (const uid of leaf.node.entryUids) {
+      const key = `${leaf.tree.world}.${uid}`;
+      if (seen.has(key) || refs.length >= beam.maxEntries) continue;
+      const entry = leaf.tree.entries.get(uid);
+      if (!entry) continue;
+      seen.add(key);
+      refs.push({ world: leaf.tree.world, uid, title: entry.title, score: leaf.score });
+    }
+  }
+  return { refs, steps, requests, cutShort: frontier.length > 0, failedWorlds: [...failed] };
+}
+
+// src/lore/settings.ts
+var LORE_MODES = ["off", "judge", "assist", "managed"];
+function defaultLoreSettings() {
+  return {
+    books: {},
+    defaultMode: "assist",
+    maxEntries: 5,
+    width: DEFAULT_BEAM.width,
+    minProbability: DEFAULT_BEAM.minProbability,
+    maxDepth: DEFAULT_BEAM.maxDepth,
+    judgeChars: 12e3
+  };
+}
 function object(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
+var isMode = (value) => typeof value === "string" && LORE_MODES.includes(value);
+function bounded(value, min, max, fallback, integer = true) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  const clamped = Math.min(max, Math.max(min, n));
+  return integer ? Math.round(clamped) : clamped;
+}
+function normalizeLoreSettings(raw) {
+  const base = defaultLoreSettings();
+  const saved = object(raw);
+  if (!saved) return base;
+  const books = {};
+  for (const [name, value] of Object.entries(object(saved.books) ?? {})) {
+    const book = object(value);
+    if (!book || !name.trim()) continue;
+    books[name] = { mode: isMode(book.mode) ? book.mode : base.defaultMode, public: book.public === true };
+  }
+  return {
+    books,
+    defaultMode: isMode(saved.defaultMode) ? saved.defaultMode : base.defaultMode,
+    maxEntries: bounded(saved.maxEntries, 1, 20, base.maxEntries),
+    width: bounded(saved.width, 1, 6, base.width),
+    minProbability: bounded(saved.minProbability, 0.01, 0.9, base.minProbability, false),
+    maxDepth: bounded(saved.maxDepth, 1, 6, base.maxDepth),
+    judgeChars: bounded(saved.judgeChars, 1e3, 4e4, base.judgeChars)
+  };
+}
+function bookSettings(settings, world) {
+  return settings.books[world] ?? { mode: settings.defaultMode, public: false };
+}
+function effectiveMode(settings, world, tunnelVisionManages) {
+  const mode = bookSettings(settings, world).mode;
+  if (tunnelVisionManages && (mode === "assist" || mode === "managed")) return "judge";
+  return mode;
+}
+function lorePlan(refs, modeOf, books, failed = []) {
+  const force = /* @__PURE__ */ new Set();
+  for (const ref of refs) {
+    const mode = modeOf(ref.world);
+    if (mode === "assist" || mode === "managed") force.add(`${ref.world}.${ref.uid}`);
+  }
+  const managed = new Set(books.filter((world) => modeOf(world) === "managed" && !failed.includes(world)));
+  return { force, managed };
+}
+
+// src/migration.ts
+function object2(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
 function normalizeBaseSettings(defaults, existing) {
-  const saved = object(existing) ?? {};
+  const saved = object2(existing) ?? {};
   const result = structuredClone({
     ...defaults,
     ...saved,
     enabled: typeof saved.enabled === "boolean" ? saved.enabled : defaults.enabled,
     profileId: canonicalProfileId(typeof saved.profileId === "string" ? saved.profileId : defaults.profileId),
     bindingConfirmedAt: typeof saved.bindingConfirmedAt === "string" || saved.bindingConfirmedAt === null ? saved.bindingConfirmedAt : defaults.bindingConfirmedAt,
-    connection: { ...defaults.connection, ...object(saved.connection) ?? {} },
-    observerConnection: { ...defaults.observerConnection, ...object(saved.observerConnection) ?? {} },
+    connection: { ...defaults.connection, ...object2(saved.connection) ?? {} },
+    observerConnection: { ...defaults.observerConnection, ...object2(saved.observerConnection) ?? {} },
+    reactions: normalizeReactionSettings(saved.reactions),
     showBar: typeof saved.showBar === "boolean" ? saved.showBar : defaults.showBar,
     inspectorOpen: typeof saved.inspectorOpen === "boolean" ? saved.inspectorOpen : defaults.inspectorOpen,
-    profileOverrides: { ...defaults.profileOverrides, ...object(saved.profileOverrides) ?? {} }
+    profileOverrides: { ...defaults.profileOverrides, ...object2(saved.profileOverrides) ?? {} },
+    // Revision 2 moved everyone to the staged pipeline once; later choices are kept.
+    pipeline: typeof saved.settingsRevision === "number" && saved.settingsRevision >= 2 && (saved.pipeline === "staged" || saved.pipeline === "legacy") ? saved.pipeline : defaults.pipeline,
+    settingsRevision: Math.max(2, typeof saved.settingsRevision === "number" ? saved.settingsRevision : 0),
+    modules: {
+      speaker: typeof object2(saved.modules)?.speaker === "boolean" ? object2(saved.modules).speaker : defaults.modules.speaker,
+      decisions: typeof object2(saved.modules)?.decisions === "boolean" ? object2(saved.modules).decisions : defaults.modules.decisions,
+      meters: typeof object2(saved.modules)?.meters === "boolean" ? object2(saved.modules).meters : defaults.modules.meters,
+      secrets: typeof object2(saved.modules)?.secrets === "boolean" ? object2(saved.modules).secrets : defaults.modules.secrets,
+      // Lore arrived after the other suites: off for anyone who had switched them all off.
+      lore: typeof object2(saved.modules)?.lore === "boolean" ? object2(saved.modules).lore : object2(saved.modules) && ["speaker", "decisions", "meters", "secrets"].every((key) => object2(saved.modules)[key] === false) ? false : defaults.modules.lore
+    },
+    lore: normalizeLoreSettings(saved.lore)
   });
   for (const [legacy, current] of Object.entries(LEGACY_PROFILE_IDS)) {
     if (result.profileOverrides[legacy]) {
@@ -1392,16 +1880,16 @@ function recoverInterruptedObservations(input) {
 }
 function migrateAutoHistory(metadata, messages) {
   if (Object.prototype.hasOwnProperty.call(metadata, "rpDirector")) return { metadata, messages, migrated: false };
-  const auto = object(metadata.rpDirectorAuto);
+  const auto = object2(metadata.rpDirectorAuto);
   if (!auto || auto.schemaVersion !== 1) return { metadata, messages, migrated: false };
-  const variants = object(auto.variants) ?? {};
-  const attempts = object(auto.attempts) ?? {};
+  const variants = object2(auto.variants) ?? {};
+  const attempts = object2(auto.attempts) ?? {};
   const migratedMessages = structuredClone(messages);
   const copyMarker = (container) => {
-    const marker = object(container.extra?.rpda);
+    const marker = object2(container.extra?.rpda);
     if (!marker || typeof marker.v !== "string" || typeof marker.a !== "string") return;
-    const variant = object(variants[marker.v]);
-    const attempt = object(attempts[marker.a]);
+    const variant = object2(variants[marker.v]);
+    const attempt = object2(attempts[marker.a]);
     if (!variant || !attempt || variant.attemptId !== marker.a || attempt.variantId !== marker.v) return;
     container.extra = { ...container.extra ?? {}, rpd: structuredClone(marker) };
   };
@@ -1414,578 +1902,6 @@ function migrateAutoHistory(metadata, messages) {
     messages: migratedMessages,
     migrated: true
   };
-}
-
-// src/host.ts
-var INJECTION_KEY = "rp_director_binding";
-var SETTINGS_KEY = "rpDirector";
-var METADATA_KEY = "rpDirector";
-var VARIANT_MARKER_KEY = "rpd";
-var EXTENSION_PROMPT_TYPE_IN_CHAT = 1;
-var ROLE_NUMBER = { system: 0, user: 1, assistant: 2 };
-function defaultSettings() {
-  return {
-    enabled: true,
-    profileId: DEFAULT_PROFILE_ID,
-    bindingConfirmedAt: null,
-    connection: { kind: "mock", baseUrl: "", model: "", stProfileId: "", mockScenario: "gate-deferred" },
-    observerConnection: { stProfileId: "" },
-    showBar: true,
-    inspectorOpen: false,
-    profileOverrides: {}
-  };
-}
-var Host = class {
-  flags = null;
-  ownedTool = null;
-  ctx() {
-    const st = globalThis.SillyTavern;
-    if (!st || typeof st.getContext !== "function") throw new Error("SillyTavern.getContext is not available");
-    return st.getContext();
-  }
-  /** Loads live flag getters from host modules; safe to call more than once. */
-  async loadFlags() {
-    if (this.flags) return;
-    try {
-      const groupUrl = new URL("../../../group-chats.js", import.meta.url).href;
-      const scriptUrl = new URL("../../../../script.js", import.meta.url).href;
-      const [groupModule, scriptModule] = await Promise.all([import(
-        /* @vite-ignore */
-        groupUrl
-      ), import(
-        /* @vite-ignore */
-        scriptUrl
-      )]);
-      this.flags = {
-        isGroupGenerating: () => Boolean(groupModule.is_group_generating),
-        isAutoMode: () => Boolean(groupModule.is_group_automode_enabled),
-        isSendPress: () => Boolean(scriptModule.is_send_press),
-        sendMessageAsUser: typeof scriptModule.sendMessageAsUser === "function" ? scriptModule.sendMessageAsUser : null
-      };
-    } catch (error) {
-      console.warn("[RP Director] host flag import failed; using DOM fallback", error);
-      this.flags = {
-        isGroupGenerating: () => document.body.dataset.generating === "true",
-        isAutoMode: () => false,
-        isSendPress: () => document.body.dataset.generating === "true",
-        sendMessageAsUser: null
-      };
-    }
-  }
-  /** Posts the composer text as a user message without any reply, through the host's own path. Returns false if unavailable. */
-  async postUserMessage(text) {
-    const fn = this.flags?.sendMessageAsUser;
-    if (!fn) return false;
-    await fn(text, "");
-    const composer = this.composer();
-    if (composer) {
-      composer.value = "";
-      composer.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-    await this.ctx().saveChat();
-    return true;
-  }
-  isGenerating() {
-    const f = this.flags;
-    if (f) return f.isGroupGenerating() || f.isSendPress();
-    return document.body.dataset.generating === "true";
-  }
-  isAutoMode() {
-    return this.flags ? this.flags.isAutoMode() : false;
-  }
-  isAutoDirectorEnabled() {
-    const all = this.ctx().extensionSettings;
-    const base = all[SETTINGS_KEY];
-    return !base?.enabled && Boolean(all.rpDirectorAuto?.enabled);
-  }
-  takeOverAuto() {
-    const all = this.ctx().extensionSettings;
-    if (!all[SETTINGS_KEY]?.enabled) return;
-    const sibling = all.rpDirectorAuto;
-    if (sibling) sibling.enabled = false;
-    const auto = globalThis.rpDirectorAuto;
-    if (auto?.controller) {
-      auto.controller.setEnabled(false);
-      auto.controller.destroy();
-    }
-    if (typeof document !== "undefined") {
-      document.getElementById("rpda-bar")?.remove();
-      document.getElementById("rpda-settings")?.remove();
-    }
-    this.saveSettings();
-  }
-  // ---- chat identity -------------------------------------------------------
-  isGroup() {
-    return Boolean(this.ctx().groupId);
-  }
-  /** Stable key for the open chat: group id or character avatar plus chat file name. */
-  chatKey() {
-    const ctx = this.ctx();
-    const chatId = ctx.getCurrentChatId();
-    if (!chatId) return null;
-    if (ctx.groupId) return `group:${ctx.groupId}:${chatId}`;
-    const idx = Number(ctx.characterId);
-    const avatar = Number.isInteger(idx) ? ctx.characters[idx]?.avatar : void 0;
-    if (!avatar) return null;
-    return `char:${avatar}:${chatId}`;
-  }
-  seedId() {
-    const ctx = this.ctx();
-    const integrity = ctx.chatMetadata?.integrity;
-    return `${this.chatKey() ?? "none"}|${typeof integrity === "string" ? integrity : ""}`;
-  }
-  playerName() {
-    return String(this.ctx().name1 ?? "User");
-  }
-  // ---- actors ----------------------------------------------------------------
-  /** Group members in stable group order (or the single character), with current indexes. */
-  actors() {
-    const ctx = this.ctx();
-    if (ctx.groupId) {
-      const group = ctx.groups.find((g) => g.id === ctx.groupId);
-      if (!group) return [];
-      const disabled = new Set(group.disabled_members ?? []);
-      return group.members.map((avatar) => {
-        const index = ctx.characters.findIndex((c) => c.avatar === avatar);
-        const character2 = index >= 0 ? ctx.characters[index] : void 0;
-        return { avatar, name: character2?.name ?? avatar, index, disabled: disabled.has(avatar) };
-      }).filter((a) => a.index >= 0);
-    }
-    const idx = Number(ctx.characterId);
-    const character = Number.isInteger(idx) ? ctx.characters[idx] : void 0;
-    if (!character) return [];
-    return [{ avatar: character.avatar, name: character.name, index: idx, disabled: false }];
-  }
-  /** Re-resolves a durable avatar to its current array index, or -1. */
-  resolveIndex(avatar) {
-    return this.ctx().characters.findIndex((c) => c.avatar === avatar);
-  }
-  /** Bounded public card summary for the decision snapshot. */
-  publicCard(avatar, maxChars = 400) {
-    const c = this.ctx().characters.find((x) => x.avatar === avatar);
-    const description = String(c?.description ?? "").replace(/\s+/g, " ").trim();
-    return description.length > maxChars ? description.slice(0, maxChars) + "\u2026" : description;
-  }
-  // ---- chat -------------------------------------------------------------------
-  chat() {
-    return this.ctx().chat;
-  }
-  /**
-   * Maps host messages to fingerprint inputs. Every message in the array is
-   * part of the transcript identity; `is_system` is deliberately ignored
-   * because the host flips it on existing messages (observed on group
-   * greetings), which would silently move every later cursor.
-   */
-  fingerprintMessages(messages) {
-    const out = [];
-    for (const m of messages) {
-      if (!m) continue;
-      if (m.is_user) out.push({ role: "user", actorKey: "persona", text: m.mes ?? "" });
-      else out.push({ role: "assistant", actorKey: m.original_avatar ?? `name:${m.name}`, text: m.mes ?? "" });
-    }
-    return out;
-  }
-  lastAssistantAvatar() {
-    const chat = this.chat();
-    for (let i = chat.length - 1; i >= 0; i--) {
-      const m = chat[i];
-      if (!m.is_user && !m.is_system) return m.original_avatar ?? null;
-    }
-    return null;
-  }
-  composer() {
-    return document.getElementById("send_textarea");
-  }
-  composerText() {
-    return String(this.composer()?.value ?? "");
-  }
-  /** Any visible assistant prose saved after an attempt bound to the transcript. */
-  assistantProseSince(messageIndex) {
-    return this.chat().slice(Math.max(0, messageIndex)).filter((message) => !message.is_user && !message.is_system && !["", "..."].includes(String(message.mes ?? "").trim())).map((message) => String(message.mes).trim());
-  }
-  // ---- variant markers --------------------------------------------------------
-  readMarker(mesId) {
-    const m = this.chat()[mesId];
-    const marker = m?.extra?.[VARIANT_MARKER_KEY];
-    if (marker && typeof marker.v === "string" && typeof marker.a === "string") return marker;
-    return null;
-  }
-  /** Writes the marker to the message and to its current swipe_info entry so swipe selection restores it. */
-  writeMarker(mesId, marker) {
-    const m = this.chat()[mesId];
-    if (!m) return;
-    m.extra = m.extra && typeof m.extra === "object" ? m.extra : {};
-    m.extra[VARIANT_MARKER_KEY] = { ...marker };
-    if (typeof m.swipe_id === "number" && Array.isArray(m.swipe_info)) {
-      const info = m.swipe_info[m.swipe_id] ?? (m.swipe_info[m.swipe_id] = {});
-      info.extra = info.extra && typeof info.extra === "object" ? info.extra : {};
-      info.extra[VARIANT_MARKER_KEY] = { ...marker };
-    }
-  }
-  // ---- metadata ---------------------------------------------------------------
-  readRecord() {
-    const ctx = this.ctx();
-    if (!ctx.extensionSettings[SETTINGS_KEY]?.enabled) return ctx.chatMetadata?.[METADATA_KEY];
-    const migrated = migrateAutoHistory(ctx.chatMetadata, ctx.chat);
-    if (migrated.migrated) {
-      ctx.chatMetadata[METADATA_KEY] = migrated.metadata[METADATA_KEY];
-      for (let i = 0; i < ctx.chat.length; i++) {
-        ctx.chat[i].extra = migrated.messages[i].extra;
-        ctx.chat[i].swipe_info = migrated.messages[i].swipe_info;
-      }
-    }
-    return ctx.chatMetadata?.[METADATA_KEY];
-  }
-  /**
-   * Re-acquires the live metadata reference and verifies the chat before
-   * writing; a stale reference from another chat cannot commit (M1-11).
-   */
-  async writeRecord(record, expectedChatKey) {
-    const ctx = this.ctx();
-    if (this.chatKey() !== expectedChatKey) {
-      console.warn("[RP Director] refusing to save metadata: chat changed");
-      return false;
-    }
-    ctx.chatMetadata[METADATA_KEY] = record;
-    await ctx.saveMetadata();
-    return true;
-  }
-  // ---- settings ---------------------------------------------------------------
-  settings() {
-    const all = this.ctx().extensionSettings;
-    const merged = normalizeBaseSettings(defaultSettings(), all[SETTINGS_KEY]);
-    all[SETTINGS_KEY] = merged;
-    return merged;
-  }
-  saveSettings() {
-    this.ctx().saveSettingsDebounced();
-  }
-  connectionProfiles() {
-    const cm = this.ctx().extensionSettings.connectionManager;
-    return (cm?.profiles ?? []).filter((p) => p && p.mode === "cc").map((p) => ({ id: p.id, name: p.name, api: String(p.api ?? ""), model: String(p.model ?? "") }));
-  }
-  // ---- injection --------------------------------------------------------------
-  setInjection(text, depth, role) {
-    this.ctx().setExtensionPrompt(INJECTION_KEY, text, EXTENSION_PROMPT_TYPE_IN_CHAT, depth, false, ROLE_NUMBER[role]);
-  }
-  clearInjection() {
-    this.ctx().setExtensionPrompt(INJECTION_KEY, "", EXTENSION_PROMPT_TYPE_IN_CHAT, 0, false, ROLE_NUMBER.system);
-  }
-  // ---- generation -------------------------------------------------------------
-  /** Director Send / Next: forced-character generation through the verified host path. */
-  async generate(forceIndex) {
-    const options = {};
-    if (typeof forceIndex === "number" && forceIndex >= 0 && this.isGroup()) options.force_chid = forceIndex;
-    return this.ctx().generate("normal", options);
-  }
-  async swipeRight() {
-    const message = this.chat().at(-1);
-    const options = { forceMesId: this.chat().length - 1, forceSwipeId: message?.swipes?.length ?? 1 };
-    const swipe = this.ctx().swipe;
-    if (swipe.to) await swipe.to(null, "right", options);
-    else await swipe.right(void 0, options);
-  }
-  stopGeneration() {
-    this.ctx().stopGeneration();
-  }
-  // ---- writer function tool --------------------------------------------------
-  registerFunctionTool(tool) {
-    const ctx = this.ctx();
-    if (!ctx.extensionSettings[SETTINGS_KEY]?.enabled) return false;
-    if (typeof ctx.registerFunctionTool !== "function" || typeof ctx.unregisterFunctionTool !== "function") return false;
-    ctx.unregisterFunctionTool(tool.name);
-    ctx.registerFunctionTool(tool);
-    this.ownedTool = tool;
-    globalThis.__rpDirectorToolOwner = tool;
-    return true;
-  }
-  unregisterFunctionTool(name) {
-    if (!this.ownedTool || globalThis.__rpDirectorToolOwner !== this.ownedTool) return;
-    this.ctx().unregisterFunctionTool?.(name);
-    this.ownedTool = null;
-    delete globalThis.__rpDirectorToolOwner;
-  }
-  writerToolCapability(type = "normal") {
-    try {
-      const ctx = this.ctx();
-      if (typeof ctx.isToolCallingSupported !== "function" || typeof ctx.canPerformToolCalls !== "function") return { supported: false, reason: "installed SillyTavern does not expose function-tool capability checks" };
-      if (!ctx.isToolCallingSupported()) return { supported: false, reason: "the selected writer API/model does not support enabled function calling" };
-      if (!ctx.canPerformToolCalls(type)) return { supported: false, reason: `SillyTavern does not permit tools for ${type} generation` };
-      return { supported: true, reason: null };
-    } catch (error) {
-      return { supported: false, reason: `tool capability check failed: ${error instanceof Error ? error.message : String(error)}` };
-    }
-  }
-  // ---- events -----------------------------------------------------------------
-  on(event, handler) {
-    const ctx = this.ctx();
-    const name = ctx.eventTypes[event];
-    if (!name) throw new Error(`unknown host event ${event}`);
-    ctx.eventSource.on(name, handler);
-    return () => ctx.eventSource.removeListener(name, handler);
-  }
-  // ---- transport through SillyTavern's connection manager --------------------
-  /** Structured-output transport that uses a stored connection profile; the extension never sees the key. */
-  stProfileTransport(profileId) {
-    return async (payload, signal) => {
-      const ctx = this.ctx();
-      const override = {
-        json_schema: {
-          name: payload.json_schema.name,
-          description: "RP Director decision batch",
-          value: payload.json_schema.schema,
-          strict: payload.json_schema.strict
-        }
-      };
-      if (payload.model) override.model = payload.model;
-      const result = await ctx.ConnectionManagerRequestService.sendRequest(
-        profileId,
-        payload.messages,
-        1024,
-        { stream: false, signal, extractData: true, includePreset: false, includeInstruct: false },
-        override
-      );
-      return { content: result?.content, model: null, usage: null };
-    };
-  }
-  /**
-   * Structured-output transport that routes through SillyTavern's own server
-   * (`ChatCompletionService.processRequest`, `chat_completion_source: 'openrouter'`),
-   * using the OpenRouter key already saved in SillyTavern's secrets; the
-   * extension never sees or stores it.
-   */
-  openRouterTransport() {
-    return createOpenRouterTransport((payload, signal) => this.ctx().ChatCompletionService.processRequest(payload, {}, false, signal));
-  }
-  /** Jev decision batches through the authenticated companion server plugin. */
-  openRouterDecisionsTransport() {
-    return async (payload, signal) => {
-      let response;
-      try {
-        response = await fetch("/api/plugins/rp-director-openrouter/decide", {
-          method: "POST",
-          headers: this.ctx().getRequestHeaders(),
-          body: JSON.stringify(payload),
-          signal
-        });
-      } catch (error) {
-        if (signal.aborted) throw new ProviderError("aborted", "OpenRouter Decisions request was cancelled");
-        throw new ProviderError("network", `RP Director Decisions plugin request failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      const text = await response.text();
-      let parsed;
-      try {
-        parsed = text ? JSON.parse(text) : {};
-      } catch {
-        throw new ProviderError("malformed", "RP Director Decisions plugin returned invalid JSON");
-      }
-      if (!response.ok) {
-        const body = parsed && typeof parsed === "object" ? parsed : null;
-        const message = typeof body?.error?.message === "string" ? body.error.message : `HTTP ${response.status}`;
-        const hint = response.status === 404 ? " Restart SillyTavern after installing the rp-director-openrouter server plugin." : "";
-        throw new ProviderError("http", `OpenRouter Decisions plugin: ${message}.${hint}`, response.status);
-      }
-      return parsed;
-    };
-  }
-  // ---- ui helpers -------------------------------------------------------------
-  toast(kind, message) {
-    const t = globalThis.toastr;
-    if (t && typeof t[kind] === "function") t[kind](message, "RP Director");
-    else console.log(`[RP Director] ${kind}: ${message}`);
-  }
-  async confirm(title, html) {
-    const ctx = this.ctx();
-    if (ctx.callGenericPopup && ctx.POPUP_TYPE && ctx.POPUP_RESULT) {
-      const result = await ctx.callGenericPopup(`<h3>${title}</h3>${html}`, ctx.POPUP_TYPE.CONFIRM, "", { okButton: "Confirm", cancelButton: "Cancel" });
-      return result === ctx.POPUP_RESULT.AFFIRMATIVE;
-    }
-    return window.confirm(`${title}
-
-${html.replace(/<[^>]+>/g, "")}`);
-  }
-  async chooseSwipeAction(kind, canReroll = true) {
-    const ctx = this.ctx();
-    if (ctx.callGenericPopup && ctx.POPUP_TYPE && ctx.POPUP_RESULT) {
-      if (kind === "ruled") {
-        const reroll = 1001;
-        const result2 = await ctx.callGenericPopup(
-          "<h3>Generate a new swipe</h3><p>This reply has a frozen Director ruling. Choose whether the new wording must keep it or receive a new ruling.</p>",
-          ctx.POPUP_TYPE.CONFIRM,
-          "",
-          { okButton: "Keep values & swipe", cancelButton: "Cancel", customButtons: canReroll ? [{ text: "Review new values & swipe", result: reroll, icon: "fa-dice" }] : [] }
-        );
-        return result2 === reroll ? "reroll" : result2 === ctx.POPUP_RESULT.AFFIRMATIVE ? "reuse" : "cancel";
-      }
-      const bypass = 1002;
-      const result = await ctx.callGenericPopup(
-        "<h3>Generate a new swipe</h3><p>The selected reply predates Director adjudication. Director can adopt this branch and manage the new swipe, or you can explicitly bypass it once.</p>",
-        ctx.POPUP_TYPE.CONFIRM,
-        "",
-        { okButton: "Director-managed", cancelButton: "Cancel", customButtons: [{ text: "Native bypass", result: bypass, icon: "fa-forward" }] }
-      );
-      return result === bypass ? "bypass" : result === ctx.POPUP_RESULT.AFFIRMATIVE ? "manage" : "cancel";
-    }
-    return "cancel";
-  }
-  async reviewRolls(permit, names, method, signal) {
-    const ctx = this.ctx();
-    if (signal.aborted || !ctx.callGenericPopup || !ctx.POPUP_TYPE || !ctx.POPUP_RESULT) return "cancel";
-    const content = document.createElement("div");
-    content.className = "rpd-roll-review";
-    const title = document.createElement("h3");
-    title.textContent = "Director results";
-    content.append(title);
-    const hint = document.createElement("p");
-    hint.textContent = "The writer is waiting. Keep these values to continue, or review new results before the reply is written.";
-    content.append(hint);
-    for (const action of permit.actions) {
-      const section = document.createElement("section");
-      const heading = document.createElement("strong");
-      heading.textContent = `${names[action.actingActorId] ?? action.actingActorId}: ${action.boundedResult}`;
-      const result = document.createElement("p");
-      result.textContent = `${action.outcome}${typeof action.draw === "number" ? ` \xB7 draw ${action.draw.toFixed(4)}` : " \xB7 threshold assessment (no dice)"}${action.assessment?.type === "noul" ? ` \xB7 support ${action.assessment.noul.toFixed(3)}` : ""}`;
-      const instruction = document.createElement("p");
-      instruction.textContent = action.instruction;
-      section.append(heading, result, instruction);
-      content.append(section);
-    }
-    const REROLL = 1001;
-    let closePopup = null;
-    const abort = () => closePopup?.();
-    signal.addEventListener("abort", abort, { once: true });
-    try {
-      const result = await ctx.callGenericPopup(content, ctx.POPUP_TYPE.CONFIRM, "", {
-        okButton: "Keep & continue",
-        cancelButton: "Cancel generation",
-        customButtons: [{ text: method === "sample" ? "Reroll" : "Reassess", result: REROLL, icon: "fa-dice" }],
-        onOpen: (popup) => {
-          closePopup = () => {
-            void popup.complete(ctx.POPUP_RESULT.CANCELLED);
-          };
-          if (signal.aborted) closePopup();
-        }
-      });
-      if (signal.aborted) return "cancel";
-      return result === REROLL ? "reroll" : result === ctx.POPUP_RESULT.AFFIRMATIVE ? "keep" : "cancel";
-    } finally {
-      signal.removeEventListener("abort", abort);
-    }
-  }
-  /** Capture native Send/Enter before SillyTavern's handlers and route it through Director. */
-  interceptNativeSend(shouldIntercept, send) {
-    const button2 = document.getElementById("send_but");
-    const onClick = (event) => {
-      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith("/") || this.ctx().Popup?.util.isPopupOpen()) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      void send().catch((error) => console.error("[RP Director] native Send interception failed", error));
-    };
-    const onKeyDown = (event) => {
-      const target = event.target;
-      if (target?.id !== "send_textarea" || event.key !== "Enter" || event.isComposing || event.shiftKey || event.altKey || event.metaKey) return;
-      const shouldSendOnEnter = this.ctx().shouldSendOnEnter;
-      if (shouldSendOnEnter && !shouldSendOnEnter()) return;
-      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith("/") || this.ctx().Popup?.util.isPopupOpen()) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      void send().catch((error) => console.error("[RP Director] native Enter interception failed", error));
-    };
-    button2?.addEventListener("click", onClick, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      button2?.removeEventListener("click", onClick, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }
-  nativeSendBlocked() {
-    return this.isGenerating() || (this.ctx().swipe.state?.() ?? "none") !== "none";
-  }
-  newId() {
-    try {
-      return this.ctx().uuidv4();
-    } catch {
-      return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    }
-  }
-  installedVersion() {
-    const v = globalThis;
-    void v;
-    return "see COMPATIBILITY.md";
-  }
-};
-function jsonSafe(value) {
-  try {
-    return JSON.parse(JSON.stringify(value ?? null));
-  } catch {
-    return null;
-  }
-}
-
-// src/identity.ts
-function hash53(input, seed = 0) {
-  let h1 = 3735928559 ^ seed;
-  let h2 = 1103547991 ^ seed;
-  for (let i = 0; i < input.length; i++) {
-    const ch = input.charCodeAt(i);
-    h1 = Math.imul(h1 ^ ch, 2654435761);
-    h2 = Math.imul(h2 ^ ch, 1597334677);
-  }
-  h1 = Math.imul(h1 ^ h1 >>> 16, 2246822507);
-  h1 ^= Math.imul(h2 ^ h2 >>> 13, 3266489909);
-  h2 = Math.imul(h2 ^ h2 >>> 16, 2246822507);
-  h2 ^= Math.imul(h1 ^ h1 >>> 13, 3266489909);
-  const hi = (h2 >>> 0).toString(16).padStart(8, "0");
-  const lo = (h1 >>> 0).toString(16).padStart(8, "0");
-  return hi + lo;
-}
-function canonicalText(text) {
-  return String(text ?? "").replace(/\r\n?/g, "\n").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
-}
-function rootCursor(seedId) {
-  return "c_" + hash53("root|" + seedId);
-}
-function extendCursor(parent, message) {
-  return "c_" + hash53(`${parent}|${message.role}|${message.actorKey}|${canonicalText(message.text)}`);
-}
-function cursorChain(seedId, messages) {
-  const chain = [rootCursor(seedId)];
-  for (const message of messages) {
-    chain.push(extendCursor(chain[chain.length - 1], message));
-  }
-  return chain;
-}
-function prefixCursor(seedId, messages) {
-  const chain = cursorChain(seedId, messages);
-  return chain[chain.length - 1];
-}
-var counter = 0;
-function newId(prefix) {
-  const c = globalThis.crypto;
-  if (c && typeof c.randomUUID === "function") {
-    return `${prefix}_${c.randomUUID().replace(/-/g, "").slice(0, 16)}`;
-  }
-  counter += 1;
-  return `${prefix}_${Date.now().toString(36)}${counter.toString(36)}`;
-}
-function actorIdFor(name, durableKey) {
-  const slug = String(name ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 24) || "actor";
-  return `${slug}-${hash53(durableKey).slice(0, 6)}`;
-}
-function drawFromUint32(n) {
-  return (n >>> 0) / 4294967296;
-}
-function randomDraw() {
-  const c = globalThis.crypto;
-  let uint32;
-  if (c && typeof c.getRandomValues === "function") {
-    const buf = new Uint32Array(1);
-    c.getRandomValues(buf);
-    uint32 = buf[0];
-  } else {
-    uint32 = Math.floor(Math.random() * 4294967296);
-  }
-  return { uint32, u: drawFromUint32(uint32) };
 }
 
 // src/resolver.ts
@@ -2135,6 +2051,994 @@ function effectsFor(resolution) {
   return structuredClone(resolution.action.effectsByOutcome?.[tierForResolution(resolution)] ?? []);
 }
 
+// src/result-footer.ts
+function supportOf(answer) {
+  if (!answer) return null;
+  const normalized = normaliseSignal(answer);
+  return normalized.ok ? normalized.signal.x : null;
+}
+function formatResultFooter(record, attemptId) {
+  const attempt = record?.attempts[attemptId];
+  if (!record || !attempt || attempt.attemptId !== attemptId) return "";
+  const results = [];
+  const nameOf = (id) => record.actors[id]?.name || id;
+  if (!attempt.unadjudicated) {
+    const frozen = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
+    if (frozen) results.push({
+      kind: "action",
+      actor: nameOf(frozen.action.actingActorId ?? frozen.action.playerActorId),
+      action: frozen.action.attemptedAction,
+      outcome: frozen.outcome,
+      method: frozen.method,
+      support: supportOf(frozen.assessment),
+      roll: frozen.draw ?? null
+    });
+    const permit = attempt.permitId ? record.permits[attempt.permitId] : null;
+    for (const action of permit?.actions ?? []) results.push({
+      kind: "action",
+      actor: nameOf(action.actingActorId),
+      action: action.method,
+      outcome: action.outcome,
+      method: action.methodUsed ?? null,
+      support: supportOf(action.assessment),
+      roll: action.draw ?? null
+    });
+    if (attempt.reaction) results.push({
+      kind: attempt.reaction.kind,
+      actor: nameOf(attempt.reaction.actorId),
+      action: "NPC reaction",
+      outcome: attempt.reaction.outcome,
+      method: "sample",
+      support: null,
+      roll: attempt.reaction.draw
+    });
+  }
+  const status = attempt.unadjudicated ? "unadjudicated" : results.some((result) => result.kind === "action") ? "ruled" : results.length ? "directed" : "no_ruling";
+  const json = JSON.stringify({ status, results }).replace(
+    /"(?:\\.|[^"\\])*"/g,
+    (value) => value.replace(
+      /[<>&\[\]\u2028\u2029]/g,
+      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`
+    )
+  );
+  return `[RP_DIRECTOR]
+${json}
+[/RP_DIRECTOR]`;
+}
+function stripResultFooter(text2) {
+  return text2.replace(/(?:\r?\n){0,2}^\[RP_DIRECTOR\]\r?\n\{[^\r\n]*\}\r?\n\[\/RP_DIRECTOR\]/gm, "");
+}
+function withResultFooter(text2, footer) {
+  const prose = stripResultFooter(text2);
+  if (!footer) return prose;
+  const body = prose.trimEnd();
+  return body ? `${body}
+
+${footer}` : footer;
+}
+
+// src/lore/apply.ts
+function applyLorePlan(lists, plan) {
+  let removed = 0;
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const entry = list[i];
+      if (!entry || typeof entry !== "object") continue;
+      if (plan.force.has(`${String(entry.world)}.${String(entry.uid)}`)) continue;
+      if (plan.managed.has(String(entry.world)) && entry.constant !== true) {
+        list.splice(i, 1);
+        removed += 1;
+      }
+    }
+  }
+  return removed;
+}
+function summarizeActivation(entries, forced, at = Date.now()) {
+  const books = {};
+  for (const raw of entries) {
+    const entry = raw;
+    if (!entry || typeof entry !== "object" || typeof entry.world !== "string") continue;
+    const book = books[entry.world] ??= { entries: 0, chars: 0, picked: 0 };
+    book.entries += 1;
+    book.chars += typeof entry.content === "string" ? entry.content.length : 0;
+    if (forced?.has(`${entry.world}.${String(entry.uid)}`)) book.picked += 1;
+  }
+  return { at, books };
+}
+
+// src/templates.ts
+var ACTION_TEMPLATES = [
+  {
+    id: "overcome_operate",
+    label: "Overcome / operate",
+    gainPrompt: "What bounded physical or technical result should this produce?",
+    attemptPrompt: "What does the acting character do to overcome, repair, operate, treat, or create it?"
+  },
+  {
+    id: "contest_impose",
+    label: "Contest / impose",
+    gainPrompt: "What bounded result would overcoming the opposition produce?",
+    attemptPrompt: "What does the acting character attempt against the opposition?"
+  },
+  {
+    id: "evade_resist",
+    label: "Evade / resist",
+    gainPrompt: "What consequence, restraint, pursuit, or effect should be avoided?",
+    attemptPrompt: "How does the acting character evade or resist it?"
+  },
+  {
+    id: "conceal_deceive",
+    label: "Conceal / deceive",
+    gainPrompt: "What bounded fact, action, identity, or object should remain undiscovered?",
+    attemptPrompt: "What lie, disguise, hiding, stealth, or misdirection is attempted?"
+  },
+  {
+    id: "detect_discover",
+    label: "Detect / discover",
+    gainPrompt: "What exact bounded fact should the observer discover?",
+    attemptPrompt: "What does the observer do to notice, search, investigate, or infer it?"
+  },
+  {
+    id: "influence_negotiate",
+    label: "Influence / negotiate",
+    gainPrompt: "What specific conduct should the target choose now?",
+    attemptPrompt: "What offer, argument, request, threat, or pressure is used?"
+  },
+  {
+    id: "acquire_secure",
+    label: "Acquire / secure",
+    gainPrompt: "What bounded access, information, possession, or commitment should be secured?",
+    attemptPrompt: "What method does the acting character use to secure it?"
+  }
+];
+var LEGACY_FAMILY_IDS = {
+  obtain_access: "acquire_secure",
+  secure_cooperation: "influence_negotiate",
+  obtain_information: "acquire_secure"
+};
+function actionFamily(id) {
+  return ACTION_TEMPLATES.some((t) => t.id === id) ? id : LEGACY_FAMILY_IDS[id] ?? "acquire_secure";
+}
+function templateById(id) {
+  const canonical = actionFamily(id);
+  return ACTION_TEMPLATES.find((t) => t.id === canonical) ?? null;
+}
+var AUTOMATIC_GAIN = "the first primary uncertain, consequential state change explicitly attempted in the latest user message";
+function attemptLabel(boundedResult, method) {
+  if (boundedResult !== AUTOMATIC_GAIN) return boundedResult;
+  const words = String(method ?? "").replace(/\s+/g, " ").trim();
+  const excerpt2 = words.length > 160 ? `${words.slice(0, 159).trimEnd()}\u2026` : words;
+  return `attempt: ${excerpt2}`;
+}
+function declareAction(input) {
+  const template = templateById(input.templateId);
+  if (!template) return null;
+  return {
+    actionId: input.actionId,
+    identityVersion: 2,
+    templateId: actionFamily(template.id),
+    actingActorId: input.actingActorId ?? input.playerActorId,
+    playerActorId: input.playerActorId,
+    targetActorIds: [...new Set(input.targetActorIds)].sort(),
+    attemptedAction: input.attemptedAction.trim(),
+    requestedGain: input.requestedGain.trim(),
+    applicability: input.applicability,
+    uncertainConsequential: input.uncertainConsequential ?? true,
+    opposed: input.opposed ?? false,
+    resolutionScope: input.resolutionScope ?? "attempt",
+    sceneId: input.sceneId ?? 1,
+    persistentFactKey: (input.persistentFactKey ?? "").trim(),
+    failureStake: { kind: input.failureStake?.kind ?? "delay", detail: (input.failureStake?.detail ?? "").trim() },
+    availableEvidence: (input.availableEvidence ?? "").trim(),
+    preconditions: []
+  };
+}
+
+// src/host.ts
+var INJECTION_KEY = "rp_director_binding";
+var SETTINGS_KEY = "rpDirector";
+var METADATA_KEY = "rpDirector";
+var VARIANT_MARKER_KEY = "rpd";
+var EXTENSION_PROMPT_TYPE_IN_CHAT = 1;
+var ROLE_NUMBER = { system: 0, user: 1, assistant: 2 };
+function defaultSettings() {
+  return {
+    enabled: true,
+    profileId: DEFAULT_PROFILE_ID,
+    bindingConfirmedAt: null,
+    connection: { kind: "mock", baseUrl: "", model: "", stProfileId: "", mockScenario: "gate-deferred" },
+    observerConnection: { stProfileId: "" },
+    reactions: defaultReactionSettings(),
+    showBar: true,
+    inspectorOpen: false,
+    profileOverrides: {},
+    pipeline: "staged",
+    settingsRevision: 2,
+    modules: { speaker: true, decisions: true, meters: true, secrets: true, lore: true },
+    lore: defaultLoreSettings()
+  };
+}
+var Host = class {
+  flags = null;
+  ownedTool = null;
+  ctx() {
+    const st = globalThis.SillyTavern;
+    if (!st || typeof st.getContext !== "function") throw new Error("SillyTavern.getContext is not available");
+    return st.getContext();
+  }
+  /** Loads live flag getters from host modules; safe to call more than once. */
+  async loadFlags() {
+    if (this.flags) return;
+    try {
+      const groupUrl = new URL("../../../group-chats.js", import.meta.url).href;
+      const scriptUrl = new URL("../../../../script.js", import.meta.url).href;
+      const [groupModule, scriptModule] = await Promise.all([import(
+        /* @vite-ignore */
+        groupUrl
+      ), import(
+        /* @vite-ignore */
+        scriptUrl
+      )]);
+      this.flags = {
+        isGroupGenerating: () => Boolean(groupModule.is_group_generating),
+        isAutoMode: () => Boolean(groupModule.is_group_automode_enabled),
+        isSendPress: () => Boolean(scriptModule.is_send_press),
+        sendMessageAsUser: typeof scriptModule.sendMessageAsUser === "function" ? scriptModule.sendMessageAsUser : null
+      };
+    } catch (error) {
+      console.warn("[RP Director] host flag import failed; using DOM fallback", error);
+      this.flags = {
+        isGroupGenerating: () => document.body.dataset.generating === "true",
+        isAutoMode: () => false,
+        isSendPress: () => document.body.dataset.generating === "true",
+        sendMessageAsUser: null
+      };
+    }
+  }
+  /** Posts the composer text as a user message without any reply, through the host's own path. Returns false if unavailable. */
+  async postUserMessage(text2) {
+    const fn = this.flags?.sendMessageAsUser;
+    if (!fn) return false;
+    await fn(text2, "");
+    const composer = this.composer();
+    if (composer) {
+      composer.value = "";
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    await this.ctx().saveChat();
+    return true;
+  }
+  isGenerating() {
+    const f = this.flags;
+    if (f) return f.isGroupGenerating() || f.isSendPress();
+    return document.body.dataset.generating === "true";
+  }
+  isAutoMode() {
+    return this.flags ? this.flags.isAutoMode() : false;
+  }
+  isAutoDirectorEnabled() {
+    const all = this.ctx().extensionSettings;
+    const base = all[SETTINGS_KEY];
+    return !base?.enabled && Boolean(all.rpDirectorAuto?.enabled);
+  }
+  takeOverAuto() {
+    const all = this.ctx().extensionSettings;
+    if (!all[SETTINGS_KEY]?.enabled) return;
+    const sibling = all.rpDirectorAuto;
+    if (sibling) sibling.enabled = false;
+    const auto = globalThis.rpDirectorAuto;
+    if (auto?.controller) {
+      auto.controller.setEnabled(false);
+      auto.controller.destroy();
+    }
+    if (typeof document !== "undefined") {
+      document.getElementById("rpda-bar")?.remove();
+      document.getElementById("rpda-settings")?.remove();
+    }
+    this.saveSettings();
+  }
+  // ---- chat identity -------------------------------------------------------
+  isGroup() {
+    return Boolean(this.ctx().groupId);
+  }
+  /** Stable key for the open chat: group id or character avatar plus chat file name. */
+  chatKey() {
+    const ctx = this.ctx();
+    const chatId = ctx.getCurrentChatId();
+    if (!chatId) return null;
+    if (ctx.groupId) return `group:${ctx.groupId}:${chatId}`;
+    const idx = Number(ctx.characterId);
+    const avatar = Number.isInteger(idx) ? ctx.characters[idx]?.avatar : void 0;
+    if (!avatar) return null;
+    return `char:${avatar}:${chatId}`;
+  }
+  seedId() {
+    const ctx = this.ctx();
+    const integrity = ctx.chatMetadata?.integrity;
+    return `${this.chatKey() ?? "none"}|${typeof integrity === "string" ? integrity : ""}`;
+  }
+  playerName() {
+    return String(this.ctx().name1 ?? "User");
+  }
+  // ---- actors ----------------------------------------------------------------
+  /** Group members in stable group order (or the single character), with current indexes. */
+  actors() {
+    const ctx = this.ctx();
+    if (ctx.groupId) {
+      const group = ctx.groups.find((g) => g.id === ctx.groupId);
+      if (!group) return [];
+      const disabled = new Set(group.disabled_members ?? []);
+      return group.members.map((avatar) => {
+        const index = ctx.characters.findIndex((c) => c.avatar === avatar);
+        const character2 = index >= 0 ? ctx.characters[index] : void 0;
+        return { avatar, name: character2?.name ?? avatar, index, disabled: disabled.has(avatar) };
+      }).filter((a) => a.index >= 0);
+    }
+    const idx = Number(ctx.characterId);
+    const character = Number.isInteger(idx) ? ctx.characters[idx] : void 0;
+    if (!character) return [];
+    return [{ avatar: character.avatar, name: character.name, index: idx, disabled: false }];
+  }
+  /** Re-resolves a durable avatar to its current array index, or -1. */
+  resolveIndex(avatar) {
+    return this.ctx().characters.findIndex((c) => c.avatar === avatar);
+  }
+  /** Full authorial card text (description and personality) for rulings whose family admits it. */
+  cardText(avatar) {
+    const c = this.ctx().characters.find((x) => x.avatar === avatar);
+    return [c?.description, c?.personality].map((part) => String(part ?? "").trim()).filter(Boolean).join("\n\n");
+  }
+  /** Bounded public card summary for the decision snapshot. */
+  publicCard(avatar, maxChars = 400) {
+    const c = this.ctx().characters.find((x) => x.avatar === avatar);
+    const description = String(c?.description ?? "").replace(/\s+/g, " ").trim();
+    return description.length > maxChars ? description.slice(0, maxChars) + "\u2026" : description;
+  }
+  // ---- chat -------------------------------------------------------------------
+  chat() {
+    return this.ctx().chat;
+  }
+  /**
+   * Maps host messages to fingerprint inputs. Every message in the array is
+   * part of the transcript identity; `is_system` is deliberately ignored
+   * because the host flips it on existing messages (observed on group
+   * greetings), which would silently move every later cursor.
+   */
+  fingerprintMessages(messages) {
+    const out = [];
+    for (const m of messages) {
+      if (!m) continue;
+      if (m.is_user) out.push({ role: "user", actorKey: "persona", text: m.mes ?? "" });
+      else out.push({ role: "assistant", actorKey: m.original_avatar ?? `name:${m.name}`, text: stripResultFooter(m.mes ?? "") });
+    }
+    return out;
+  }
+  lastAssistantAvatar() {
+    const chat = this.chat();
+    for (let i = chat.length - 1; i >= 0; i--) {
+      const m = chat[i];
+      if (!m.is_user && !m.is_system) return m.original_avatar ?? null;
+    }
+    return null;
+  }
+  composer() {
+    return document.getElementById("send_textarea");
+  }
+  composerText() {
+    return String(this.composer()?.value ?? "");
+  }
+  /** Any visible assistant prose saved after an attempt bound to the transcript. */
+  assistantProseSince(messageIndex) {
+    return this.chat().slice(Math.max(0, messageIndex)).filter((message) => !message.is_user && !message.is_system).map((message) => stripResultFooter(String(message.mes ?? "")).trim()).filter((text2) => !["", "..."].includes(text2));
+  }
+  /** Update the selected swipe only; saveMetadata persists the chat text too. */
+  writeResultFooter(mesId, footer) {
+    const ctx = this.ctx();
+    const message = ctx.chat[mesId];
+    if (!message || message.is_user || message.is_system) return false;
+    const next = withResultFooter(message.mes, footer);
+    let changed = next !== message.mes;
+    message.mes = next;
+    const swipe = message.swipe_id ?? 0;
+    if (message.swipes && swipe >= 0 && swipe < message.swipes.length && message.swipes[swipe] !== next) {
+      message.swipes[swipe] = next;
+      changed = true;
+    }
+    if (typeof message.extra?.display_text === "string") {
+      const display = withResultFooter(message.extra.display_text, footer);
+      changed ||= display !== message.extra.display_text;
+      message.extra.display_text = display;
+      const extra = message.swipe_info?.[swipe]?.extra;
+      if (extra && extra.display_text !== display) {
+        extra.display_text = display;
+        changed = true;
+      }
+    }
+    if (changed) ctx.updateMessageBlock?.(mesId, message);
+    return changed;
+  }
+  // ---- variant markers --------------------------------------------------------
+  readMarker(mesId) {
+    const m = this.chat()[mesId];
+    const marker = m?.extra?.[VARIANT_MARKER_KEY];
+    if (marker && typeof marker.v === "string" && typeof marker.a === "string") return marker;
+    return null;
+  }
+  /** Writes the marker to the message and to its current swipe_info entry so swipe selection restores it. */
+  writeMarker(mesId, marker) {
+    const m = this.chat()[mesId];
+    if (!m) return;
+    m.extra = m.extra && typeof m.extra === "object" ? m.extra : {};
+    m.extra[VARIANT_MARKER_KEY] = { ...marker };
+    if (typeof m.swipe_id === "number" && Array.isArray(m.swipe_info)) {
+      const info = m.swipe_info[m.swipe_id] ?? (m.swipe_info[m.swipe_id] = {});
+      info.extra = info.extra && typeof info.extra === "object" ? info.extra : {};
+      info.extra[VARIANT_MARKER_KEY] = { ...marker };
+    }
+  }
+  // ---- metadata ---------------------------------------------------------------
+  readRecord() {
+    const ctx = this.ctx();
+    if (!ctx.extensionSettings[SETTINGS_KEY]?.enabled) return ctx.chatMetadata?.[METADATA_KEY];
+    const migrated = migrateAutoHistory(ctx.chatMetadata, ctx.chat);
+    if (migrated.migrated) {
+      ctx.chatMetadata[METADATA_KEY] = migrated.metadata[METADATA_KEY];
+      for (let i = 0; i < ctx.chat.length; i++) {
+        ctx.chat[i].extra = migrated.messages[i].extra;
+        ctx.chat[i].swipe_info = migrated.messages[i].swipe_info;
+      }
+    }
+    return ctx.chatMetadata?.[METADATA_KEY];
+  }
+  /**
+   * Re-acquires the live metadata reference and verifies the chat before
+   * writing; a stale reference from another chat cannot commit (M1-11).
+   */
+  async writeRecord(record, expectedChatKey) {
+    const ctx = this.ctx();
+    if (this.chatKey() !== expectedChatKey) {
+      console.warn("[RP Director] refusing to save metadata: chat changed");
+      return false;
+    }
+    ctx.chatMetadata[METADATA_KEY] = record;
+    await ctx.saveMetadata();
+    return true;
+  }
+  // ---- settings ---------------------------------------------------------------
+  settings() {
+    const all = this.ctx().extensionSettings;
+    const merged = normalizeBaseSettings(defaultSettings(), all[SETTINGS_KEY]);
+    all[SETTINGS_KEY] = merged;
+    return merged;
+  }
+  saveSettings() {
+    this.ctx().saveSettingsDebounced();
+  }
+  connectionProfiles() {
+    const cm = this.ctx().extensionSettings.connectionManager;
+    return (cm?.profiles ?? []).filter((p) => p && p.mode === "cc").map((p) => ({ id: p.id, name: p.name, api: String(p.api ?? ""), model: String(p.model ?? "") }));
+  }
+  // ---- injection --------------------------------------------------------------
+  setInjection(text2, depth, role) {
+    this.ctx().setExtensionPrompt(INJECTION_KEY, text2, EXTENSION_PROMPT_TYPE_IN_CHAT, depth, false, ROLE_NUMBER[role]);
+  }
+  clearInjection() {
+    this.ctx().setExtensionPrompt(INJECTION_KEY, "", EXTENSION_PROMPT_TYPE_IN_CHAT, 0, false, ROLE_NUMBER.system);
+  }
+  // ---- generation -------------------------------------------------------------
+  /** Director Send / Next: forced-character generation through the verified host path. */
+  async generate(forceIndex) {
+    const options = {};
+    if (typeof forceIndex === "number" && forceIndex >= 0 && this.isGroup()) options.force_chid = forceIndex;
+    return this.ctx().generate("normal", options);
+  }
+  async swipeRight() {
+    const message = this.chat().at(-1);
+    const options = { forceMesId: this.chat().length - 1, forceSwipeId: message?.swipes?.length ?? 1 };
+    const swipe = this.ctx().swipe;
+    if (swipe.to) await swipe.to(null, "right", options);
+    else await swipe.right(void 0, options);
+  }
+  stopGeneration() {
+    this.ctx().stopGeneration();
+  }
+  // ---- writer function tool --------------------------------------------------
+  registerFunctionTool(tool) {
+    const ctx = this.ctx();
+    if (!ctx.extensionSettings[SETTINGS_KEY]?.enabled) return false;
+    if (typeof ctx.registerFunctionTool !== "function" || typeof ctx.unregisterFunctionTool !== "function") return false;
+    ctx.unregisterFunctionTool(tool.name);
+    ctx.registerFunctionTool(tool);
+    this.ownedTool = tool;
+    globalThis.__rpDirectorToolOwner = tool;
+    return true;
+  }
+  unregisterFunctionTool(name) {
+    if (!this.ownedTool || globalThis.__rpDirectorToolOwner !== this.ownedTool) return;
+    this.ctx().unregisterFunctionTool?.(name);
+    this.ownedTool = null;
+    delete globalThis.__rpDirectorToolOwner;
+  }
+  writerToolCapability(type = "normal") {
+    try {
+      const ctx = this.ctx();
+      if (typeof ctx.isToolCallingSupported !== "function" || typeof ctx.canPerformToolCalls !== "function") return { supported: false, reason: "installed SillyTavern does not expose function-tool capability checks" };
+      if (!ctx.isToolCallingSupported()) return { supported: false, reason: "the selected writer API/model does not support enabled function calling" };
+      if (!ctx.canPerformToolCalls(type)) return { supported: false, reason: `SillyTavern does not permit tools for ${type} generation` };
+      return { supported: true, reason: null };
+    } catch (error) {
+      return { supported: false, reason: `tool capability check failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+  // ---- lore -------------------------------------------------------------------
+  lorePlanArmed = null;
+  loreArmSeq = 0;
+  loreHookOff = null;
+  lastActivation = null;
+  /** Called after every real World Info scan (set by the controller to refresh the panel). */
+  onLoreActivation = null;
+  /** What the last real World Info scan activated, per book. */
+  lastLoreActivation() {
+    return this.lastActivation;
+  }
+  /**
+   * Books SillyTavern could load for these cast members, with their entries.
+   * Mirrors world-info.js getGlobalLore/getCharacterLore/getChatLore/
+   * getPersonaLore, except that a group lists every given member's books:
+   * SillyTavern itself loads only the current speaker's (this_chid) books per
+   * scan, which is also all a forced activation can reach.
+   */
+  async loreCatalog(avatars) {
+    const ctx = this.ctx();
+    const wi = await import(
+      /* @vite-ignore */
+      new URL("../../../world-info.js", import.meta.url).href
+    );
+    const books = [];
+    const add = (world, source, owner) => {
+      const name = typeof world === "string" ? world.trim() : "";
+      if (name && !books.some((b) => b.world === name)) books.push({ world: name, source, owner });
+    };
+    for (const world of wi.selected_world_info ?? []) add(world, "global", null);
+    for (const avatar of avatars) {
+      const character = ctx.characters.find((c) => c.avatar === avatar);
+      add(character?.data?.extensions?.world, "character", avatar);
+      const filename = avatar.replace(/\.[^/.]+$/, "");
+      const extra = (wi.world_info?.charLore ?? []).find((item) => item?.name === filename)?.extraBooks ?? [];
+      for (const world of extra) add(world, "character", avatar);
+    }
+    add(ctx.chatMetadata?.world_info, "chat", null);
+    try {
+      const pu = await import(
+        /* @vite-ignore */
+        new URL("../../../power-user.js", import.meta.url).href
+      );
+      add(pu.power_user?.persona_description_lorebook, "persona", null);
+    } catch {
+    }
+    const entries = [];
+    for (const book of books) {
+      let data = null;
+      try {
+        data = await wi.loadWorldInfo(book.world);
+      } catch {
+        data = null;
+      }
+      for (const raw of Object.values(data?.entries ?? {})) {
+        const uid = Number(raw.uid);
+        if (!Number.isInteger(uid)) continue;
+        const content = String(raw.content ?? "");
+        const keys = Array.isArray(raw.key) ? raw.key.map(String).filter((k) => k.trim()) : [];
+        entries.push({
+          world: book.world,
+          uid,
+          keys,
+          content,
+          title: String(raw.comment ?? "").trim() || keys.slice(0, 3).join(", ") || `Entry ${uid}`,
+          constant: raw.constant === true,
+          // An @@dont_activate decorator blocks forced activation too.
+          disabled: raw.disable === true || /^\s*@@dont_activate\b/.test(content)
+        });
+      }
+    }
+    return { books, entries };
+  }
+  /** TunnelVision's stored index roots by book, if the extension has built any. */
+  tunnelVisionRoots() {
+    const tv = this.ctx().extensionSettings.tunnelvision;
+    const out = {};
+    for (const [world, tree] of Object.entries(tv?.trees ?? {})) if (tree?.root && typeof tree.root === "object") out[world] = tree.root;
+    return out;
+  }
+  /** True when TunnelVision is on and suppresses this book's keyword scan itself. */
+  tunnelVisionManages(world) {
+    const tv = this.ctx().extensionSettings.tunnelvision;
+    return tv?.globalEnabled === true && tv.enabledLorebooks?.[world] === true;
+  }
+  /**
+   * SillyTavern's processed World Info entries for the current speaker (group
+   * scans load this_chid's books only), exactly as its scan will see them:
+   * decorators parsed out of content, hash set. Forcing anything else would put
+   * decorator lines in the prompt and break sticky/cooldown, which key on hash.
+   */
+  async sortedEntries() {
+    const wi = await import(
+      /* @vite-ignore */
+      new URL("../../../world-info.js", import.meta.url).href
+    );
+    return wi.getSortedEntries();
+  }
+  /**
+   * Arms the plan for every World Info scan until disarmed. null disarms at
+   * once; a plan resolves its forced entries first. A later call supersedes an
+   * earlier one that is still resolving.
+   */
+  async armLore(plan) {
+    const seq = ++this.loreArmSeq;
+    this.lorePlanArmed = null;
+    if (!plan || plan.force.size === 0 && plan.managed.size === 0) return;
+    let forced = [];
+    if (plan.force.size) {
+      try {
+        forced = (await this.sortedEntries()).filter((e) => plan.force.has(`${String(e.world)}.${String(e.uid)}`));
+      } catch (error) {
+        console.warn("[RP Director] could not resolve lore picks; keyword lore only", error);
+        forced = [];
+      }
+    }
+    if (seq === this.loreArmSeq) this.lorePlanArmed = { ...plan, forced };
+  }
+  armedLore() {
+    return this.lorePlanArmed;
+  }
+  /** Registers the WORLDINFO_ENTRIES_LOADED hook once; false when the host lacks the event. */
+  installLoreHook() {
+    if (this.loreHookOff) return true;
+    const ctx = this.ctx();
+    const name = ctx.eventTypes.WORLDINFO_ENTRIES_LOADED;
+    const forceName = ctx.eventTypes.WORLDINFO_FORCE_ACTIVATE;
+    if (!name || !forceName || typeof ctx.eventSource.emit !== "function") return false;
+    const handler = async (payload) => {
+      const plan = this.lorePlanArmed;
+      if (!plan || !payload || typeof payload !== "object") return;
+      const lists = payload;
+      applyLorePlan([lists.globalLore, lists.characterLore, lists.chatLore, lists.personaLore], plan);
+      if (plan.forced.length) await ctx.eventSource.emit(forceName, plan.forced);
+    };
+    ctx.eventSource.on(name, handler);
+    const activatedName = ctx.eventTypes.WORLD_INFO_ACTIVATED;
+    const onActivated = (entries) => {
+      if (!Array.isArray(entries)) return;
+      this.lastActivation = summarizeActivation(entries, this.lorePlanArmed?.force ?? null);
+      this.onLoreActivation?.();
+    };
+    if (activatedName) ctx.eventSource.on(activatedName, onActivated);
+    this.loreHookOff = () => {
+      ctx.eventSource.removeListener(name, handler);
+      if (activatedName) ctx.eventSource.removeListener(activatedName, onActivated);
+    };
+    return true;
+  }
+  removeLoreHook() {
+    this.loreHookOff?.();
+    this.loreHookOff = null;
+    this.loreArmSeq += 1;
+    this.lorePlanArmed = null;
+  }
+  // ---- events -----------------------------------------------------------------
+  on(event, handler) {
+    const ctx = this.ctx();
+    const name = ctx.eventTypes[event];
+    if (!name) throw new Error(`unknown host event ${event}`);
+    ctx.eventSource.on(name, handler);
+    return () => ctx.eventSource.removeListener(name, handler);
+  }
+  // ---- transport through SillyTavern's connection manager --------------------
+  /** Structured-output transport that uses a stored connection profile; the extension never sees the key. */
+  stProfileTransport(profileId) {
+    return async (payload, signal) => {
+      const ctx = this.ctx();
+      const override = {
+        json_schema: {
+          name: payload.json_schema.name,
+          description: "RP Director decision batch",
+          value: payload.json_schema.schema,
+          strict: payload.json_schema.strict
+        }
+      };
+      if (payload.model) override.model = payload.model;
+      const result = await ctx.ConnectionManagerRequestService.sendRequest(
+        profileId,
+        payload.messages,
+        1024,
+        { stream: false, signal, extractData: true, includePreset: false, includeInstruct: false },
+        override
+      );
+      return { content: result?.content, model: null, usage: null };
+    };
+  }
+  /**
+   * Structured-output transport that routes through SillyTavern's own server
+   * (`ChatCompletionService.processRequest`, `chat_completion_source: 'openrouter'`),
+   * using the OpenRouter key already saved in SillyTavern's secrets; the
+   * extension never sees or stores it.
+   */
+  openRouterTransport() {
+    return createOpenRouterTransport((payload, signal) => this.ctx().ChatCompletionService.processRequest(payload, {}, false, signal));
+  }
+  /** Jev decision batches through the authenticated companion server plugin. */
+  openRouterDecisionsTransport() {
+    return async (payload, signal) => {
+      let response;
+      try {
+        response = await fetch("/api/plugins/rp-director-openrouter/decide", {
+          method: "POST",
+          headers: this.ctx().getRequestHeaders(),
+          body: JSON.stringify(payload),
+          signal
+        });
+      } catch (error) {
+        if (signal.aborted) throw new ProviderError("aborted", "OpenRouter Decisions request was cancelled");
+        throw new ProviderError("network", `RP Director Decisions plugin request failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const text2 = await response.text();
+      let parsed;
+      try {
+        parsed = text2 ? JSON.parse(text2) : {};
+      } catch {
+        throw new ProviderError("malformed", "RP Director Decisions plugin returned invalid JSON");
+      }
+      if (!response.ok) {
+        const body = parsed && typeof parsed === "object" ? parsed : null;
+        const message = typeof body?.error?.message === "string" ? body.error.message : `HTTP ${response.status}`;
+        const hint = response.status === 404 ? " Restart SillyTavern after installing the rp-director-openrouter server plugin." : "";
+        throw new ProviderError("http", `OpenRouter Decisions plugin: ${message}.${hint}`, response.status);
+      }
+      return parsed;
+    };
+  }
+  // ---- ui helpers -------------------------------------------------------------
+  toast(kind, message) {
+    const t = globalThis.toastr;
+    if (t && typeof t[kind] === "function") t[kind](message, "RP Director");
+    else console.log(`[RP Director] ${kind}: ${message}`);
+  }
+  async confirm(title, html) {
+    const ctx = this.ctx();
+    if (ctx.callGenericPopup && ctx.POPUP_TYPE && ctx.POPUP_RESULT) {
+      const result = await ctx.callGenericPopup(`<h3>${title}</h3>${html}`, ctx.POPUP_TYPE.CONFIRM, "", { okButton: "Confirm", cancelButton: "Cancel" });
+      return result === ctx.POPUP_RESULT.AFFIRMATIVE;
+    }
+    return window.confirm(`${title}
+
+${html.replace(/<[^>]+>/g, "")}`);
+  }
+  async chooseSwipeAction(kind, canReroll = true) {
+    const ctx = this.ctx();
+    if (ctx.callGenericPopup && ctx.POPUP_TYPE && ctx.POPUP_RESULT) {
+      if (kind === "ruled") {
+        const reroll = 1001;
+        const result2 = await ctx.callGenericPopup(
+          "<h3>Generate a new swipe</h3><p>This reply has a frozen Director ruling. Choose whether the new wording must keep it or receive a new ruling.</p>",
+          ctx.POPUP_TYPE.CONFIRM,
+          "",
+          { okButton: "Keep values & swipe", cancelButton: "Cancel", customButtons: canReroll ? [{ text: "Review new values & swipe", result: reroll, icon: "fa-dice" }] : [] }
+        );
+        return result2 === reroll ? "reroll" : result2 === ctx.POPUP_RESULT.AFFIRMATIVE ? "reuse" : "cancel";
+      }
+      const bypass = 1002;
+      const result = await ctx.callGenericPopup(
+        "<h3>Generate a new swipe</h3><p>The selected reply predates Director adjudication. Director can adopt this branch and manage the new swipe, or you can explicitly bypass it once.</p>",
+        ctx.POPUP_TYPE.CONFIRM,
+        "",
+        { okButton: "Director-managed", cancelButton: "Cancel", customButtons: [{ text: "Native bypass", result: bypass, icon: "fa-forward" }] }
+      );
+      return result === bypass ? "bypass" : result === ctx.POPUP_RESULT.AFFIRMATIVE ? "manage" : "cancel";
+    }
+    return "cancel";
+  }
+  async reviewRolls(permit, names, method, signal) {
+    const ctx = this.ctx();
+    if (signal.aborted || !ctx.callGenericPopup || !ctx.POPUP_TYPE || !ctx.POPUP_RESULT) return "cancel";
+    const content = document.createElement("div");
+    content.className = "rpd-roll-review";
+    const title = document.createElement("h3");
+    title.textContent = "Director results";
+    content.append(title);
+    const hint = document.createElement("p");
+    hint.textContent = "The writer is waiting. Keep these values to continue, or review new results before the reply is written.";
+    content.append(hint);
+    for (const action of permit.actions) {
+      const section = document.createElement("section");
+      const heading = document.createElement("strong");
+      heading.textContent = `${uiActorName(action.actingActorId, names[action.actingActorId])}: ${attemptLabel(action.boundedResult, action.method)}`;
+      const result = document.createElement("p");
+      result.textContent = `${action.outcome}${typeof action.draw === "number" ? ` \xB7 draw ${action.draw.toFixed(4)}` : " \xB7 threshold assessment (no dice)"}${action.assessment?.type === "noul" ? ` \xB7 support ${action.assessment.noul.toFixed(3)}` : ""}`;
+      const instruction = document.createElement("p");
+      instruction.textContent = action.instruction;
+      section.append(heading, result, instruction);
+      content.append(section);
+    }
+    const REROLL = 1001;
+    let closePopup = null;
+    const abort = () => closePopup?.();
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      const result = await ctx.callGenericPopup(content, ctx.POPUP_TYPE.CONFIRM, "", {
+        okButton: "Keep & continue",
+        cancelButton: "Cancel generation",
+        customButtons: [{ text: method === "sample" ? "Reroll" : "Reassess", result: REROLL, icon: "fa-dice" }],
+        onOpen: (popup) => {
+          closePopup = () => {
+            void popup.complete(ctx.POPUP_RESULT.CANCELLED);
+          };
+          if (signal.aborted) closePopup();
+        }
+      });
+      if (signal.aborted) return "cancel";
+      return result === REROLL ? "reroll" : result === ctx.POPUP_RESULT.AFFIRMATIVE ? "keep" : "cancel";
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
+  }
+  /** Capture native Send/Enter before SillyTavern's handlers and route it through Director. */
+  interceptNativeSend(shouldIntercept, send) {
+    const button2 = document.getElementById("send_but");
+    const onClick = (event) => {
+      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith("/") || this.ctx().Popup?.util.isPopupOpen()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void send().catch((error) => console.error("[RP Director] native Send interception failed", error));
+    };
+    const onKeyDown = (event) => {
+      const target = event.target;
+      if (target?.id !== "send_textarea" || event.key !== "Enter" || event.isComposing || event.shiftKey || event.altKey || event.metaKey) return;
+      const shouldSendOnEnter = this.ctx().shouldSendOnEnter;
+      if (shouldSendOnEnter && !shouldSendOnEnter()) return;
+      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith("/") || this.ctx().Popup?.util.isPopupOpen()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void send().catch((error) => console.error("[RP Director] native Enter interception failed", error));
+    };
+    button2?.addEventListener("click", onClick, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      button2?.removeEventListener("click", onClick, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }
+  nativeSendBlocked() {
+    return this.isGenerating() || (this.ctx().swipe.state?.() ?? "none") !== "none";
+  }
+  newId() {
+    try {
+      return this.ctx().uuidv4();
+    } catch {
+      return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    }
+  }
+  installedVersion() {
+    const v = globalThis;
+    void v;
+    return "see COMPATIBILITY.md";
+  }
+};
+function jsonSafe(value) {
+  try {
+    return JSON.parse(JSON.stringify(value ?? null));
+  } catch {
+    return null;
+  }
+}
+
+// src/story.ts
+var HISTORY_LIMIT = 400;
+function emptyStory() {
+  return { packId: "auto", packSource: "auto", secrets: [], history: {}, lore: {} };
+}
+var isStrings = (value) => Array.isArray(value) && value.every((x) => typeof x === "string");
+function normalizeSecret(raw) {
+  const s = raw;
+  if (!s || typeof s !== "object" || typeof s.id !== "string" || !s.id || typeof s.text !== "string" || !isStrings(s.holders)) return null;
+  return { id: s.id, text: s.text, holders: [...s.holders] };
+}
+function normalizeSnapshot(raw) {
+  const s = raw;
+  if (!s || typeof s !== "object" || typeof s.at !== "number") return null;
+  const meters = {};
+  for (const [npc, values] of Object.entries(s.meters && typeof s.meters === "object" ? s.meters : {})) {
+    if (!values || typeof values !== "object") continue;
+    meters[npc] = Object.fromEntries(Object.entries(values).filter(([, v]) => Number.isInteger(v) && v >= 0));
+  }
+  const knownBy = {};
+  for (const [id, who] of Object.entries(s.knownBy && typeof s.knownBy === "object" ? s.knownBy : {})) if (isStrings(who)) knownBy[id] = [...who];
+  return { at: s.at, meters, knownBy };
+}
+function normalizeStory(raw) {
+  const base = emptyStory();
+  const r = raw;
+  if (!r || typeof r !== "object") return base;
+  const history = {};
+  if (r.history && typeof r.history === "object" && !Array.isArray(r.history)) {
+    for (const [cursor, snap] of Object.entries(r.history)) {
+      const normalized = normalizeSnapshot(snap);
+      if (normalized) history[cursor] = normalized;
+    }
+  }
+  return {
+    packId: typeof r.packId === "string" && r.packId ? r.packId : base.packId,
+    packSource: r.packSource === "judge" || r.packSource === "user" || r.packSource === "auto" ? r.packSource : base.packSource,
+    secrets: Array.isArray(r.secrets) ? r.secrets.map(normalizeSecret).filter((s) => s !== null) : [],
+    history,
+    lore: normalizeLoreHistory(r.lore)
+  };
+}
+function normalizeLoreHistory(raw) {
+  const out = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [cursor, value] of Object.entries(raw)) {
+    const r = value;
+    if (!r || typeof r !== "object" || typeof r.at !== "number" || !Array.isArray(r.refs)) continue;
+    const refs = r.refs.filter((ref) => ref && typeof ref.world === "string" && Number.isInteger(ref.uid)).map((ref) => ({ world: ref.world, uid: ref.uid, title: typeof ref.title === "string" ? ref.title : "", score: typeof ref.score === "number" ? ref.score : 0 }));
+    const books = Array.isArray(r.books) ? r.books.filter((b) => typeof b === "string") : [...new Set(refs.map((ref) => ref.world))];
+    const failed = Array.isArray(r.failed) ? r.failed.filter((b) => typeof b === "string") : [];
+    out[cursor] = { at: r.at, refs, requests: typeof r.requests === "number" ? r.requests : 0, books, failed };
+  }
+  return out;
+}
+function loreAt(story, chain, lookback = 3) {
+  for (let i = chain.length - 1; i >= Math.max(0, chain.length - lookback); i--) {
+    const found = story.lore[chain[i]];
+    if (found) return found;
+  }
+  return null;
+}
+function withLore(story, cursor, record) {
+  const lore = { ...story.lore, [cursor]: record };
+  const keys = Object.keys(lore);
+  if (keys.length > HISTORY_LIMIT) {
+    for (const key of keys.sort((a, b) => lore[a].at - lore[b].at).slice(0, keys.length - HISTORY_LIMIT)) delete lore[key];
+  }
+  return { ...story, lore };
+}
+function snapshotAt(story, chain) {
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const snap = story.history[chain[i]];
+    if (snap) return snap;
+  }
+  return null;
+}
+function levelsAt(story, chain, pack, npcIds) {
+  const snap = snapshotAt(story, chain);
+  const levels = {};
+  const assessed = {};
+  for (const npc of npcIds) {
+    const saved = snap?.meters[npc];
+    assessed[npc] = Boolean(saved && pack.meters.every((m) => Number.isInteger(saved[m.key])));
+    levels[npc] = {};
+    for (const meter of pack.meters) {
+      const value = saved?.[meter.key];
+      levels[npc][meter.key] = Number.isInteger(value) && value < meter.levels.length ? value : meter.initial;
+    }
+  }
+  return { levels, assessed };
+}
+function knownByAt(story, chain) {
+  const snap = snapshotAt(story, chain);
+  const known = {};
+  for (const secret of story.secrets) known[secret.id] = [.../* @__PURE__ */ new Set([...secret.holders, ...snap?.knownBy[secret.id] ?? []])];
+  return known;
+}
+function withSnapshot(story, cursor, snapshot) {
+  const history = { ...story.history, [cursor]: snapshot };
+  const keys = Object.keys(history);
+  if (keys.length > HISTORY_LIMIT) {
+    for (const key of keys.sort((a, b) => history[a].at - history[b].at).slice(0, keys.length - HISTORY_LIMIT)) delete history[key];
+  }
+  return { ...story, history };
+}
+
 // src/state.ts
 var INSPECTOR_LIMIT = 200;
 function emptyState() {
@@ -2174,7 +3078,8 @@ function newRecord(seedId, profileRevision) {
     pending: null,
     projection: { cursor: null, state: emptyState(), status: "unknown", reason: "no checkpoint yet" },
     inspector: [],
-    profileRevision
+    profileRevision,
+    story: emptyStory()
   };
 }
 function normalizeRecord(raw, seedId, profileRevision) {
@@ -2197,7 +3102,8 @@ function normalizeRecord(raw, seedId, profileRevision) {
     pending: obj(r.pending, null),
     projection: r.projection && typeof r.projection === "object" ? { ...base.projection, ...r.projection, state: { ...emptyState(), ...obj(r.projection.state, {}), settledGains: obj(r.projection.state?.settledGains, {}), itemOwners: obj(r.projection.state?.itemOwners, {}), conditions: obj(r.projection.state?.conditions, {}), knownFacts: obj(r.projection.state?.knownFacts, {}), revealedSecrets: obj(r.projection.state?.revealedSecrets, {}) } } : base.projection,
     inspector: Array.isArray(r.inspector) ? r.inspector.slice(-INSPECTOR_LIMIT) : [],
-    profileRevision: typeof r.profileRevision === "string" ? r.profileRevision : profileRevision
+    profileRevision: typeof r.profileRevision === "string" ? r.profileRevision : profileRevision,
+    story: normalizeStory(r.story)
   };
   for (const checkpoint of Object.values(normalized.checkpoints)) {
     checkpoint.stateAfter = { ...emptyState(), ...checkpoint.stateAfter, settledGains: obj(checkpoint.stateAfter?.settledGains, {}), itemOwners: obj(checkpoint.stateAfter?.itemOwners, {}), conditions: obj(checkpoint.stateAfter?.conditions, {}), knownFacts: obj(checkpoint.stateAfter?.knownFacts, {}), revealedSecrets: obj(checkpoint.stateAfter?.revealedSecrets, {}) };
@@ -2323,6 +3229,7 @@ function applyEvent(input, event) {
         attemptId: event.attemptId,
         resolutionId: event.resolution?.resolutionId ?? null,
         permitId: null,
+        reaction: event.reaction ? clone(event.reaction) : null,
         actorId: event.actorId,
         cursorBefore: null,
         status: "prepared",
@@ -2384,6 +3291,7 @@ function applyEvent(input, event) {
         if (event.permit.attemptId !== attempt.attemptId || event.permit.baseCursor !== attempt.cursorBefore) return ignore("tool permit identity did not match the active attempt");
         record.permits[event.permit.permitId] = clone(event.permit);
         attempt.permitId = event.permit.permitId;
+        attempt.reaction = null;
       }
       return done();
     }
@@ -2393,6 +3301,7 @@ function applyEvent(input, event) {
         attemptId: event.attemptId,
         resolutionId: event.resolutionId,
         permitId: event.permitId ?? null,
+        reaction: event.reaction ? clone(event.reaction) : null,
         actorId: event.actorId,
         cursorBefore: event.cursorBefore,
         status: "writing",
@@ -2825,87 +3734,6 @@ function provisionalAttempts(record) {
   return Object.values(record.attempts).filter((a) => a.status === "provisional" || a.status === "observing");
 }
 
-// src/templates.ts
-var ACTION_TEMPLATES = [
-  {
-    id: "overcome_operate",
-    label: "Overcome / operate",
-    gainPrompt: "What bounded physical or technical result should this produce?",
-    attemptPrompt: "What does the acting character do to overcome, repair, operate, treat, or create it?"
-  },
-  {
-    id: "contest_impose",
-    label: "Contest / impose",
-    gainPrompt: "What bounded result would overcoming the opposition produce?",
-    attemptPrompt: "What does the acting character attempt against the opposition?"
-  },
-  {
-    id: "evade_resist",
-    label: "Evade / resist",
-    gainPrompt: "What consequence, restraint, pursuit, or effect should be avoided?",
-    attemptPrompt: "How does the acting character evade or resist it?"
-  },
-  {
-    id: "conceal_deceive",
-    label: "Conceal / deceive",
-    gainPrompt: "What bounded fact, action, identity, or object should remain undiscovered?",
-    attemptPrompt: "What lie, disguise, hiding, stealth, or misdirection is attempted?"
-  },
-  {
-    id: "detect_discover",
-    label: "Detect / discover",
-    gainPrompt: "What exact bounded fact should the observer discover?",
-    attemptPrompt: "What does the observer do to notice, search, investigate, or infer it?"
-  },
-  {
-    id: "influence_negotiate",
-    label: "Influence / negotiate",
-    gainPrompt: "What specific conduct should the target choose now?",
-    attemptPrompt: "What offer, argument, request, threat, or pressure is used?"
-  },
-  {
-    id: "acquire_secure",
-    label: "Acquire / secure",
-    gainPrompt: "What bounded access, information, possession, or commitment should be secured?",
-    attemptPrompt: "What method does the acting character use to secure it?"
-  }
-];
-var LEGACY_FAMILY_IDS = {
-  obtain_access: "acquire_secure",
-  secure_cooperation: "influence_negotiate",
-  obtain_information: "acquire_secure"
-};
-function actionFamily(id) {
-  return ACTION_TEMPLATES.some((t) => t.id === id) ? id : LEGACY_FAMILY_IDS[id] ?? "acquire_secure";
-}
-function templateById(id) {
-  const canonical = actionFamily(id);
-  return ACTION_TEMPLATES.find((t) => t.id === canonical) ?? null;
-}
-function declareAction(input) {
-  const template = templateById(input.templateId);
-  if (!template) return null;
-  return {
-    actionId: input.actionId,
-    identityVersion: 2,
-    templateId: actionFamily(template.id),
-    actingActorId: input.actingActorId ?? input.playerActorId,
-    playerActorId: input.playerActorId,
-    targetActorIds: [...new Set(input.targetActorIds)].sort(),
-    attemptedAction: input.attemptedAction.trim(),
-    requestedGain: input.requestedGain.trim(),
-    applicability: input.applicability,
-    uncertainConsequential: input.uncertainConsequential ?? true,
-    opposed: input.opposed ?? false,
-    resolutionScope: input.resolutionScope ?? "attempt",
-    sceneId: input.sceneId ?? 1,
-    persistentFactKey: (input.persistentFactKey ?? "").trim(),
-    failureStake: { kind: input.failureStake?.kind ?? "delay", detail: (input.failureStake?.detail ?? "").trim() },
-    availableEvidence: (input.availableEvidence ?? "").trim(),
-    preconditions: []
-  };
-}
-
 // src/questions.ts
 function buildState(input) {
   const exclusions = [];
@@ -3284,19 +4112,16 @@ function decideSpeaker(input) {
 }
 
 // src/prompts.ts
-function fillPlaceholders(text, values) {
-  return String(text ?? "").replace(/\{\{\s*(gain|action|target|player|speaker)\s*\}\}/gi, (_, key) => values[key.toLowerCase()] ?? "");
+function fillPlaceholders(text2, values) {
+  return String(text2 ?? "").replace(/\{\{\s*(gain|action|target|player|speaker)\s*\}\}/gi, (_, key) => values[key.toLowerCase()] ?? "");
+}
+function placeholderValues(action, targetNames, speakerName, playerName) {
+  const target = targetNames.length ? targetNames.join(" and ") : speakerName ?? "the other character";
+  return { gain: action.requestedGain, action: action.attemptedAction, target, player: playerName, speaker: speakerName ?? target };
 }
 function bindingBlock(input) {
   const { action, outcome } = input;
-  const target = input.targetNames.length ? input.targetNames.join(" and ") : input.speakerName ?? "the other character";
-  const instruction = fillPlaceholders(input.instruction, {
-    gain: action.requestedGain,
-    action: action.attemptedAction,
-    target,
-    player: input.playerName,
-    speaker: input.speakerName ?? target
-  }).trim();
+  const instruction = fillPlaceholders(input.instruction, placeholderValues(action, input.targetNames, input.speakerName, input.playerName)).trim();
   const lines = [];
   lines.push("[Director ruling \u2014 binding for this reply]");
   lines.push("This declared exchange is already adjudicated. Do not roll dice or run another check for it; other dice systems apply only to separate, undeclared actions.");
@@ -3384,7 +4209,7 @@ var STAKES = [
   "other"
 ];
 var PSYCHOLOGICAL_RESULT = /\b(feel(?:s|ing)?|love|loves|attract(?:ed|ion)?|affection|consent(?:s|ed)?|trust(?:s|ed)?|loyal(?:ty)?|permanent(?:ly)?\s+(?:likes?|hates?|attitude)|fall(?:s|ing)?\s+in\s+love)\b/i;
-function object2(value) {
+function object3(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 function exactKeys(value, allowed) {
@@ -3393,13 +4218,13 @@ function exactKeys(value, allowed) {
 }
 function boundedText(value, label, max) {
   if (typeof value !== "string") return { ok: false, message: `${label} must be a string` };
-  const text = value.replace(/\s+/g, " ").trim();
-  if (!text) return { ok: false, message: `${label} must not be empty` };
-  if (text.length > max) return { ok: false, message: `${label} exceeds ${max} characters` };
-  return { ok: true, value: text };
+  const text2 = value.replace(/\s+/g, " ").trim();
+  if (!text2) return { ok: false, message: `${label} must not be empty` };
+  if (text2.length > max) return { ok: false, message: `${label} exceeds ${max} characters` };
+  return { ok: true, value: text2 };
 }
 function validateTurnProposal(raw, ctx) {
-  const root = object2(raw);
+  const root = object3(raw);
   if (!root || root.schemaVersion !== 1 || !Array.isArray(root.actions)) {
     return { ok: false, code: "malformed", message: "Expected schemaVersion 1 and an actions array." };
   }
@@ -3415,7 +4240,7 @@ function validateTurnProposal(raw, ctx) {
   const proposalIds = /* @__PURE__ */ new Set();
   const actions = [];
   for (let index = 0; index < root.actions.length; index++) {
-    const item = object2(root.actions[index]);
+    const item = object3(root.actions[index]);
     if (!item) return { ok: false, code: "invalid_action", message: `Action ${index + 1} must be an object.` };
     const unknown = exactKeys(item, ["proposalId", "actingActorId", "targetActorIds", "family", "method", "boundedResult", "failureStake", "opposed", "evidenceRefs"]);
     if (unknown) return { ok: false, code: "unknown_field", message: `Unknown action field ${unknown}. Full draft text is not accepted.` };
@@ -3440,7 +4265,7 @@ function validateTurnProposal(raw, ctx) {
       return { ok: false, code: "unknown_evidence", message: `Action ${proposalId.value} references evidence outside the frozen snapshot.` };
     }
     if (new Set(item.evidenceRefs).size !== item.evidenceRefs.length) return { ok: false, code: "unknown_evidence", message: `Action ${proposalId.value} repeats an evidence reference.` };
-    const stake = object2(item.failureStake);
+    const stake = object3(item.failureStake);
     if (!stake || exactKeys(stake, ["kind", "detail"])) return { ok: false, code: "invalid_action", message: `Action ${proposalId.value} has an invalid failureStake.` };
     if (typeof stake.kind !== "string" || !STAKES.includes(stake.kind)) return { ok: false, code: "invalid_action", message: `Action ${proposalId.value} has an unknown failure stake.` };
     const detail = boundedText(stake.detail, `actions[${index}].failureStake.detail`, 240);
@@ -3538,6 +4363,10 @@ async function adjudicateTurnProposal(input) {
   if (Object.keys(questions).length > input.profile.budgets.maxQuestions) throw new Error("planned action batch exceeds the profile question budget");
   const base = input.snapshot.state && typeof input.snapshot.state === "object" && !Array.isArray(input.snapshot.state) ? input.snapshot.state : {};
   const snapshot = { ...input.snapshot, state: { ...base, plannedActions } };
+  const contextCharacters = JSON.stringify(snapshot.state).length;
+  if (contextCharacters > input.profile.budgets.maxSerializedCharacters) {
+    throw new Error(`Planned action context exceeds the limit (${contextCharacters}/${input.profile.budgets.maxSerializedCharacters} characters). No decision was requested.`);
+  }
   const evaluation = await input.provider.evaluate({ requestId: newId("req"), phase: "guide", snapshot, questions }, input.signal);
   const actions = [];
   for (const [index, proposal] of input.proposal.actions.entries()) {
@@ -3991,10 +4820,1069 @@ async function reviewPermit(input) {
   return null;
 }
 
+// src/pack/pack.ts
+var EVIDENCE_SOURCES = ["transcript", "owner_card", "target_card", "meters", "state", "lore"];
+var PRIVATE_SOURCES = ["owner_card", "target_card", "meters"];
+var CORE_PROTECTED = Object.freeze([
+  "The player's voluntary speech, actions, feelings, consent and decisions are the player's own; never decide them.",
+  "Do not assume feelings, attraction, trust or willingness beyond what the supplied evidence shows."
+]);
+var RESERVED_KEYS = /* @__PURE__ */ new Set(["NONE", "UNSUPPORTED", "UNRESOLVED", "ROUTINE"]);
+var KEY = /^[a-z][a-z0-9_]{0,39}$/;
+function deepFreeze(value) {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+var HANDOFF_LINE = "An explicit hand-off: the player invites, orders or dares a character to act, or gives them the initiative.";
+var ROUTINE_LINE = "Actions that are routine or effectively certain for whoever performs them, such as a ruler's everyday command to their own servants or a practised task done in calm conditions.";
+var SMALL_TALK_LINE = "Ordinary conversation, the player's own feelings, wants or decisions, observation, out-of-character remarks, trivial activity, and anything the scene has already settled.";
+var DEFAULT_PACK = deepFreeze({
+  id: "default",
+  version: 3,
+  label: "General",
+  description: "Works for most roleplay. Rules physical, social and stealth attempts with seven broad kinds of move; tracks how each character regards the player.",
+  actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
+  gate: {
+    include: [
+      "An attempt to change the situation where failure is genuinely possible and would materially change what happens: overcoming an obstacle, contesting opposition, evading, concealing or deceiving, discovering a hidden fact, pressing someone for specific conduct, or securing access, information, possession or a commitment.",
+      HANDOFF_LINE
+    ],
+    exclude: [SMALL_TALK_LINE, ROUTINE_LINE]
+  },
+  protected: [],
+  families: [
+    {
+      key: "overcome_operate",
+      label: "Overcome / operate",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "state"],
+      definition: "Overcome an obstacle, or operate, repair, treat, craft, break or create something.",
+      successSemantics: "The concrete method, given the actor's established competence, tools and conditions, produces the specified result now."
+    },
+    {
+      key: "contest_impose",
+      label: "Contest / impose",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Actively overcome opposition: attack, grapple, restrain, seize, interrupt, force or outmanoeuvre.",
+      successSemantics: "The acting side overcomes the active opposition in this one exchange; the same contest is not resolved twice."
+    },
+    {
+      key: "evade_resist",
+      label: "Evade / resist",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Escape, dodge, withstand, keep control, or avoid an imposed consequence.",
+      successSemantics: "The actor avoids or withstands the specified consequence in this exchange."
+    },
+    {
+      key: "conceal_deceive",
+      label: "Conceal / deceive",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Lie, hide, sneak, take something unnoticed, disguise, misdirect or keep up an alibi.",
+      successSemantics: "The concealment or deception holds now against the named observers, judged by what they could perceive or verify."
+    },
+    {
+      key: "detect_discover",
+      label: "Detect / discover",
+      kind: "discovery",
+      evidence: ["transcript", "lore", "state"],
+      definition: "Notice, search, investigate, read a tell, catch a lie, or establish a hidden fact from visible cues.",
+      successSemantics: "The observer establishes the specified fact now from cues visible in the scene and their own public capabilities; hidden truth that nothing in the scene has shown is not evidence."
+    },
+    {
+      key: "influence_negotiate",
+      label: "Influence / negotiate",
+      kind: "change",
+      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      definition: "Seek one specific, immediate conduct from someone through a request, bargain, argument, threat or pressure.",
+      successSemantics: "The target chooses the specified conduct now, given their established interests, boundaries and leverage; what the player says or offers is evidence about how the target may respond."
+    },
+    {
+      key: "acquire_secure",
+      label: "Acquire / secure",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Secure bounded access, information, possession, permission or a commitment.",
+      successSemantics: "The specified access, information, possession or commitment is secured now."
+    }
+  ],
+  meters: [
+    { key: "regard", label: "regard for {{player}}", about: "How the character feels about the player right now: warmth, respect and trust together.", levels: ["hostile", "cold", "neutral", "warm", "devoted"], initial: 2 }
+  ]
+});
+function protectedLines(pack) {
+  return [...CORE_PROTECTED, ...pack.protected.filter((line) => typeof line === "string" && line.trim())];
+}
+function familyByKey(pack, key) {
+  return pack.families.find((f) => f.key === key) ?? null;
+}
+function meterLabel(meter, playerName) {
+  return meter.label.replace(/\{\{\s*player\s*\}\}/gi, playerName);
+}
+var text = (value, max) => typeof value === "string" && value.trim().length > 0 && value.length <= max;
+function validatePack(pack) {
+  const errors = [];
+  if (!pack || typeof pack !== "object") return { ok: false, errors: ["pack must be an object"] };
+  if (!KEY.test(String(pack.id ?? ""))) errors.push("id must be lowercase letters, digits and underscores");
+  if (!Number.isInteger(pack.version) || pack.version < 1) errors.push("version must be a positive integer");
+  if (!text(pack.label, 80)) errors.push("label is required (up to 80 characters)");
+  if (!text(pack.description, 300)) errors.push("description is required (up to 300 characters)");
+  const kinds = pack.actors?.kinds ?? [];
+  const owners = pack.actors?.rulableOwners ?? [];
+  if (!kinds.includes("player")) errors.push("actors.kinds must include player");
+  if (!owners.includes("player")) errors.push("actors.rulableOwners must include player");
+  for (const owner of owners) if (!kinds.includes(owner)) errors.push(`actors.rulableOwners has ${owner}, which is not in actors.kinds`);
+  if (!Array.isArray(pack.gate?.include) || pack.gate.include.length === 0 || !pack.gate.include.every((line) => text(line, 600))) errors.push("gate.include needs at least one criterion (up to 600 characters each)");
+  if (!Array.isArray(pack.gate?.exclude) || !pack.gate.exclude.every((line) => text(line, 600))) errors.push("gate.exclude must be a list of criteria");
+  if (!Array.isArray(pack.protected) || !pack.protected.every((line) => text(line, 600))) errors.push("protected must be a list of sentences");
+  const families = Array.isArray(pack.families) ? pack.families : [];
+  if (families.length === 0 || families.length > 250) errors.push("families: between 1 and 250 are required");
+  const seen = /* @__PURE__ */ new Set();
+  for (const family of families) {
+    const key = String(family?.key ?? "");
+    if (RESERVED_KEYS.has(key)) {
+      errors.push(`family key ${key} is reserved`);
+      continue;
+    }
+    if (!KEY.test(key)) {
+      errors.push(`family key "${key}" must be lowercase letters, digits and underscores`);
+      continue;
+    }
+    if (seen.has(key)) errors.push(`duplicate family ${key}`);
+    seen.add(key);
+    if (!text(family.label, 80)) errors.push(`${key}: label is required`);
+    if (!text(family.definition, 600)) errors.push(`${key}: definition is required (up to 600 characters)`);
+    if (!text(family.successSemantics, 600)) errors.push(`${key}: successSemantics is required (up to 600 characters)`);
+    if (family.kind !== "change" && family.kind !== "discovery") errors.push(`${key}: kind must be change or discovery`);
+    const evidence = Array.isArray(family.evidence) ? family.evidence : [];
+    for (const source of evidence) if (!EVIDENCE_SOURCES.includes(source)) errors.push(`${key}: unknown evidence source ${String(source)}`);
+    if (!evidence.includes("transcript")) errors.push(`${key}: evidence must include transcript`);
+    if (family.kind === "discovery") {
+      for (const source of evidence) if (PRIVATE_SOURCES.includes(source)) errors.push(`${key}: a discovery family may not read ${source}`);
+    }
+  }
+  const meters = Array.isArray(pack.meters) ? pack.meters : null;
+  if (!meters) errors.push("meters must be a list (it may be empty)");
+  else {
+    if (meters.length > 4) errors.push("at most 4 meters");
+    const meterKeys = /* @__PURE__ */ new Set();
+    for (const meter of meters) {
+      const key = String(meter?.key ?? "");
+      if (!KEY.test(key)) {
+        errors.push(`meter key "${key}" must be lowercase letters, digits and underscores`);
+        continue;
+      }
+      if (meterKeys.has(key)) errors.push(`duplicate meter ${key}`);
+      meterKeys.add(key);
+      if (!text(meter.label, 80)) errors.push(`meter ${key}: label is required`);
+      if (!text(meter.about, 300)) errors.push(`meter ${key}: about is required (up to 300 characters)`);
+      const levels = Array.isArray(meter.levels) ? meter.levels : [];
+      if (levels.length < 3 || levels.length > 7) errors.push(`meter ${key}: needs 3 to 7 levels`);
+      if (!levels.every((level) => text(level, 40))) errors.push(`meter ${key}: every level needs a short name`);
+      if (new Set(levels).size !== levels.length) errors.push(`meter ${key}: level names must be unique`);
+      if (!Number.isInteger(meter.initial) || meter.initial < 0 || meter.initial >= levels.length) errors.push(`meter ${key}: initial must be a level index`);
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+// src/pipeline/spans.ts
+var MAX_SPAN_OPTIONS = 253;
+var BOUNDARY2 = /[.!?…]+["'”’)\]]*(?=\s)|\n+/g;
+function trimmed(source, start, end) {
+  while (start < end && /\s/.test(source[start])) start++;
+  while (end > start && /\s/.test(source[end - 1])) end--;
+  return end > start ? { start, end } : null;
+}
+function sentenceSpans(source) {
+  const text2 = String(source ?? "");
+  const spans = [];
+  let from = 0;
+  const push = (to) => {
+    const range = trimmed(text2, from, to);
+    if (range) spans.push({ id: `s${spans.length + 1}`, kind: "sentence", ...range, text: text2.slice(range.start, range.end) });
+    from = to;
+  };
+  for (const match of text2.matchAll(BOUNDARY2)) push(match.index + match[0].length);
+  push(text2.length);
+  return spans;
+}
+function candidateSpans(source, maxOptions = MAX_SPAN_OPTIONS) {
+  const text2 = String(source ?? "");
+  let sentences = sentenceSpans(text2);
+  if (sentences.length === 0) return [];
+  const whole = () => {
+    if (sentences.length < 2) return null;
+    const range = trimmed(text2, 0, text2.length);
+    return { id: "all", kind: "whole", ...range, text: text2.slice(range.start, range.end) };
+  };
+  const pairs = sentences.slice(1).map((next, i) => {
+    const first = sentences[i];
+    return { id: `p${i + 1}`, kind: "pair", start: first.start, end: next.end, text: text2.slice(first.start, next.end) };
+  });
+  const all = whole();
+  const full = [...sentences, ...pairs, ...all ? [all] : []];
+  if (full.length <= maxOptions) return full;
+  const withoutPairs = [...sentences, ...all ? [all] : []];
+  if (withoutPairs.length <= maxOptions) return withoutPairs;
+  sentences = sentences.slice(0, maxOptions - 1);
+  return [...sentences, ...all ? [all] : []];
+}
+var ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", apos: "'", nbsp: " " };
+function visibleText(html) {
+  let text2 = String(html ?? "").replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, " ");
+  for (let guard = 0; guard < 50 && /<details\b/i.test(text2); guard++) {
+    const next = text2.replace(/<details\b[^>]*>(?:(?!<details\b)[\s\S])*?<\/details>/gi, " ");
+    if (next === text2) break;
+    text2 = next;
+  }
+  text2 = text2.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6])>/gi, "\n").replace(/<[^>]+>/g, " ");
+  text2 = text2.replace(/&(amp|lt|gt|quot|#39|apos|nbsp);/g, (_, key) => ENTITIES[key] ?? "");
+  return text2.split("\n").map((line) => line.replace(/[ \t]+/g, " ").trim()).filter(Boolean).join("\n");
+}
+
+// src/pipeline/questions.ts
+var criteriaText = (pack) => `A move to rule on is: ${pack.gate.include.join(" ")}${pack.gate.exclude.length ? ` It is not: ${pack.gate.exclude.join(" ")}` : ""}`;
+function moveQuestion(spans, pack) {
+  const criteria = {};
+  for (const span of spans) criteria[span.id] = span.text;
+  criteria.ROUTINE = "The message does act, but everything in it is routine or effectively certain for whoever performs it; nothing needs a ruling.";
+  criteria.NONE = "No passage of the latest message contains a move to rule on.";
+  return {
+    type: "choice",
+    instructions: `Using state.latestInput and the public exchange in state.recentAcceptedMessages, select the passage of the player's latest message that states the FIRST move to rule on. ${criteriaText(pack)} Prefer the shortest passage that states the whole move; choose a longer one only when the move runs across it. Choose ROUTINE when the message only contains actions that are routine or effectively certain for whoever performs them, and NONE when it contains no attempt at all. Do not invent a goal the passage does not state.`,
+    criteria
+  };
+}
+function countQuestion(pack) {
+  return {
+    type: "choice",
+    instructions: `How many separate moves to rule on does the player's latest message (state.latestInput) contain? ${criteriaText(pack)} Steps toward one goal, and routine or certain actions along the way, are part of one move. Count multiple only when two or more moves would each need their own ruling.`,
+    criteria: {
+      one: "At most one such move.",
+      multiple: "Two or more separate moves, each of which would need its own ruling."
+    }
+  };
+}
+function routeQuestions(input) {
+  const people = {};
+  for (const [id, name] of Object.entries(input.actorNames)) people[id] = id === input.playerId ? `${name} (the player)` : name;
+  const families = {};
+  for (const family of input.pack.families) families[family.key] = `${family.label}: ${family.definition}`;
+  families.UNSUPPORTED = "None of these kinds of move fits the passage.";
+  const antecedents = {};
+  for (const candidate of input.antecedents) antecedents[candidate.id] = candidate.text;
+  const passage = "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange.";
+  return {
+    owner: {
+      type: "choice",
+      instructions: `${passage} Who is making this move? For a request, persuasion, pressure, a bargain or a threat, the owner is whoever is asking or pressing (usually the player), and the target is the one being asked. A character is the owner only when the player gives that character a task to carry out with their own abilities (an order or a dare, such as "pick that lock") or hands them the initiative (such as "go ahead, make me"). Choose UNRESOLVED if the passage and the public exchange do not show it.`,
+      criteria: { ...people, UNRESOLVED: "The owner cannot be told from the passage and the public exchange." }
+    },
+    target: {
+      type: "choice",
+      instructions: `${passage} Whom does the proposed action act on, or seek something from? SELF means the owner themselves. SEVERAL means more than one of these characters at once. SCENE means the surroundings, an object, someone not listed, or no one in particular. Choose UNRESOLVED if it cannot be told.`,
+      criteria: { ...people, SELF: "The owner themselves.", SEVERAL: "More than one of these characters at once.", SCENE: "The surroundings, an object, someone not listed, or no one in particular.", UNRESOLVED: "The target cannot be told." }
+    },
+    family: {
+      type: "choice",
+      instructions: `${passage} Which kind of move is it? Choose by what the move tries to change, not by its tone.`,
+      criteria: families
+    },
+    action_specification: {
+      type: "choice",
+      instructions: `${passage} Does the passage say what the owner should do or achieve?`,
+      criteria: {
+        SPECIFIED_HERE: "The passage itself states the action or result.",
+        SPECIFIED_BY_PUBLIC_REFERENCE: "The passage points to an action already stated in the public exchange, such as terms, an offer, a plan or a condition someone set.",
+        UNSPECIFIED_INITIATIVE: 'The passage hands the owner the initiative without saying what to do, such as "go ahead", "make me" or "your call".',
+        UNRESOLVED: "It cannot be told."
+      }
+    },
+    antecedent: {
+      type: "choice",
+      instructions: `${passage} If the passage refers back to something said or offered earlier in the public exchange (for example "the terms you set" or "what you offered"), select that earlier passage. Choose NONE if it refers to nothing earlier.`,
+      criteria: { ...antecedents, NONE: "The passage does not refer back to an earlier passage.", UNRESOLVED: "It refers back, but the earlier passage cannot be identified." }
+    }
+  };
+}
+function rulingQuestion(input) {
+  const change = input.hasAntecedent ? "the change proposed in state.move.passage, as specified by the earlier passage it refers to (state.move.antecedent)" : "the change proposed in state.move.passage";
+  return {
+    type: "noul",
+    instructions: `Using only the admissible evidence in state, will the owner (state.move.owner), attempting ${change} on the target (state.move.target), achieve that specified change within this exchange? ${input.family.successSemantics} Speech is evidence when it changes the target's options or the ruled situation. Do not infer success from the attempt being declared. Do not substitute a different goal or a later opportunity. ${protectedLines(input.pack).join(" ")}`,
+    criteria: {
+      true: "The specified change happens within this exchange.",
+      false: "The specified change does not happen within this exchange."
+    }
+  };
+}
+
+// src/pipeline/route.ts
+var SPECIFICATIONS = ["SPECIFIED_HERE", "SPECIFIED_BY_PUBLIC_REFERENCE", "UNSPECIFIED_INITIATIVE"];
+function deriveRoute(answers, context) {
+  const unruled = (reason) => ({
+    route: "UNRULED",
+    reason,
+    ownerId: answers.owner && answers.owner !== "UNRESOLVED" ? answers.owner : null,
+    targetId: answers.target && answers.target !== "UNRESOLVED" ? answers.target : null,
+    familyKey: answers.family && familyByKey(context.pack, answers.family) ? answers.family : null,
+    specification: SPECIFICATIONS.includes(answers.specification) ? answers.specification : null,
+    // The earlier passage is part of the move only when the move points back to it.
+    antecedentId: answers.specification === "SPECIFIED_BY_PUBLIC_REFERENCE" && answers.antecedent && !["NONE", "UNRESOLVED"].includes(answers.antecedent) ? answers.antecedent : null
+  });
+  for (const key of ["owner", "target", "family", "specification", "antecedent"]) {
+    if (!answers[key]) return unruled(`the ${key} answer is missing`);
+  }
+  const owner = answers.owner;
+  if (owner === "UNRESOLVED") return unruled("the owner is unresolved");
+  const isPlayer = owner === context.playerId;
+  const isNpc = context.npcIds.includes(owner);
+  if (!isPlayer && !isNpc) return unruled(`the owner ${owner} is not a known actor`);
+  const specification = answers.specification;
+  if (specification === "UNRESOLVED" || !SPECIFICATIONS.includes(specification)) return unruled("the action specification is unresolved");
+  if (specification === "UNSPECIFIED_INITIATIVE") {
+    const recipient = isNpc ? owner : answers.target && context.npcIds.includes(answers.target) ? answers.target : null;
+    if (!recipient) return unruled("no character receives the handed-over initiative");
+    return { ...unruled(""), route: "HANDOFF", reason: "the player handed this character the initiative", ownerId: recipient, specification: "UNSPECIFIED_INITIATIVE" };
+  }
+  if (answers.family === "UNSUPPORTED" || !familyByKey(context.pack, answers.family)) return unruled("no supported kind of move fits");
+  if (specification === "SPECIFIED_BY_PUBLIC_REFERENCE" && (answers.antecedent === "UNRESOLVED" || answers.antecedent === "NONE")) return unruled("the referenced earlier passage could not be identified");
+  if (isNpc && !context.pack.actors.rulableOwners.includes("npc")) return unruled("this pack does not rule on NPC-owned moves");
+  const base = unruled("");
+  return {
+    ...base,
+    route: isPlayer ? "DIRECT_ATTEMPT" : "SPECIFIED_NPC_MOVE",
+    reason: isPlayer ? "the player attempts the change" : "the player directs a character to act",
+    ownerId: owner
+  };
+}
+
+// src/pipeline/evidence.ts
+var DEFAULT_MAX_LORE_CHARS = 12e3;
+var MAX_LORE_ENTRY_CHARS = 3e3;
+function admissibleLore(lore, discovery, maxChars) {
+  let withheld = 0;
+  let dropped = 0;
+  let used = 0;
+  const items = [];
+  for (const item of lore) {
+    if (discovery && !item.public) {
+      withheld += 1;
+      continue;
+    }
+    const text2 = item.text.length > MAX_LORE_ENTRY_CHARS ? `${item.text.slice(0, MAX_LORE_ENTRY_CHARS - 1)}\u2026` : item.text;
+    if (used + text2.length > maxChars) {
+      dropped += 1;
+      continue;
+    }
+    used += text2.length;
+    items.push({ book: item.book, title: item.title, text: text2 });
+  }
+  return { items, withheld, dropped };
+}
+function judgeProjection(input) {
+  const exclusions = [];
+  const discovery = input.family.kind === "discovery";
+  const allows = (source) => input.family.evidence.includes(source);
+  const cardFor = /* @__PURE__ */ new Set();
+  if (!discovery) {
+    if (allows("owner_card") && input.ownerId !== input.playerId && input.actors[input.ownerId]?.card) cardFor.add(input.ownerId);
+    const target = input.targetId ?? "";
+    if (allows("target_card") && target !== input.playerId && input.actors[target]?.card) cardFor.add(target);
+  } else {
+    exclusions.push("character cards withheld: discovery may use only what the scene has shown");
+  }
+  const involved = [input.ownerId, input.targetId].filter((id) => Boolean(id) && id !== input.playerId);
+  const metersFor = new Set(!discovery && allows("meters") ? involved.filter((id) => input.meters?.[id]) : []);
+  const actors = {};
+  for (const [id, actor] of Object.entries(input.actors)) {
+    const entry = { name: actor.name, control: actor.control };
+    if (cardFor.has(id)) entry.authorialCharacterContext = actor.card;
+    if (metersFor.has(id)) entry.judgedState = input.meters[id];
+    actors[id] = entry;
+  }
+  const lore = allows("lore") && input.lore?.length ? admissibleLore(input.lore, discovery, Math.min(input.maxLoreChars ?? DEFAULT_MAX_LORE_CHARS, Math.floor(input.maxChars * 0.4))) : { items: [], withheld: 0, dropped: 0 };
+  if (lore.withheld) exclusions.push(`${lore.withheld} private lore entr${lore.withheld === 1 ? "y" : "ies"} withheld: discovery reads only books declared public`);
+  if (lore.dropped) exclusions.push(`${lore.dropped} lore entr${lore.dropped === 1 ? "y" : "ies"} dropped to fit the lore budget`);
+  const actorRef = (id) => {
+    if (!id) return null;
+    if (id === "SELF" || id === "SEVERAL" || id === "SCENE") return { id };
+    return { id, name: input.actors[id]?.name ?? id };
+  };
+  const build = (messages2) => ({
+    actors,
+    playerActorId: input.playerId,
+    move: {
+      owner: actorRef(input.ownerId),
+      target: actorRef(input.targetId),
+      family: { key: input.family.key, label: input.family.label },
+      passage: input.move.passage,
+      antecedent: input.move.antecedent
+    },
+    latestInput: input.latestInput,
+    ...allows("state") ? { facts: input.facts } : {},
+    ...lore.items.length ? { lore: lore.items } : {},
+    recentAcceptedMessages: messages2.map((m) => ({ actorId: m.actorId, role: m.role, text: visibleText(m.text) }))
+  });
+  let messages = input.transcript.slice();
+  let state = build(messages);
+  let chars = JSON.stringify(state).length;
+  while (chars > input.maxChars && messages.length > 0) {
+    messages = messages.slice(1);
+    state = build(messages);
+    chars = JSON.stringify(state).length;
+  }
+  const dropped = input.transcript.length - messages.length;
+  if (dropped > 0) exclusions.push(`${dropped} oldest message${dropped === 1 ? "" : "s"} dropped to fit ${input.maxChars} characters`);
+  return { state, exclusions, chars, overBudget: chars > input.maxChars };
+}
+
+// src/pipeline/staged.ts
+var StagedError = class extends Error {
+  stage;
+  constructor(stage, message) {
+    super(message);
+    this.stage = stage;
+  }
+};
+var MAX_ANTECEDENTS = 60;
+function publicState(input) {
+  const actors = {};
+  for (const [id, actor] of Object.entries(input.actors)) actors[id] = { name: actor.name, control: actor.control };
+  const build = (messages2) => ({
+    actors,
+    playerActorId: input.playerId,
+    latestInput: input.latestInput,
+    recentAcceptedMessages: messages2.map((m) => ({ actorId: m.actorId, role: m.role, text: visibleText(m.text) }))
+  });
+  let messages = input.transcript.slice();
+  let state = build(messages);
+  while (JSON.stringify(state).length > input.maxChars && messages.length > 0) {
+    messages = messages.slice(1);
+    state = build(messages);
+  }
+  return state;
+}
+function antecedentCandidates(input) {
+  const last = [...input.transcript].reverse().find((m) => m.role === "assistant");
+  if (!last) return [];
+  return sentenceSpans(visibleText(last.text)).slice(-MAX_ANTECEDENTS).map((span, i) => ({ id: `a${i + 1}`, text: span.text }));
+}
+var choiceOf = (answer) => answer?.type === "choice" ? answer.choice : null;
+async function runStaged(input, env) {
+  const records = [];
+  const out = { outcome: "no_move", records, speakerAnswer: null, reactionAnswers: {}, move: null, route: null, antecedentText: null, ruling: null };
+  const call = async (stage, questions, state) => {
+    const result = await env.evaluate(stage, questions, state);
+    records.push({ stage, questions, state, result });
+    return result;
+  };
+  const shared = publicState(input);
+  const spans = input.modules.decisions ? candidateSpans(input.latestInput) : [];
+  const aQuestions = {};
+  if (input.modules.decisions && spans.length > 0) {
+    aQuestions.move = moveQuestion(spans, input.pack);
+    aQuestions.move_count = countQuestion(input.pack);
+  }
+  const reactionIds = /* @__PURE__ */ new Map();
+  if (input.modules.reactions) {
+    Object.entries(input.reactionQuestions).forEach(([npcId, question2], index) => {
+      const id = `npc_reaction_${index + 1}`;
+      reactionIds.set(id, npcId);
+      aQuestions[id] = question2;
+    });
+  }
+  const [speakerResult, aResult] = await Promise.all([
+    input.modules.speaker && input.speakerQuestion ? call("speaker", { speaker: input.speakerQuestion }, shared) : Promise.resolve(null),
+    Object.keys(aQuestions).length ? call("move", aQuestions, shared) : Promise.resolve(null)
+  ]);
+  if (speakerResult) out.speakerAnswer = speakerResult.answers.speaker ?? null;
+  if (aResult) {
+    for (const [questionId, npcId] of reactionIds) if (aResult.answers[questionId]) out.reactionAnswers[npcId] = aResult.answers[questionId];
+  }
+  if (!aResult || !aQuestions.move) return out;
+  const selected = choiceOf(aResult.answers.move);
+  if (!selected) throw new StagedError("move", `move selection returned no valid answer (${aResult.errors.move ?? "missing"})`);
+  if (selected === "NONE" || selected === "ROUTINE") return out;
+  const span = spans.find((s) => s.id === selected);
+  if (!span) throw new StagedError("move", `move selection returned an unknown passage ${selected}`);
+  const count = choiceOf(aResult.answers.move_count);
+  out.move = { span, count: count === "one" || count === "multiple" ? count : null };
+  const npcIds = Object.keys(input.actors).filter((id) => id !== input.playerId);
+  const actorNames = { [input.playerId]: input.actors[input.playerId]?.name ?? input.playerId };
+  for (const id of npcIds) actorNames[id] = input.actors[id].name;
+  const antecedents = antecedentCandidates(input);
+  const routeState = { ...shared, move: { passage: span.text } };
+  const bResult = await call("route", routeQuestions({ actorNames, playerId: input.playerId, pack: input.pack, antecedents }), routeState);
+  const route = deriveRoute({
+    owner: choiceOf(bResult.answers.owner),
+    target: choiceOf(bResult.answers.target),
+    family: choiceOf(bResult.answers.family),
+    specification: choiceOf(bResult.answers.action_specification),
+    antecedent: choiceOf(bResult.answers.antecedent)
+  }, { playerId: input.playerId, npcIds, pack: input.pack });
+  out.route = route;
+  out.antecedentText = route.antecedentId ? antecedents.find((a) => a.id === route.antecedentId)?.text ?? null : null;
+  if (route.route === "UNRULED") {
+    out.outcome = "unruled";
+    return out;
+  }
+  if (route.route === "HANDOFF") {
+    out.outcome = "handoff";
+    return out;
+  }
+  const family = familyByKey(input.pack, route.familyKey);
+  const [meters, lore] = await Promise.all([
+    input.meters ? input.meters() : Promise.resolve(void 0),
+    input.lore ? input.lore() : Promise.resolve(void 0)
+  ]);
+  const projection = judgeProjection({
+    pack: input.pack,
+    family,
+    playerId: input.playerId,
+    ownerId: route.ownerId,
+    targetId: route.targetId,
+    actors: input.actors,
+    transcript: input.transcript,
+    latestInput: input.latestInput,
+    facts: input.facts,
+    move: { passage: span.text, antecedent: out.antecedentText },
+    meters,
+    lore,
+    maxLoreChars: input.maxLoreChars,
+    maxChars: input.maxChars
+  });
+  const question = rulingQuestion({ family, pack: input.pack, hasAntecedent: out.antecedentText !== null });
+  const eResult = await call("ruling", { ruling: question }, projection.state);
+  const answer = eResult.answers.ruling;
+  if (!answer || answer.type !== "noul") throw new StagedError("ruling", `the ruling returned no valid probability (${eResult.errors.ruling ?? "missing"})`);
+  out.ruling = { answer, question, projection };
+  out.outcome = "ruled";
+  return out;
+}
+
+// src/pack/packs.ts
+var ROMANCE = {
+  id: "romance",
+  version: 2,
+  label: "Romance & slice of life",
+  description: "Closeness, attraction, teasing and pursuit between people. Rules asks, pressure and resistance; tracks how each character feels about the player and how boldly they pursue it.",
+  actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
+  gate: {
+    include: [
+      "Asking or pressing someone for something they might refuse: a favour, a touch, closeness, permission, a confession, that they stay or leave.",
+      "Trying to change how someone behaves toward the player right now: teasing, charming, provoking, reassuring or apologising.",
+      "Resisting someone else's pressure, hiding something or lying, or reading what someone is hiding.",
+      "Physical actions whose outcome is genuinely uncertain and matters, such as getting somewhere first or moving someone.",
+      HANDOFF_LINE
+    ],
+    exclude: [SMALL_TALK_LINE, ROUTINE_LINE]
+  },
+  protected: [],
+  families: [
+    {
+      key: "ask",
+      label: "Ask or press",
+      kind: "change",
+      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      definition: "Ask, invite, bargain for or press someone for one specific thing they might refuse, now.",
+      successSemantics: "The target agrees to the specific thing and does it now, in their own way; the player's answer to any counter-offer is not decided."
+    },
+    {
+      key: "sway",
+      label: "Sway",
+      kind: "change",
+      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      definition: "Change how someone behaves toward the player in the moment: tease, charm, provoke, reassure, apologise, win them over.",
+      successSemantics: "The target visibly responds the way the player was trying for in this exchange; the moment changes, not a lasting attitude."
+    },
+    {
+      key: "hold_out",
+      label: "Hold out",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Resist pressure, refuse, keep a boundary, or keep control of a situation someone else is pushing.",
+      successSemantics: "The one resisting holds their ground in this exchange; the pressure does not get what it sought now."
+    },
+    {
+      key: "conceal",
+      label: "Hide or lie",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Hide something, lie, cover a slip, or keep up an alibi in front of someone.",
+      successSemantics: "The concealment holds now against the people present, judged by what they could see or check."
+    },
+    {
+      key: "read",
+      label: "Read someone",
+      kind: "discovery",
+      evidence: ["transcript", "lore", "state"],
+      definition: "Notice a tell, catch a lie, or work out what someone wants or is hiding from what they show.",
+      successSemantics: "The observer works out the specified thing now from what the person visibly shows; hidden truth that nothing in the scene has shown is not evidence."
+    },
+    {
+      key: "act",
+      label: "Physical action",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "state"],
+      definition: "Do something physical or practical whose outcome is uncertain: get somewhere first, move someone, catch, fix, win a game.",
+      successSemantics: "The concrete action produces the stated result now, given the people and conditions present."
+    }
+  ],
+  meters: [
+    { key: "regard", label: "regard for {{player}}", about: "How the character feels about the player right now: affection, attraction and trust together.", levels: ["cold", "guarded", "friendly", "warm", "smitten"], initial: 2 },
+    { key: "nerve", label: "nerve", about: "How boldly the character goes after what they want with the player right now.", levels: ["withdrawn", "hesitant", "steady", "bold", "relentless"], initial: 2 }
+  ]
+};
+var ADVENTURE = {
+  id: "adventure",
+  version: 2,
+  label: "Adventure & kingdom",
+  description: "Danger, skill, force, magic and rule. Rules physical, magical and social risks, including orders given to followers; tracks loyalty and morale.",
+  actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
+  gate: {
+    include: [
+      "Overcoming danger or an obstacle, including with magic; fighting, forcing or outmanoeuvring opposition; escaping or resisting; sneaking, hiding or deceiving; searching or discovering; persuading, commanding, bargaining with or intimidating someone into a specific action; seizing or securing something.",
+      HANDOFF_LINE
+    ],
+    exclude: [SMALL_TALK_LINE, ROUTINE_LINE]
+  },
+  protected: [],
+  families: [
+    {
+      key: "overcome_operate",
+      label: "Overcome",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "state"],
+      definition: "Overcome danger or an obstacle, cast or channel magic, climb, cross, repair, craft or break something.",
+      successSemantics: "The method, given the actor's established skill, power, tools and conditions, produces the specified result now."
+    },
+    {
+      key: "contest_impose",
+      label: "Fight or force",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Attack, grapple, restrain, seize, break through, or outmanoeuvre active opposition.",
+      successSemantics: "The acting side overcomes the opposition in this one exchange; the same fight is not resolved twice."
+    },
+    {
+      key: "evade_resist",
+      label: "Escape or resist",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Escape, dodge, endure, shake off a spell or poison, or avoid an imposed consequence.",
+      successSemantics: "The actor avoids or withstands the specified consequence in this exchange."
+    },
+    {
+      key: "conceal_deceive",
+      label: "Sneak or deceive",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Sneak, hide, disguise, lie, misdirect or steal unnoticed.",
+      successSemantics: "The deception or stealth holds now against those present, judged by what they could perceive or check."
+    },
+    {
+      key: "detect_discover",
+      label: "Search or discover",
+      kind: "discovery",
+      evidence: ["transcript", "lore", "state"],
+      definition: "Search, track, scout, notice a threat, read a tell, or uncover a hidden fact.",
+      successSemantics: "The searcher establishes the specified fact now from what can actually be seen, heard or found; hidden truth that nothing in the scene has shown is not evidence."
+    },
+    {
+      key: "influence_negotiate",
+      label: "Persuade or command",
+      kind: "change",
+      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      definition: "Persuade, command, bargain with or intimidate someone into one specific action now.",
+      successSemantics: "The target does the specific thing now; loyalty or a lasting change of heart is not decided."
+    },
+    {
+      key: "acquire_secure",
+      label: "Secure",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Seize, claim or secure a place, object, passage, right or commitment.",
+      successSemantics: "The specified place, object, right or commitment is secured now."
+    }
+  ],
+  meters: [
+    { key: "loyalty", label: "loyalty to {{player}}", about: "How far the character will follow and support the player right now.", levels: ["hostile", "resentful", "dutiful", "loyal", "devoted"], initial: 2 },
+    { key: "morale", label: "morale", about: "How confident the character is and how willing to face danger right now.", levels: ["broken", "shaken", "steady", "confident", "fearless"], initial: 2 }
+  ]
+};
+var INVESTIGATION = {
+  id: "investigation",
+  version: 2,
+  label: "Investigation & intrigue",
+  description: "Clues, lies, surveillance and leverage. Rules searches, interrogations, cover stories and hacks; tracks trust and suspicion of the player.",
+  actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
+  gate: {
+    include: [
+      "Searching, examining, analysing or tracing something; questioning or pressuring someone for a specific answer; lying, hiding or keeping a cover; breaking into or operating systems and devices; confronting, restraining or escaping someone.",
+      HANDOFF_LINE
+    ],
+    exclude: [SMALL_TALK_LINE, ROUTINE_LINE]
+  },
+  protected: [],
+  families: [
+    {
+      key: "examine",
+      label: "Examine or trace",
+      kind: "discovery",
+      evidence: ["transcript", "lore", "state"],
+      definition: "Examine, search, analyse, trace or read someone or something to establish a hidden fact.",
+      successSemantics: "The investigator establishes the specified fact now from what can actually be observed, measured or traced; hidden truth that nothing in the scene has shown is not evidence."
+    },
+    {
+      key: "question",
+      label: "Question",
+      kind: "change",
+      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      definition: "Question, interrogate or pressure someone into giving a specific answer or piece of information now.",
+      successSemantics: "The target gives the specific answer now; its truth is only what they believe or choose to say."
+    },
+    {
+      key: "cover",
+      label: "Keep a cover",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Lie, hide, bluff, plant a false trail or keep up a cover in front of someone.",
+      successSemantics: "The cover holds now against the people present, judged by what they could perceive, check or sense with their own abilities."
+    },
+    {
+      key: "operate",
+      label: "Operate or break in",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "state"],
+      definition: "Hack, bypass, break into, repair or operate a system, device or lock.",
+      successSemantics: "The method, given the actor's established skill and tools, produces the specified result now."
+    },
+    {
+      key: "confront",
+      label: "Confront",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Fight, restrain, seize or outmanoeuvre someone who resists.",
+      successSemantics: "The acting side overcomes the resistance in this one exchange."
+    },
+    {
+      key: "evade",
+      label: "Evade",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "state"],
+      definition: "Escape, slip surveillance, withstand an intrusion or avoid an imposed consequence.",
+      successSemantics: "The actor avoids or withstands the specified consequence in this exchange."
+    },
+    {
+      key: "persuade",
+      label: "Persuade",
+      kind: "change",
+      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      definition: "Persuade, bargain with or pressure someone into one specific action now.",
+      successSemantics: "The target chooses the specified action now, given their interests and leverage."
+    }
+  ],
+  meters: [
+    { key: "trust", label: "trust in {{player}}", about: "How much the character trusts the player right now.", levels: ["hostile", "distrustful", "wary", "trusting", "confiding"], initial: 2 },
+    { key: "suspicion", label: "suspicion of {{player}}", about: "How strongly the character suspects the player is hiding something or is not what they seem.", levels: ["unsuspecting", "curious", "suspicious", "alarmed", "certain"], initial: 0 }
+  ]
+};
+var POLITICS = {
+  id: "politics",
+  version: 2,
+  label: "Politics & factions",
+  description: "Deals, pressure, law and intelligence between powers. Rules negotiations, coercion, decrees and schemes; tracks each character's standing with the player and fear of them.",
+  actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
+  gate: {
+    include: [
+      "Negotiating terms; threatening, pressuring or blackmailing someone into compliance; pushing a law, order or appointment through resistance; hiding a plan, planting a story or bribing without being traced; gathering intelligence on another power; using force.",
+      HANDOFF_LINE
+    ],
+    exclude: [SMALL_TALK_LINE, ROUTINE_LINE]
+  },
+  protected: ["Loyalty and long-term allegiance are not decided by a single ruling."],
+  families: [
+    {
+      key: "negotiate",
+      label: "Negotiate",
+      kind: "change",
+      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      definition: "Bargain or negotiate with someone for specific terms or a commitment now.",
+      successSemantics: "The counterpart accepts the specific terms now; the player's acceptance of altered terms is not decided."
+    },
+    {
+      key: "coerce",
+      label: "Coerce",
+      kind: "change",
+      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      definition: "Threaten, pressure or blackmail someone into specific compliance now.",
+      successSemantics: "The target complies with the specific demand now."
+    },
+    {
+      key: "decree",
+      label: "Push a measure",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "state"],
+      definition: "Push through a law, order, appointment or policy against institutional resistance.",
+      successSemantics: "The measure takes effect as specified now."
+    },
+    {
+      key: "scheme",
+      label: "Scheme",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      definition: "Hide a plan, plant a story, forge, bribe or manoeuvre without being traced.",
+      successSemantics: "The scheme proceeds untraced now, judged by what the other powers could perceive or check."
+    },
+    {
+      key: "intel",
+      label: "Gather intelligence",
+      kind: "discovery",
+      evidence: ["transcript", "lore", "state"],
+      definition: "Gather intelligence, or uncover what another power is planning or hiding.",
+      successSemantics: "The specified fact is established now through admissible evidence, never through another power's hidden truth."
+    },
+    {
+      key: "force",
+      label: "Use force",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "state"],
+      definition: "Use force: arrest, seize, suppress, attack or defend.",
+      successSemantics: "The acting side achieves the specified result against the opposition in this exchange."
+    }
+  ],
+  meters: [
+    { key: "standing", label: "regard for {{player}}'s authority", about: "How far the character accepts the player's authority right now.", levels: ["defiant", "reluctant", "compliant", "supportive", "devoted"], initial: 2 },
+    { key: "fear", label: "fear of {{player}}", about: "How much the character fears what the player could do to them right now.", levels: ["contemptuous", "unafraid", "wary", "afraid", "terrified"], initial: 1 }
+  ]
+};
+var BUILT_IN_PACKS = deepFreeze([DEFAULT_PACK, ROMANCE, ADVENTURE, INVESTIGATION, POLITICS]);
+var localPacks = [];
+function listPacks() {
+  return [...BUILT_IN_PACKS, ...localPacks];
+}
+function packById(id) {
+  return listPacks().find((p) => p.id === id) ?? DEFAULT_PACK;
+}
+function hasPack(id) {
+  return listPacks().some((p) => p.id === id);
+}
+function registerLocalPacks(raw) {
+  const loaded = [];
+  const warnings = [];
+  const doc = raw;
+  if (!doc || typeof doc !== "object" || doc.schemaVersion !== 1 || !Array.isArray(doc.packs)) return { loaded, warnings: ["local pack document needs schemaVersion 1 and a packs array"] };
+  for (const [index, candidate] of doc.packs.entries()) {
+    const pack = structuredClone(candidate);
+    const id = String(pack?.id ?? `#${index + 1}`);
+    if (listPacks().some((p) => p.id === id)) {
+      warnings.push(`pack ${id}: duplicate id`);
+      continue;
+    }
+    const check = validatePack(pack);
+    if (!check.ok) {
+      warnings.push(`pack ${id}: ${check.errors.join("; ")}`);
+      continue;
+    }
+    localPacks.push(deepFreeze(pack));
+    loaded.push(id);
+  }
+  return { loaded, warnings };
+}
+async function loadLocalPacks(fetcher = fetch) {
+  try {
+    const url = new URL("./profiles/local/packs.json", import.meta.url);
+    const response = await fetcher(url.href, { cache: "no-store", credentials: "same-origin" });
+    if (response.status === 404) return { loaded: [], warnings: [] };
+    if (!response.ok) return { loaded: [], warnings: [`local pack fetch failed: HTTP ${response.status}`] };
+    const body = await response.text();
+    if (body.length > 262144) return { loaded: [], warnings: ["local pack document exceeds 256 KiB"] };
+    return registerLocalPacks(JSON.parse(body));
+  } catch (error) {
+    return { loaded: [], warnings: [`local pack load failed: ${error instanceof Error ? error.message : String(error)}`] };
+  }
+}
+
+// src/pipeline/pack-pick.ts
+function packQuestion(packs) {
+  return {
+    type: "choice",
+    instructions: "Which genre pack fits this roleplay as a whole? Judge mainly from its premise: the characters' descriptions and roles in state.characters (who they are, what their work or situation is, what they want). Use the recent story (state.recentAcceptedMessages and state.latestInput) only as supporting evidence; a single tender, tense or practical scene does not change the genre. Choose the single best fit.",
+    criteria: Object.fromEntries(packs.map((p) => [p.id, `${p.label}: ${p.description}`]))
+  };
+}
+
+// src/pipeline/character-state.ts
+var STATE_CARD_CHARS = 3e3;
+var rank = (i, n) => `${i + 1} of ${n}`;
+function stateQuestions(input) {
+  const questions = {};
+  const index = {};
+  const room = () => Object.keys(questions).length < input.maxQuestions;
+  input.npcs.forEach((npc, n) => {
+    for (const meter of input.pack.meters) {
+      if (!room()) return;
+      const current = input.levels[npc.id]?.[meter.key] ?? meter.initial;
+      const first = !input.assessed[npc.id];
+      const allowed = first ? meter.levels : meter.levels.filter((_, i) => Math.abs(i - current) <= 1);
+      const label = meterLabel(meter, input.playerName);
+      const scale = `Levels, lowest to highest: ${meter.levels.join(", ")}.`;
+      const instructions = first ? `Judge ${npc.name}'s ${label}. ${meter.about} ${scale} No level has been judged yet. Using ${npc.name}'s character description in state.characters and the story so far in state.recentAcceptedMessages and state.latestInput, choose the level that fits ${npc.name} now.` : `Judge ${npc.name}'s ${label}. ${meter.about} ${scale} Before the latest exchange ${npc.name} was "${meter.levels[current]}". Keep the previous level unless something in the latest exchange (the last messages in state.recentAcceptedMessages and state.latestInput) would realistically move it for someone with ${npc.name}'s character (state.characters). Choose the level that fits ${npc.name} now.`;
+      const id = `meter_${n + 1}_${meter.key}`;
+      questions[id] = { type: "choice", instructions, criteria: Object.fromEntries(allowed.map((level) => [level, `${level} (${rank(meter.levels.indexOf(level), meter.levels.length)})`])) };
+      index[id] = { kind: "meter", npcId: npc.id, npcName: npc.name, key: meter.key, levels: [...meter.levels], allowed: [...allowed] };
+    }
+  });
+  const present = ["player", ...input.npcs.map((n) => n.id)];
+  input.secrets.forEach((secret, s) => {
+    if (!room()) return;
+    const knowers = input.knownBy[secret.id] ?? secret.holders;
+    const candidates = present.filter((id2) => !knowers.includes(id2));
+    if (!candidates.length) return;
+    const names = (ids) => ids.map((id2) => input.actorNames[id2] ?? id2).join(", ") || "no one yet";
+    const criteria = { KEEP: "No one new learned it." };
+    for (const id2 of candidates) criteria[id2] = `${input.actorNames[id2] ?? id2} learned it.`;
+    if (candidates.length > 1) criteria.EVERYONE = "Everyone present learned it.";
+    const id = `reveal_${s + 1}`;
+    questions[id] = {
+      type: "choice",
+      instructions: `The secret state.secrets["${secret.id}"] is known to ${names(knowers)}. Did the latest exchange (the last messages in state.recentAcceptedMessages and state.latestInput) reveal it to anyone else present? Count only what was actually said, shown or found in the scene; hints and suspicion are not learning it. Choose KEEP if no one new learned it.`,
+      criteria
+    };
+    index[id] = { kind: "reveal", secretId: secret.id, candidates };
+  });
+  return { questions, index };
+}
+function stateEvidence(input) {
+  const characters = {};
+  for (const c of input.characters) {
+    const card = String(c.card ?? "");
+    characters[c.id] = { name: c.name, card: card.length > STATE_CARD_CHARS ? `${card.slice(0, STATE_CARD_CHARS)}\u2026` : card };
+  }
+  const secrets = {};
+  for (const s of input.secrets) secrets[s.id] = { text: s.text };
+  const build = (messages2) => ({
+    playerName: input.playerName,
+    characters,
+    secrets,
+    latestInput: input.latestInput,
+    recentAcceptedMessages: messages2.map((m) => ({ actorId: m.actorId, role: m.role, text: visibleText(m.text) }))
+  });
+  let messages = input.transcript.slice();
+  let state = build(messages);
+  while (JSON.stringify(state).length > input.maxChars && messages.length > 0) {
+    messages = messages.slice(1);
+    state = build(messages);
+  }
+  return state;
+}
+function applyStateAnswers(index, answers, previousLevels, previousKnownBy) {
+  const meters = structuredClone(previousLevels);
+  const knownBy = structuredClone(previousKnownBy);
+  const changes = [];
+  for (const [id, entry] of Object.entries(index)) {
+    const answer = answers[id];
+    const chosen = answer?.type === "choice" ? answer.choice : null;
+    if (entry.kind === "meter") {
+      meters[entry.npcId] ??= {};
+      const before = meters[entry.npcId][entry.key];
+      if (!chosen || !entry.allowed.includes(chosen)) continue;
+      const after = entry.levels.indexOf(chosen);
+      meters[entry.npcId][entry.key] = after;
+      if (before !== void 0 && before !== after) changes.push(`${entry.npcName}: ${entry.key} ${entry.levels[before]} \u2192 ${chosen}`);
+    } else {
+      if (!chosen || chosen === "KEEP") continue;
+      const learners = chosen === "EVERYONE" ? entry.candidates : entry.candidates.includes(chosen) ? [chosen] : [];
+      if (!learners.length) continue;
+      knownBy[entry.secretId] = [.../* @__PURE__ */ new Set([...knownBy[entry.secretId] ?? [], ...learners])];
+      changes.push(`secret ${entry.secretId} now known to ${learners.join(", ")}`);
+    }
+  }
+  return { meters, knownBy, changes };
+}
+function stateBlock(input) {
+  const parts = [];
+  const lines = input.meters ? Object.entries(input.levels).map(([npc, values]) => {
+    const described = input.pack.meters.filter((m) => Number.isInteger(values[m.key])).map((m) => `${meterLabel(m, input.playerName)} ${m.levels[values[m.key]]} (${rank(values[m.key], m.levels.length)})`);
+    return described.length ? `${input.names[npc] ?? npc}: ${described.join("; ")}.` : "";
+  }).filter(Boolean) : [];
+  if (lines.length) parts.push(["[Director character state \u2014 judged from play]", ...lines, "Play each character at these levels. They change only through what happens in the scene."].join("\n"));
+  const nameOf = (id) => id === "player" ? input.playerName : input.names[id] ?? id;
+  const secretLines = input.secretsOn ? input.secrets.map((s) => {
+    const who = (input.knownBy[s.id] ?? s.holders).map(nameOf);
+    return `- Known only to ${who.length ? who.join(" and ") : "no one"}: ${s.text}`;
+  }) : [];
+  if (secretLines.length) parts.push(["[Director knowledge boundaries]", ...secretLines, "Characters who do not know a secret must not act on it or show that they know it. Those who know it decide for themselves whether to use it."].join("\n"));
+  return parts.join("\n\n");
+}
+function meterFacts(pack, levels, playerName) {
+  const facts = {};
+  for (const [npc, values] of Object.entries(levels)) {
+    facts[npc] = {};
+    for (const meter of pack.meters) {
+      const value = values[meter.key];
+      if (Number.isInteger(value)) facts[npc][meterLabel(meter, playerName)] = `${meter.levels[value]} (${rank(value, meter.levels.length)})`;
+    }
+  }
+  return facts;
+}
+
+// src/lore/stage.ts
+var LORE_SCENE_MESSAGES = 8;
+function loreSceneState(transcript, latestInput, names, maxChars) {
+  const build = (messages2) => ({
+    latestInput,
+    recentAcceptedMessages: messages2.map((m) => ({ speaker: names[m.actorId] ?? m.actorId, role: m.role, text: visibleText(m.text) }))
+  });
+  let messages = transcript.slice(-LORE_SCENE_MESSAGES);
+  let state = build(messages);
+  while (JSON.stringify(state).length > maxChars && messages.length > 1) {
+    messages = messages.slice(1);
+    state = build(messages);
+  }
+  return state;
+}
+async function runLoreStage(books, evaluate, beam) {
+  const publicTrees = books.filter((b) => b.public).map((b) => b.tree);
+  const privateTrees = books.filter((b) => !b.public).map((b) => b.tree);
+  const empty = { refs: [], steps: [], requests: 0, cutShort: false, failedWorlds: [] };
+  const [pub, priv] = await Promise.all([
+    publicTrees.length ? selectLore(publicTrees, evaluate("public"), beam, { idPrefix: "lore_public" }) : Promise.resolve(empty),
+    privateTrees.length ? selectLore(privateTrees, evaluate("private"), beam, { idPrefix: "lore" }) : Promise.resolve(empty)
+  ]);
+  const refs = [...pub.refs, ...priv.refs].sort((a, b) => b.score - a.score).slice(0, beam.maxEntries);
+  const trees = new Map(books.map((b) => [b.tree.world, b]));
+  const evidence = [...pub.refs, ...priv.refs].sort((a, b) => b.score - a.score).map((ref) => {
+    const book = trees.get(ref.world);
+    return { book: ref.world, title: ref.title, text: book.tree.entries.get(ref.uid)?.content ?? "", public: book.public };
+  }).filter((item) => item.text.trim().length > 0);
+  return { refs, steps: [...pub.steps, ...priv.steps], requests: pub.requests + priv.requests, evidence, cutShort: pub.cutShort || priv.cutShort, failedWorlds: [...pub.failedWorlds, ...priv.failedWorlds] };
+}
+
 // src/controller.ts
 var PLAYER_ACTOR_ID = "player";
 var JEV_KEY_STORAGE = "rpDirector.jev.sessionKey";
 var STRUCTURED_KEY_STORAGE = "rpDirector.structured.sessionKey";
+var STAGED_MAX_QUESTIONS = 16;
+var STAGED_MAX_REACTION_TRIGGERS = 14;
+var STAGED_MAX_STATE_CHARS = 6e4;
+var STATE_MAX_CHARACTERS = 6;
+var LORE_STATE_CHARS = 24e3;
+function loreNote(turn) {
+  if (turn.error) return `Lore selection failed (${turn.error}); SillyTavern's keyword lore applies this turn.`;
+  if (!turn.result) return "";
+  const { refs, requests, failedWorlds } = turn.result;
+  const calls = `${requests} request${requests === 1 ? "" : "s"}`;
+  const failed = failedWorlds.length ? ` No valid answer for ${failedWorlds.join(", ")}; keyword lore stays on there.` : "";
+  return (refs.length ? `Lore: ${refs.map((r) => `${r.world} \u203A ${r.title}`).join("; ")} (${calls}).` : `Lore: nothing needed this turn (${calls}).`) + failed;
+}
 var Controller = class {
   host;
   settings;
@@ -4015,9 +5903,12 @@ var Controller = class {
   unsubscribe = [];
   continueRemaining = 0;
   toolRegistered = false;
+  /** Whether the host offers the World Info hooks lore selection needs. */
+  loreHooked = false;
   toolWindow = null;
   preparedTool = null;
   messageTasks = /* @__PURE__ */ new Set();
+  writerSettled = null;
   observerInFlight = /* @__PURE__ */ new Map();
   pendingSwipeMode = null;
   nativeTurnBusy = false;
@@ -4033,6 +5924,10 @@ var Controller = class {
   // ---- lifecycle --------------------------------------------------------------
   async init() {
     await this.host.loadFlags();
+    void loadLocalPacks().then((result) => {
+      if (result.warnings.length) console.warn("[RP Director] local packs:", ...result.warnings);
+      this.notify();
+    });
     const sub = (event, handler) => this.unsubscribe.push(this.host.on(event, handler));
     sub("CHAT_CHANGED", () => void this.onChatChanged());
     sub("GENERATION_STARTED", (type, params) => void this.onGenerationStarted(String(type), params));
@@ -4041,11 +5936,16 @@ var Controller = class {
     sub("MESSAGE_RECEIVED", (mesId, type) => {
       this.queueMessageReceived(Number(mesId), String(type ?? "normal"));
     });
+    if (this.host.ctx().eventTypes.CHARACTER_MESSAGE_RENDERED) sub("CHARACTER_MESSAGE_RENDERED", async (mesId) => {
+      if (this.settings.enabled && this.refreshResultFooter(Number(mesId))) await this.persist();
+    });
     sub("MESSAGE_SENT", (mesId) => this.onMessageSent(Number(mesId)));
     sub("MESSAGE_SWIPED", (mesId) => this.onMessageSwiped(Number(mesId)));
     sub("MESSAGE_EDITED", (mesId) => void this.onHeadChanged("edit", Number(mesId)));
     sub("MESSAGE_DELETED", () => void this.onHeadChanged("delete", null));
     sub("MESSAGE_SWIPE_DELETED", () => void this.onHeadChanged("unknown", null));
+    this.loreHooked = this.host.installLoreHook();
+    this.host.onLoreActivation = () => this.notify();
     this.registerWriterTool();
     this.unsubscribe.push(this.host.interceptNativeSend(
       () => this.settings.enabled && !this.host.isAutoDirectorEnabled(),
@@ -4069,6 +5969,7 @@ var Controller = class {
     for (const off of this.unsubscribe) off();
     this.unsubscribe = [];
     this.host.unregisterFunctionTool(DIRECTOR_TOOL_NAME);
+    this.host.removeLoreHook();
     for (const controller2 of this.observerInFlight.values()) controller2.abort(new Error("Director destroyed"));
     this.observerInFlight.clear();
     this.toolWindow = null;
@@ -4153,6 +6054,17 @@ var Controller = class {
     this.host.toast("error", message);
     this.notify();
   }
+  checkDecisionContext(built) {
+    const size = `${built.serializedCharacters}/${this.profile.budgets.maxSerializedCharacters} characters`;
+    if (built.overBudget) {
+      this.fail(`Judge context exceeds the limit (${size}) even after removing older messages. Shorten the message or manual attempt, or review the saved facts in Inspector. No decision was requested.`);
+      return false;
+    }
+    if (built.exclusions.length) {
+      this.inspect({ kind: "info", message: `Judge context (${size}): ${built.exclusions.join("; ")}.` });
+    }
+    return true;
+  }
   refreshStatus() {
     if (!this.settings.enabled) {
       this.status = "Off";
@@ -4221,19 +6133,21 @@ var Controller = class {
       const pending = this.record.pending;
       if (pending) {
         this.apply({ type: "cancel", attemptId: pending.attemptId, epoch: pending.epoch, reason: "reload before the writer started; the frozen resolution stays available" });
-        this.inspect({ kind: "info", message: "A prepared decision was found after reload. It was not re-assessed; press Director Send again to reuse it." });
+        this.inspect({ kind: "info", message: "An interrupted decision was found after reload. Its ruling remains in history. Send again when ready; a wording swipe can reuse an existing ruling." });
       }
       for (const attempt of Object.values(this.record.attempts)) {
         if (attempt.status === "writing" || attempt.status === "prepared") this.apply({ type: "cancel", attemptId: attempt.attemptId, epoch: attempt.epoch, reason: "reload during generation" });
       }
     }
     this.status = "Ready";
+    this.refreshResultFooters(0, chain);
     await this.persist();
     if (this.hasRepairableSelectedFailure() && this.canAdoptEmptyBaseline()) await this.repairSelectedBranch();
     this.refreshStatus();
   }
   async onChatChanged() {
     this.epoch += 1;
+    void this.host.armLore(null);
     this.inFlight?.abort(new Error("chat changed"));
     this.inFlight = null;
     for (const controller2 of this.observerInFlight.values()) controller2.abort(new Error("chat changed"));
@@ -4273,7 +6187,7 @@ var Controller = class {
     return Object.values(this.actorMap().byId).map((a) => ({ actorId: a.actorId, name: a.name, disabled: a.disabled }));
   }
   actionActorsForUi() {
-    return [{ actorId: PLAYER_ACTOR_ID, name: this.host.playerName(), disabled: false }, ...this.actorsForUi()];
+    return [{ actorId: PLAYER_ACTOR_ID, name: PLAYER_LABEL, disabled: false }, ...this.actorsForUi()];
   }
   // ---- cursors ----------------------------------------------------------------
   chainNow() {
@@ -4344,7 +6258,7 @@ var Controller = class {
   }
   async directorNext() {
     if (this.host.composerText().trim()) {
-      this.host.toast("warning", "The composer has text. Use Director Send to include it, or clear it for Director Next.");
+      this.host.toast("warning", "The composer has text. Use Send to include it, or clear it before continuing.");
       return;
     }
     await this.directorTurn("director_next");
@@ -4373,7 +6287,7 @@ var Controller = class {
       return false;
     }
     if (this.host.isAutoDirectorEnabled()) {
-      this.host.toast("warning", "The advanced RP Director is enabled. Disable it before using RP Director so only one Director participates in generation.");
+      this.host.toast("warning", "The legacy RP Director Auto is active. Enable RP Director to take over.");
       return false;
     }
     if (!this.record || !this.chatKey) {
@@ -4385,7 +6299,7 @@ var Controller = class {
       return false;
     }
     if (this.host.isAutoMode()) {
-      this.host.toast("warning", "Group auto mode is on. Turn it off before using the Director (M2-11: one generator at a time).");
+      this.host.toast("warning", "Group auto mode is on. Turn it off before using Director.");
       return false;
     }
     if (provisionalAttempts(this.record).length > 0) {
@@ -4393,7 +6307,7 @@ var Controller = class {
       return false;
     }
     if (this.record.projection.status === "stale") {
-      this.host.toast("warning", "Tracked state is stale (an earlier message changed). Set a baseline to continue.");
+      this.host.toast("warning", "Tracked state needs repair. Choose Repair selected branch from the Director menu.");
       return false;
     }
     if (this.record.projection.status === "unknown") {
@@ -4408,10 +6322,10 @@ var Controller = class {
     if (this.profile.mode === "binding" && !this.settings.bindingConfirmedAt) {
       const ok = await this.host.confirm(
         "Binding outcomes and frozen swipes",
-        "<p>This profile makes Director rulings <b>binding</b>: a resolved outcome is frozen before the writer runs and is <b>reused across wording swipes and regenerations</b>. Only <i>Reroll</i> or a changed action creates a new resolution. A post-reply observer prepares state changes, which commit implicitly when you continue from that reply.</p><p>Native Send still works as an unadjudicated bypass. Choose the <b>Advisory</b> profile in settings instead if you want soft guidance without frozen outcomes.</p>"
+        "<p>Director uses normal <b>Send and Enter</b> to decide consequential attempts before the writer runs. A ruled outcome is <b>preserved across wording swipes and regenerations</b>. Explicit rerolls or reassessments change the ruling. Newly planned NPC actions pause for your review when the writer calls the Director tool.</p><p>The observer checks the reply; its validated changes commit when you continue from that reply or choose <b>Commit reply</b>. Disable RP Director in Extensions to return to ordinary chat.</p>"
       );
       if (!ok) {
-        this.host.toast("info", "Binding mode not confirmed. Select the Advisory profile in settings, or confirm next time.");
+        this.host.toast("info", "Cancelled; nothing was generated. Confirm next time, or disable RP Director in Extensions for ordinary chat.");
         return false;
       }
       this.settings.bindingConfirmedAt = (/* @__PURE__ */ new Date()).toISOString();
@@ -4428,12 +6342,25 @@ var Controller = class {
     const chatKey = this.chatKey;
     const declarationRevision = this.actionDraftRevision;
     const profileRevisionAtStart = this.profile.revision;
+    const reactionSettings = structuredClone(this.settings.reactions);
+    const reactionSettingsAtStart = JSON.stringify(reactionSettings);
     const sceneIdAtStart = record.projection.state.sceneId;
+    const modules = { ...this.settings.modules, reactions: reactionSettings.enabled };
     for (const attempt of Object.values(record.attempts)) {
       if (attempt.status === "writing" || attempt.status === "prepared") this.apply({ type: "cancel", attemptId: attempt.attemptId, epoch: attempt.epoch, reason: "superseded by a new Director turn" });
     }
     if (composerText.trim().startsWith("/")) {
       this.inspect({ kind: "info", message: "Composer holds a slash command; passed to the host parser without a Director decision." });
+      await this.persist();
+      try {
+        await this.host.generate(null);
+      } catch (e) {
+        console.warn(e);
+      }
+      return;
+    }
+    if (!modules.speaker && !modules.decisions && !modules.reactions && !modules.meters && !modules.secrets && !modules.lore) {
+      this.inspect({ kind: "info", message: "Every Director module is off; native generation with no Director request or injection." });
       await this.persist();
       try {
         await this.host.generate(null);
@@ -4456,8 +6383,14 @@ var Controller = class {
     const lastSpeakerActorId = lastAvatar ? actors.byAvatar[lastAvatar] ?? null : null;
     let explicit = this.speakerOverride && this.speakerOverride !== "auto" ? this.speakerOverride : null;
     if (!isGroup && eligible.length === 1) explicit = eligible[0];
-    const manual = this.actionDraft ? this.buildDeclaredAction(actors) : null;
-    let action = manual ?? this.buildAutomaticAction(composerText, record.projection.state.sceneId);
+    const nativeSpeaker = isGroup && !explicit && !modules.speaker;
+    const changed = () => this.actionDraftRevision !== declarationRevision || this.profile.revision !== profileRevisionAtStart || this.record?.projection.state.sceneId !== sceneIdAtStart || JSON.stringify(this.settings.reactions) !== reactionSettingsAtStart;
+    const manual = modules.decisions && this.actionDraft ? this.buildDeclaredAction(actors) : null;
+    if (this.settings.pipeline === "staged" && !manual && composerText.trim()) {
+      await this.stagedTurn({ kind, composerText, epoch, chatKey, actors, isGroup, candidates, eligible, names, explicit, nativeSpeaker, lastSpeakerActorId, modules, reactionSettings, changed });
+      return;
+    }
+    let action = manual ?? (modules.decisions ? this.buildAutomaticAction(composerText, record.projection.state.sceneId) : null);
     const established = record.projection.state.variables;
     const gate = gateAction(action, established, this.profile.outcomes, {
       actorPolicy: this.profile.actorPolicy,
@@ -4466,9 +6399,9 @@ var Controller = class {
       settledGains: record.projection.state.settledGains
     });
     const questions = {};
-    const needSpeaker = isGroup && !explicit && eligible.length > 0;
+    const needSpeaker = modules.speaker && isGroup && !explicit && eligible.length > 0;
     if (needSpeaker) questions.speaker = speakerQuestion(eligible, names, this.profile.speakers.includeYield, composerText.trim() || null);
-    const needGain = gate.kind === "adjudicate";
+    const needGain = modules.decisions && gate.kind === "adjudicate";
     const drivingId = this.profile.drivingQuestionId;
     if (needGain && action) {
       if (manual) questions[drivingId] = drivingId === "gain_score" ? attemptScoreQuestion(action) : attemptNoulQuestion(action);
@@ -4478,10 +6411,20 @@ var Controller = class {
         questions[drivingId] = autoAttemptNoulQuestion();
       }
     }
+    const reactionQuestions = /* @__PURE__ */ new Map();
+    if (reactionSettings.enabled && !manual && composerText.trim()) {
+      const remaining = Math.max(0, this.profile.budgets.maxQuestions - Object.keys(questions).length);
+      const candidates2 = explicit ? [explicit].filter((id) => eligible.includes(id)) : eligible;
+      for (const [index, id] of candidates2.slice(0, remaining).entries()) {
+        const questionId = `npc_reaction_${index + 1}`;
+        reactionQuestions.set(id, questionId);
+        questions[questionId] = reactionQuestion(id);
+      }
+    }
     const recent = this.host.chat().filter((m) => !m.is_system).slice(-this.profile.budgets.maxRecentMessages).map((m) => ({
       actorId: m.is_user ? PLAYER_ACTOR_ID : actors.byAvatar[m.original_avatar ?? ""] ?? `name:${m.name}`,
       role: m.is_user ? "user" : "assistant",
-      text: m.mes ?? ""
+      text: m.is_user ? m.mes ?? "" : stripResultFooter(m.mes ?? "")
     }));
     const publicCards = {};
     const built = buildState({
@@ -4498,6 +6441,10 @@ var Controller = class {
       maxRecentMessages: this.profile.budgets.maxRecentMessages,
       maxSerializedCharacters: this.profile.budgets.maxSerializedCharacters
     });
+    if (!this.checkDecisionContext(built)) {
+      await this.persist();
+      return;
+    }
     const snapshot = {
       chatId: chatKey,
       cursorBefore: this.chainNow().at(-1),
@@ -4544,12 +6491,15 @@ var Controller = class {
           this.notify();
           return;
         }
-        this.status = "Paused";
-        this.inspect({ kind: "error", message: `Speaker provider failed: ${msg}. Pick a speaker explicitly or retry.`, questions, stateSent: built.state, providerKind: provider.kind, networkCalls });
-        this.host.toast("error", `Speaker assessment failed: ${msg}. Choose a speaker in the bar and try again.`);
-        await this.persist();
-        this.notify();
-        return;
+        if (needSpeaker) {
+          this.status = "Paused";
+          this.inspect({ kind: "error", message: `Speaker provider failed: ${msg}. Pick a speaker explicitly or retry.`, questions, stateSent: built.state, providerKind: provider.kind, networkCalls });
+          this.host.toast("error", `Speaker assessment failed: ${msg}. Choose a speaker in the bar and try again.`);
+          await this.persist();
+          this.notify();
+          return;
+        }
+        this.inspect({ kind: "info", message: `Optional NPC reaction unavailable; continuing without it. ${msg}`, questions, stateSent: built.state, networkCalls });
       }
       this.inFlight = null;
       if (epoch !== this.epoch || this.chatKey !== chatKey) {
@@ -4558,14 +6508,14 @@ var Controller = class {
       }
       if (kind === "director_send" && this.host.composerText() !== composerText) {
         this.status = "Ready";
-        this.inspect({ kind: "error", message: "Composer text changed while deciding; preparation discarded (nothing was frozen).", questions, answers: result.answers, stateSent: built.state, networkCalls });
-        this.host.toast("warning", "Your message changed while the Director was deciding. Press Director Send again.");
+        this.inspect({ kind: "error", message: "Composer text changed while deciding; preparation discarded (nothing was frozen).", questions, answers: result?.answers ?? null, stateSent: built.state, networkCalls });
+        this.host.toast("warning", "Your message changed while Director was deciding. Press Send again.");
         await this.persist();
         return;
       }
-      if (this.actionDraftRevision !== declarationRevision || this.profile.revision !== profileRevisionAtStart || this.record?.projection.state.sceneId !== sceneIdAtStart) {
+      if (changed()) {
         this.status = "Ready";
-        this.inspect({ kind: "error", message: "The declared attempt, actor policy, profile, or scene changed while deciding; the result was discarded before freeze.", questions, answers: result.answers, stateSent: built.state, networkCalls });
+        this.inspect({ kind: "error", message: "The declared attempt, actor policy, profile, reactions, or scene changed while deciding; the result was discarded before freeze.", questions, answers: result?.answers ?? null, stateSent: built.state, networkCalls });
         this.host.toast("warning", "The attempt or scene changed while the Director was deciding. Review it and send again.");
         await this.persist();
         return;
@@ -4583,6 +6533,8 @@ var Controller = class {
     let speaker;
     if (!isGroup) {
       speaker = { questionId: null, eligibleActorIds: eligible, raw: null, adjusted: null, selected: eligible[0] ?? YIELD, source: eligible.length ? "single" : "yield", tieBroken: false };
+    } else if (nativeSpeaker) {
+      speaker = null;
     } else {
       const decided = decideSpeaker({
         candidates,
@@ -4676,16 +6628,487 @@ var Controller = class {
         });
       }
     }
-    const speakerName = speaker.selected !== YIELD ? names[speaker.selected] ?? null : null;
+    let reaction = null;
+    const reactionAnswer = speaker ? result?.answers[reactionQuestions.get(speaker.selected) ?? ""] : void 0;
+    if (!action && reactionSettings.enabled && speaker && speaker.selected !== YIELD && reactionAnswer?.type === "choice" && ["resolve", "secret", "exposure"].includes(reactionAnswer.choice)) {
+      try {
+        reaction = chooseReaction(reactionAnswer.choice, reactionSettings, speaker.selected, randomDraw().u);
+      } catch (error) {
+        this.inspect({ kind: "info", message: `NPC reaction skipped: ${error.message}` });
+      }
+    }
+    const advisoryNotes = [];
+    if (this.profile.mode === "advisory" && action && result?.answers[drivingId]) {
+      const a = result.answers[drivingId];
+      const sig = normaliseSignal(a);
+      if (sig.ok) advisoryNotes.push(`Support for the requested gain "${action.requestedGain}" is assessed at ${sig.signal.x.toFixed(2)} on a 0\u20131 scale (${a.provenance}). Treat this as guidance about plausibility, not a ruling.`);
+    }
+    const speakerLabel = speaker ? names[speaker.selected] ?? speaker.selected : "chosen by SillyTavern";
+    const fallbackMessage = gate.kind === "skip" ? `No adjudication (${gate.reason.replace(/_/g, " ")}). Speaker ${speakerLabel}.` : action && this.profile.mode === "advisory" ? `Advisory: gain support assessed, no binding outcome. Speaker ${speakerLabel}.` : `Speaker ${speakerLabel}; no action declared.`;
+    await this.finishTurn({
+      kind,
+      composerText,
+      epoch,
+      actors,
+      isGroup,
+      names,
+      speaker,
+      preparedAction: resolution ? action : gate.kind === "skip" ? action : null,
+      resolution,
+      bandId: bandId2,
+      reaction,
+      snapshot,
+      established,
+      decisionsOn: modules.decisions,
+      disarmDeclaration: Boolean(action),
+      advisoryNotes,
+      questions: Object.keys(questions).length ? questions : null,
+      answers: result?.answers ?? null,
+      stateSent: built.state,
+      result,
+      networkCalls,
+      actionId: action?.actionId ?? null,
+      applicability: action?.applicability ?? null,
+      fallbackMessage,
+      messageSuffix: "",
+      stateBlock: "",
+      loreCursor: null
+    });
+  }
+  /**
+   * Staged pipeline (docs/STAGED-JEV-PLAN.md): Speaker ∥ A (move) → B (routing)
+   * → E (ruling), then the same freeze and writer path as legacy.
+   */
+  async stagedTurn(c) {
+    const record = this.record;
+    const established = record.projection.state.variables;
+    const npcs = c.eligible;
+    const playerName = c.names[PLAYER_ACTOR_ID];
+    const actorsIn = { [PLAYER_ACTOR_ID]: { name: playerName, control: "user" } };
+    for (const id of npcs) {
+      const actor = c.actors.byId[id];
+      actorsIn[id] = { name: actor.name, control: "npc", card: this.host.cardText(actor.avatar) };
+    }
+    const transcript = this.host.chat().filter((m) => !m.is_system).slice(-this.profile.budgets.maxRecentMessages).map((m) => ({
+      actorId: m.is_user ? PLAYER_ACTOR_ID : c.actors.byAvatar[m.original_avatar ?? ""] ?? `name:${m.name}`,
+      role: m.is_user ? "user" : "assistant",
+      text: m.is_user ? m.mes ?? "" : stripResultFooter(m.mes ?? "")
+    }));
+    const needSpeaker = c.modules.speaker && c.isGroup && !c.explicit && npcs.length > 0;
+    const reactionTargets = c.modules.reactions ? (c.explicit ? [c.explicit].filter((id) => npcs.includes(id)) : npcs).slice(0, STAGED_MAX_REACTION_TRIGGERS) : [];
+    const chain = this.chainNow();
+    const cursorBefore = chain.at(-1);
+    let provider;
+    try {
+      provider = this.provider();
+    } catch (e) {
+      this.fail(`Connection error: ${e.message}`);
+      return;
+    }
+    let networkCalls = 0;
+    const abort = new AbortController();
+    this.inFlight = abort;
+    let catalogRevision = "pack:pending";
+    const snapshotBase = () => ({
+      chatId: c.chatKey,
+      cursorBefore,
+      stateRevision: record.projection.state.revision,
+      scopeId: "shared-public",
+      profileRevision: this.profile.revision,
+      catalogRevision,
+      actorBindingRevision: c.actors.order.join(",")
+    });
+    const ask = async (stage, questions2, state) => {
+      const check = checkBatch(questions2, STAGED_MAX_QUESTIONS, Object.keys(questions2).map(() => "shared-public"));
+      if (!check.ok) throw new StagedError(stage, `batch rejected: ${check.errors.join("; ")}`);
+      if (this.isNetworkProvider()) networkCalls += 1;
+      return provider.evaluate({ requestId: newId("req"), phase: "guide", snapshot: { ...snapshotBase(), state }, questions: questions2 }, abort.signal);
+    };
+    const characters = npcs.slice(0, STATE_MAX_CHARACTERS).map((id) => ({ id, name: c.names[id], card: actorsIn[id].card }));
+    const notes = [];
+    const loreRun = c.modules.lore ? this.startLore(c, transcript, ask) : null;
+    let pack = this.chatPack();
+    if (record.story.packId === "auto" && (c.modules.decisions || c.modules.meters)) {
+      try {
+        const pick = await ask("pack", { pack: packQuestion(listPacks()) }, stateEvidence({ transcript, latestInput: c.composerText, characters, secrets: [], playerName, maxChars: STAGED_MAX_STATE_CHARS }));
+        const answer = pick.answers.pack;
+        if (answer?.type === "choice" && hasPack(answer.choice) && this.record === record) {
+          record.story = { ...record.story, packId: answer.choice, packSource: "judge" };
+          pack = packById(answer.choice);
+          notes.push(`Pack for this chat: ${pack.label} (picked by the judge).`);
+        }
+      } catch (e) {
+        notes.push(`Pack pick failed (${e.message}); used ${pack.label} this turn.`);
+      }
+    }
+    catalogRevision = `pack:${pack.id}@${pack.version}`;
+    const story = record.story;
+    const stateNpcs = characters.map(({ id, name: name2 }) => ({ id, name: name2 }));
+    const before = levelsAt(story, chain, pack, stateNpcs.map((n) => n.id));
+    const knownBefore = knownByAt(story, chain);
+    const wantMeters = c.modules.meters && pack.meters.length > 0 && stateNpcs.length > 0;
+    const wantSecrets = c.modules.secrets && story.secrets.length > 0;
+    const built = wantMeters || wantSecrets ? stateQuestions({
+      pack: wantMeters ? pack : { ...pack, meters: [] },
+      npcs: stateNpcs,
+      levels: before.levels,
+      assessed: before.assessed,
+      playerName,
+      secrets: wantSecrets ? story.secrets : [],
+      knownBy: knownBefore,
+      actorNames: { ...c.names, player: playerName },
+      maxQuestions: STAGED_MAX_QUESTIONS
+    }) : null;
+    let stateError = null;
+    const stateRun = built && Object.keys(built.questions).length ? ask("state", built.questions, stateEvidence({ transcript, latestInput: c.composerText, characters, secrets: wantSecrets ? story.secrets : [], playerName, maxChars: STAGED_MAX_STATE_CHARS })).catch((e) => {
+      stateError = e instanceof ProviderError ? `${e.code}: ${e.message}` : e.message;
+      return null;
+    }) : Promise.resolve(null);
+    const judged = stateRun.then((result) => applyStateAnswers(built?.index ?? {}, result?.answers ?? {}, before.levels, knownBefore));
+    const metersForRuling = wantMeters ? () => judged.then((state) => meterFacts(pack, state.meters, playerName)) : void 0;
+    let out;
+    try {
+      out = await runStaged({
+        pack,
+        playerId: PLAYER_ACTOR_ID,
+        actors: actorsIn,
+        eligibleNpcIds: npcs,
+        latestInput: c.composerText,
+        transcript,
+        facts: jsonSafe(established),
+        modules: c.modules,
+        speakerQuestion: needSpeaker ? speakerQuestion(npcs, c.names, this.profile.speakers.includeYield, c.composerText.trim() || null) : null,
+        reactionQuestions: Object.fromEntries(reactionTargets.map((id) => [id, reactionQuestion(id)])),
+        maxChars: STAGED_MAX_STATE_CHARS,
+        meters: metersForRuling,
+        lore: loreRun ? () => loreRun.then((turn) => turn.result?.evidence ?? []) : void 0,
+        maxLoreChars: this.settings.lore.judgeChars
+      }, { evaluate: ask });
+    } catch (e) {
+      abort.abort(new Error("staged turn stopped"));
+      if (this.inFlight === abort) this.inFlight = null;
+      if (c.epoch !== this.epoch || this.chatKey !== c.chatKey) return;
+      const stage = e instanceof StagedError ? e.stage : "decision";
+      const msg = e instanceof ProviderError ? `${e.code}: ${e.message}` : e.message;
+      this.status = "Paused";
+      this.inspect({ kind: "error", message: `Staged ${stage} stage stopped before anything was frozen; nothing was generated. ${msg}`, networkCalls, providerKind: provider.kind });
+      this.host.toast("error", `Director could not complete the ${stage} stage: ${msg}. Nothing was generated.`);
+      await this.persist();
+      this.notify();
+      return;
+    }
+    const stateResult = await stateRun;
+    const judgedState = await judged;
+    const loreTurn = loreRun ? await loreRun : null;
+    if (loreTurn) {
+      const note = loreNote(loreTurn);
+      if (note) notes.push(note);
+    }
+    if (stateError) notes.push(`Character state kept from before (the judge request failed: ${stateError}).`);
+    else if (judgedState.changes.length) notes.push(`State: ${judgedState.changes.join("; ")}.`);
+    if (stateResult && built) out.records.push({ stage: "state", questions: built.questions, state: null, result: stateResult });
+    if (this.inFlight === abort) this.inFlight = null;
+    const loreSteps = loreTurn?.result?.steps ?? [];
+    const questions = Object.assign({}, ...out.records.map((r) => r.questions), ...loreSteps.map((step) => step.questions));
+    const answers = Object.assign({}, ...out.records.map((r) => r.result.answers), ...loreSteps.flatMap((step) => step.results.map((r) => r.answers)));
+    const stateSent = out.ruling?.projection.state ?? out.records.filter((r) => r.state !== null).at(-1)?.state ?? null;
+    const lastResult = out.records.at(-1)?.result ?? null;
+    if (c.epoch !== this.epoch || this.chatKey !== c.chatKey) {
+      this.inspect({ kind: "error", message: "Decision result arrived after the chat changed; discarded." });
+      return;
+    }
+    if (c.kind === "director_send" && this.host.composerText() !== c.composerText) {
+      this.status = "Ready";
+      this.inspect({ kind: "error", message: "Composer text changed while deciding; preparation discarded (nothing was frozen).", questions, answers, stateSent, networkCalls });
+      this.host.toast("warning", "Your message changed while Director was deciding. Press Send again.");
+      await this.persist();
+      return;
+    }
+    if (c.changed()) {
+      this.status = "Ready";
+      this.inspect({ kind: "error", message: "The profile, reactions, or scene changed while deciding; the result was discarded before freeze.", questions, answers, stateSent, networkCalls });
+      this.host.toast("warning", "The scene or settings changed while the Director was deciding. Send again.");
+      await this.persist();
+      return;
+    }
+    if (loreTurn?.result) record.story = withLore(record.story, cursorBefore, { at: Date.now(), refs: loreTurn.result.refs, requests: loreTurn.result.requests, books: loreTurn.books, failed: loreTurn.result.failedWorlds });
+    if (stateResult) record.story = withSnapshot(record.story, cursorBefore, { at: Date.now(), meters: wantMeters ? judgedState.meters : snapshotAt(record.story, chain)?.meters ?? {}, knownBy: judgedState.knownBy });
+    const shownLevels = Object.fromEntries(Object.entries(judgedState.meters).filter(([npc]) => stateResult || before.assessed[npc]));
+    const writerState = stateBlock({ pack, levels: wantMeters ? shownLevels : {}, names: c.names, playerName, secrets: record.story.secrets, knownBy: judgedState.knownBy, meters: wantMeters, secretsOn: wantSecrets });
+    let speaker;
+    if (!c.isGroup) {
+      speaker = { questionId: null, eligibleActorIds: npcs, raw: null, adjusted: null, selected: npcs[0] ?? YIELD, source: npcs.length ? "single" : "yield", tieBroken: false };
+    } else if (c.nativeSpeaker) {
+      speaker = null;
+    } else {
+      const decided = decideSpeaker({
+        candidates: c.candidates,
+        explicitActorId: c.explicit,
+        includeYield: this.profile.speakers.includeYield,
+        priors: this.profile.speakers.priors,
+        repetitionFactor: this.profile.speakers.repetitionFactor,
+        lastSpeakerActorId: c.lastSpeakerActorId,
+        answer: out.speakerAnswer,
+        questionId: needSpeaker ? "speaker" : null
+      });
+      if (!decided.ok) {
+        this.status = "Paused";
+        this.inspect({ kind: "error", message: `Speaker could not be resolved: ${decided.error}`, questions, answers, stateSent, networkCalls, providerKind: lastResult?.provider ?? null });
+        this.host.toast("warning", `Speaker unresolved: ${decided.error}. Choose a speaker in the bar.`);
+        await this.persist();
+        this.notify();
+        return;
+      }
+      speaker = decided.decision;
+    }
+    const route = out.route;
+    const npcOwner = route && (route.route === "SPECIFIED_NPC_MOVE" || route.route === "HANDOFF") && route.ownerId && npcs.includes(route.ownerId) ? route.ownerId : null;
+    if (npcOwner && c.isGroup && !c.explicit) {
+      speaker = { questionId: speaker?.questionId ?? null, eligibleActorIds: npcs, raw: speaker?.raw ?? null, adjusted: speaker?.adjusted ?? null, selected: npcOwner, source: "move_owner", tieBroken: false };
+    }
+    let action = null;
+    let resolution = null;
+    let bandId2 = null;
+    let reaction = null;
+    const advisoryNotes = [];
+    let unruledReason = out.outcome === "unruled" ? route?.reason ?? "the routing is unresolved" : null;
+    if (out.outcome === "ruled" && route && out.move && out.ruling) {
+      const declared = this.stagedAction(out, record.projection.state.sceneId, pack);
+      const gate = gateAction(declared, established, this.profile.outcomes, {
+        actorPolicy: this.profile.actorPolicy,
+        playerActorId: PLAYER_ACTOR_ID,
+        currentSceneId: record.projection.state.sceneId,
+        settledGains: record.projection.state.settledGains
+      });
+      const snapshot = { ...snapshotBase(), state: out.ruling.projection.state };
+      if (gate.kind === "skip" || gate.kind === "pause") {
+        unruledReason = `the actor policy leaves it unruled (${gate.reason.replace(/_/g, " ")})`;
+      } else if (gate.kind === "rules") {
+        action = declared;
+        resolution = freeze({
+          resolutionId: newId("res"),
+          previousResolutionId: null,
+          action: declared,
+          snapshot,
+          assessment: null,
+          decisionSource: "rules",
+          policyRevision: this.profile.revision,
+          band: null,
+          method: "rules",
+          draw: null,
+          outcome: gate.outcome.name,
+          def: gate.outcome,
+          cursorBefore: null,
+          generation: 1,
+          providerKind: null,
+          requestedModel: null,
+          returnedModel: null,
+          now: Date.now()
+        });
+      } else if (this.profile.mode === "binding") {
+        const sig = normaliseSignal(out.ruling.answer);
+        if (!sig.ok) {
+          this.status = "Paused";
+          this.fail(`Assessment invalid: ${sig.error}`, { questions, answers, stateSent, networkCalls });
+          return;
+        }
+        const draw = this.profile.resolutionMethod === "sample" ? randomDraw().u : null;
+        const resolved = resolveOutcome({ bands: this.profile.bands, outcomes: this.profile.outcomes, method: this.profile.resolutionMethod, signal: sig.signal, draw });
+        if (!resolved.ok) {
+          this.status = "Paused";
+          this.fail(`Outcome could not be resolved: ${resolved.error}`, { questions, answers, stateSent, networkCalls });
+          return;
+        }
+        action = declared;
+        bandId2 = resolved.value.band.id;
+        resolution = freeze({
+          resolutionId: newId("res"),
+          previousResolutionId: null,
+          action: declared,
+          snapshot,
+          assessment: out.ruling.answer,
+          decisionSource: "provider",
+          policyRevision: this.profile.revision,
+          band: resolved.value.band,
+          method: resolved.value.method,
+          draw: resolved.value.draw,
+          outcome: resolved.value.outcome,
+          def: resolved.value.def,
+          cursorBefore: null,
+          generation: 1,
+          providerKind: lastResult?.provider ?? null,
+          requestedModel: lastResult?.requestedModel ?? null,
+          returnedModel: lastResult?.returnedModel ?? null,
+          now: Date.now()
+        });
+      } else {
+        const sig = normaliseSignal(out.ruling.answer);
+        if (sig.ok) advisoryNotes.push(`Support for "${out.move.span.text}" is assessed at ${sig.signal.x.toFixed(2)} on a 0\u20131 scale. Treat this as guidance about plausibility, not a ruling.`);
+      }
+    } else if (out.outcome === "handoff" && route?.ownerId && c.modules.reactions) {
+      try {
+        reaction = chooseReaction("initiative", c.reactionSettings, route.ownerId, randomDraw().u);
+      } catch (error) {
+        this.inspect({ kind: "info", message: `Hand-off reaction skipped: ${error.message}` });
+      }
+    } else if (out.outcome === "no_move" && c.modules.reactions && speaker && speaker.selected !== YIELD) {
+      const answer = out.reactionAnswers[speaker.selected];
+      if (answer?.type === "choice" && ["resolve", "secret", "exposure"].includes(answer.choice)) {
+        try {
+          reaction = chooseReaction(answer.choice, c.reactionSettings, speaker.selected, randomDraw().u);
+        } catch (error) {
+          this.inspect({ kind: "info", message: `NPC reaction skipped: ${error.message}` });
+        }
+      }
+    }
+    const name = (id) => id ? c.names[id] ?? id : "";
+    const moveText = out.move ? `"${out.move.span.text}"` : "no move to rule on";
+    const routeParts = route ? [
+      route.route.toLowerCase().replace(/_/g, " "),
+      route.familyKey,
+      route.ownerId ? `owner ${name(route.ownerId)}` : "",
+      route.targetId ? `target ${name(route.targetId)}` : "",
+      out.ruling?.answer.type === "noul" ? `P=${out.ruling.answer.noul.toFixed(2)}` : ""
+    ].filter(Boolean) : [];
+    const messageSuffix = ` Staged: ${moveText}${routeParts.length ? ` (${routeParts.join(", ")})` : ""}; ${networkCalls || out.records.length} request${(networkCalls || out.records.length) === 1 ? "" : "s"}.${notes.length ? " " + notes.join(" ") : ""}`;
+    const speakerLabel = speaker ? name(speaker.selected) : "chosen by SillyTavern";
+    const fallbackMessage = unruledReason ? `Staged: unruled, because ${unruledReason}. Speaker ${speakerLabel}.${messageSuffix}` : out.outcome === "handoff" ? `Staged: hand-off to ${name(route?.ownerId)}; NPC reactions are off, so no response was drawn. Speaker ${speakerLabel}.${messageSuffix}` : advisoryNotes.length ? `Advisory: support assessed, no binding outcome. Speaker ${speakerLabel}.${messageSuffix}` : `Speaker ${speakerLabel}; no move to rule on.${messageSuffix}`;
+    await this.finishTurn({
+      kind: c.kind,
+      composerText: c.composerText,
+      epoch: c.epoch,
+      actors: c.actors,
+      isGroup: c.isGroup,
+      names: c.names,
+      speaker,
+      preparedAction: action,
+      resolution,
+      bandId: bandId2,
+      reaction,
+      snapshot: { ...snapshotBase(), state: stateSent },
+      established,
+      decisionsOn: c.modules.decisions,
+      disarmDeclaration: false,
+      advisoryNotes,
+      questions: Object.keys(questions).length ? questions : null,
+      answers,
+      stateSent,
+      result: lastResult,
+      networkCalls,
+      actionId: action?.actionId ?? null,
+      applicability: action?.applicability ?? null,
+      fallbackMessage,
+      messageSuffix,
+      stateBlock: writerState,
+      loreCursor: loreTurn?.result ? cursorBefore : null
+    });
+  }
+  /**
+   * Stage C for one staged turn. Books come from every cast member (a group
+   * scan only loads the speaker's, so the ruling may know more than the
+   * writer's World Info can carry). Never rejects: a failure leaves
+   * SillyTavern's keyword lore in charge for the turn.
+   */
+  startLore(c, transcript, ask) {
+    const settings = this.settings.lore;
+    const cast = [.../* @__PURE__ */ new Set([...c.eligible, ...c.explicit ? [c.explicit] : []])].map((id) => c.actors.byId[id]?.avatar).filter((a) => Boolean(a));
+    return (async () => {
+      try {
+        const catalog = await this.host.loreCatalog(cast);
+        const roots = this.host.tunnelVisionRoots();
+        const inputs = [];
+        for (const book of catalog.books) {
+          if (effectiveMode(settings, book.world, this.host.tunnelVisionManages(book.world)) === "off") continue;
+          const tree = buildTree(book.world, catalog.entries, roots[book.world] ?? null);
+          if (tree) inputs.push({ tree, public: bookSettings(settings, book.world).public });
+        }
+        const books = catalog.books.map((b) => b.world);
+        if (inputs.length === 0) return { result: null, books, error: null };
+        const state = loreSceneState(transcript, c.composerText, c.names, LORE_STATE_CHARS);
+        const result = await runLoreStage(inputs, () => (questions) => ask("lore", questions, state), {
+          width: settings.width,
+          minProbability: settings.minProbability,
+          maxEntries: settings.maxEntries,
+          maxDepth: settings.maxDepth
+        });
+        return { result, books, error: null };
+      } catch (e) {
+        return { result: null, books: [], error: e instanceof ProviderError ? `${e.code}: ${e.message}` : e.message };
+      }
+    })();
+  }
+  /**
+   * Arms the writer's World Info scan with the lore of the turn an attempt
+   * belongs to. Lore binds to attempts, never to transcript position, so a tool
+   * follow-up, a swipe of it, or a later Next turn each get exactly their own.
+   */
+  async armLoreForAttempt(attemptId) {
+    if (!attemptId || !this.settings.modules.lore || !this.record) return;
+    const cursor = this.record.attempts[attemptId]?.loreCursor;
+    const found = cursor ? this.record.story.lore[cursor] : void 0;
+    if (!found) return;
+    const settings = this.settings.lore;
+    await this.host.armLore(lorePlan(found.refs, (world) => effectiveMode(settings, world, this.host.tunnelVisionManages(world)), found.books, found.failed));
+  }
+  /** The frozen action for a staged ruling: the player's own passage, routed. */
+  stagedAction(out, sceneId, pack) {
+    const route = out.route;
+    const span = out.move.span;
+    const action = declareAction({
+      actionId: newId("act"),
+      // The pack family is kept on the move; the template only shapes identity and labels.
+      templateId: templateById(route.familyKey) ? route.familyKey : "acquire_secure",
+      actingActorId: route.ownerId,
+      playerActorId: PLAYER_ACTOR_ID,
+      targetActorIds: route.targetId && !["SELF", "SEVERAL", "SCENE"].includes(route.targetId) ? [route.targetId] : [],
+      attemptedAction: out.antecedentText ? `${span.text} (referring to: ${out.antecedentText})` : span.text,
+      requestedGain: span.text,
+      applicability: "favorable",
+      uncertainConsequential: true,
+      opposed: false,
+      resolutionScope: "attempt",
+      sceneId,
+      persistentFactKey: "",
+      failureStake: { kind: "other", detail: "Failure must move the scene without erasing established progress or inventing a disproportionate consequence." },
+      availableEvidence: ""
+    });
+    action.pipeline = "staged";
+    action.move = {
+      packId: pack.id,
+      packVersion: pack.version,
+      spanId: span.id,
+      passage: span.text,
+      antecedent: out.antecedentText,
+      route: route.route,
+      familyKey: route.familyKey,
+      ownerId: route.ownerId,
+      targetId: route.targetId,
+      specification: route.specification,
+      count: out.move.count
+    };
+    if (out.move.count === "multiple") action.additionalAttemptsPolicy = "defer_after_first";
+    return action;
+  }
+  /** The staged ruling question for a frozen move, for Reassess on the same evidence. */
+  stagedRulingQuestion(move) {
+    const pack = packById(move.packId);
+    const family = familyByKey(pack, move.familyKey) ?? pack.families[0];
+    return rulingQuestion({ family, pack, hasAntecedent: move.antecedent !== null });
+  }
+  /** Shared end of a turn for both pipelines: writer injection, prepared attempt, generation. */
+  async finishTurn(t) {
+    const { kind, composerText, epoch, actors, isGroup, names, speaker, resolution, reaction } = t;
+    const speakerId = speaker ? speaker.selected : null;
+    const speakerName = speakerId && speakerId !== YIELD ? names[speakerId] ?? null : null;
     const playerName = this.host.playerName();
     const attemptId = newId("att");
     const toolRequestId = newId("toolreq");
     const writerTool = this.host.writerToolCapability("normal");
-    const toolAvailable = this.toolRegistered && writerTool.supported && !this.host.isAutoDirectorEnabled();
+    const toolAvailable = t.decisionsOn && speakerId !== null && this.toolRegistered && writerTool.supported && !this.host.isAutoDirectorEnabled();
     const evidenceRefs = [
       "latest_input",
       ...this.host.chat().map((_, index) => `msg:${index}`).slice(-this.profile.budgets.maxRecentMessages),
-      ...Object.keys(established).sort().map((key) => `state:${key}`)
+      ...Object.keys(t.established).sort().map((key) => `state:${key}`)
     ];
     const binding = resolution ? bindingBlock({
       action: resolution.action,
@@ -4697,19 +7120,13 @@ var Controller = class {
       targetNames: resolution.action.targetActorIds.map((id) => names[id] ?? id),
       npcActionPolicy: toolAvailable ? "checkpoint" : "defer"
     }) : "";
-    const advisoryNotes = [];
-    if (this.profile.mode === "advisory" && action && result?.answers[drivingId]) {
-      const a = result.answers[drivingId];
-      const sig = normaliseSignal(a);
-      if (sig.ok) advisoryNotes.push(`Support for the requested gain "${action.requestedGain}" is assessed at ${sig.signal.x.toFixed(2)} on a 0\u20131 scale (${a.provenance}). Treat this as guidance about plausibility, not a ruling.`);
-    }
-    const advisory = advisoryBlock({ influence: this.profile.advisoryInfluence, notes: advisoryNotes });
-    const planning = toolPlanningBlock({ attemptId, requestId: toolRequestId, speakerActorId: speaker.selected, evidenceRefs, toolAvailable });
+    const advisory = advisoryBlock({ influence: this.profile.advisoryInfluence, notes: t.advisoryNotes });
+    const planning = t.decisionsOn ? toolPlanningBlock({ attemptId, requestId: toolRequestId, speakerActorId: speakerId ?? "", evidenceRefs, toolAvailable }) : "";
     const transition = this.sceneTransitionPending ? "[Scene transition requested]\nBegin a new scene from the established fiction and the latest user direction. Do not choose voluntary actions or decisions for the player. The Director scene identity has advanced." : "";
-    const injected = [combinedBlock(binding, advisory), transition, planning].filter(Boolean).join("\n\n");
+    const injected = [combinedBlock(binding, advisory), t.stateBlock, transition, this.reactionBlock(reaction), planning].filter(Boolean).join("\n\n");
     this.sceneTransitionPending = false;
-    if (speaker.selected === YIELD) {
-      this.inspect({ kind: "yield", message: "Director yielded: no NPC reply.", questions, answers: result?.answers ?? null, stateSent: built.state, speaker, networkCalls, providerKind: result?.provider ?? null, durationMs: result?.durationMs ?? null, inputTokens: result?.inputTokens ?? null, outputTokens: result?.outputTokens ?? null, actionId: action?.actionId ?? null, applicability: action?.applicability ?? null });
+    if (speakerId === YIELD) {
+      this.inspect({ kind: "yield", message: "Director yielded: no NPC reply.", questions: t.questions, answers: t.answers, stateSent: t.stateSent, speaker, networkCalls: t.networkCalls, providerKind: t.result?.provider ?? null, durationMs: t.result?.durationMs ?? null, inputTokens: t.result?.inputTokens ?? null, outputTokens: t.result?.outputTokens ?? null, actionId: t.actionId, applicability: t.applicability });
       this.status = "Ready";
       if (composerText.trim()) {
         const posted = await this.host.postUserMessage(composerText);
@@ -4721,18 +7138,20 @@ var Controller = class {
       this.notify();
       return;
     }
-    this.apply({ type: "prepare", resolution, action: resolution ? action : gate.kind === "skip" ? action : null, attemptId, actorId: speaker.selected, epoch, composerText, now: Date.now() });
+    this.apply({ type: "prepare", resolution, action: t.preparedAction, reaction, attemptId, actorId: speakerId, epoch, composerText, now: Date.now() });
+    const prepared = this.record?.attempts[attemptId];
+    if (prepared) prepared.loreCursor = t.loreCursor;
     this.preparedTool = {
       requestId: toolRequestId,
       attemptId,
-      speakerActorId: speaker.selected,
-      snapshot,
+      speakerActorId: speakerId ?? "",
+      snapshot: t.snapshot,
       actorNames: names,
       allowedEvidenceRefs: evidenceRefs,
       available: toolAvailable
     };
     this.speakerOverride = null;
-    if (action) {
+    if (t.disarmDeclaration) {
       this.actionDraft = null;
       this.actionDraftRevision += 1;
     }
@@ -4740,44 +7159,54 @@ var Controller = class {
       kind,
       attemptId,
       resolutionId: resolution?.resolutionId ?? null,
-      actionId: action?.actionId ?? null,
-      applicability: action?.applicability ?? null,
-      questions: Object.keys(questions).length ? questions : null,
-      stateSent: built.state,
-      answers: result?.answers ?? null,
+      actionId: t.actionId,
+      applicability: t.applicability,
+      questions: t.questions,
+      stateSent: t.stateSent,
+      answers: t.answers,
       speaker,
-      policyBandId: bandId2,
+      policyBandId: t.bandId,
       draw: resolution?.draw ?? null,
       outcome: resolution?.outcome ?? null,
       injectedText: injected || null,
-      providerKind: result?.provider ?? null,
-      requestedModel: result?.requestedModel ?? null,
-      returnedModel: result?.returnedModel ?? null,
-      durationMs: result?.durationMs ?? null,
-      inputTokens: result?.inputTokens ?? null,
-      outputTokens: result?.outputTokens ?? null,
-      networkCalls,
-      message: resolution ? `Frozen ${resolution.outcome} (${resolution.method}${bandId2 ? ", band " + bandId2 : ""}) for ${names[action?.actingActorId ?? PLAYER_ACTOR_ID] ?? action?.actingActorId ?? playerName}; reply speaker ${speakerName ?? speaker.selected}.` : gate.kind === "skip" ? `No adjudication (${gate.reason.replace(/_/g, " ")}). Speaker ${speakerName ?? speaker.selected}.` : action && this.profile.mode === "advisory" ? `Advisory: gain support assessed, no binding outcome. Speaker ${speakerName ?? speaker.selected}.` : `Speaker ${speakerName ?? speaker.selected}; no action declared.`
+      providerKind: t.result?.provider ?? null,
+      requestedModel: t.result?.requestedModel ?? null,
+      returnedModel: t.result?.returnedModel ?? null,
+      durationMs: t.result?.durationMs ?? null,
+      inputTokens: t.result?.inputTokens ?? null,
+      outputTokens: t.result?.outputTokens ?? null,
+      networkCalls: t.networkCalls,
+      message: resolution ? `Frozen ${resolution.outcome} (${resolution.method}${t.bandId ? ", band " + t.bandId : ""}) for ${names[resolution.action.actingActorId ?? PLAYER_ACTOR_ID] ?? resolution.action.actingActorId ?? playerName}; reply speaker ${speakerName ?? speakerId ?? "chosen by SillyTavern"}.${t.messageSuffix}` : reaction ? `NPC ${reaction.kind}: ${reaction.outcome} for ${names[reaction.actorId] ?? reaction.actorId}; sampled from configured weights, preserved across wording swipes.${t.messageSuffix}` : t.fallbackMessage
     });
     this.pendingInjection = injected;
     this.status = resolution ? "Frozen" : "Ready";
     await this.persist();
-    const actor = actors.byId[speaker.selected];
+    const actor = speakerId ? actors.byId[speakerId] : void 0;
     const forceIndex = isGroup && actor ? this.host.resolveIndex(actor.avatar) : null;
-    if (isGroup && (forceIndex === null || forceIndex < 0)) {
+    if (isGroup && speakerId && (forceIndex === null || forceIndex < 0)) {
       this.apply({ type: "cancel", attemptId, epoch, reason: "actor binding could not be re-resolved to a host character" });
-      this.fail(`Could not re-resolve ${speaker.selected} to a host character; repair the group before generating.`);
+      this.fail(`Could not re-resolve ${speakerId} to a host character; repair the group before generating.`);
       await this.persist();
       return;
     }
     this.status = "Writing";
     this.notify();
+    let settleWriter;
+    const writerSettled = new Promise((resolve) => {
+      settleWriter = resolve;
+    });
+    this.writerSettled = writerSettled;
     try {
-      await this.host.generate(forceIndex);
-      await this.waitForMessageTasks(attemptId);
+      try {
+        await this.host.generate(forceIndex);
+      } finally {
+        settleWriter();
+        if (this.writerSettled === writerSettled) this.writerSettled = null;
+      }
     } catch (e) {
       console.warn("[RP Director] generate failed", e);
     } finally {
+      await this.waitForMessageTasks(attemptId);
       const attempt = this.record?.attempts[attemptId];
       if (attempt && (attempt.status === "writing" || attempt.status === "prepared")) {
         this.apply({ type: "cancel", attemptId, epoch, reason: "the writer finished without a completed message (cancelled, failed, or aborted)" });
@@ -4792,6 +7221,121 @@ var Controller = class {
       await this.persist();
       this.refreshStatus();
     }
+  }
+  // ---- story: genre pack, character state, secrets -------------------------------
+  /** This chat's genre pack; Auto uses the default pack until the judge picks one. */
+  chatPack() {
+    const id = this.record?.story.packId;
+    return id && id !== "auto" && hasPack(id) ? packById(id) : packById("default");
+  }
+  chatPackInfo() {
+    if (!this.record) return null;
+    const { packId, packSource } = this.record.story;
+    return { packId, source: packSource, label: packId === "auto" ? "Auto" : this.chatPack().label };
+  }
+  packsForUi() {
+    return listPacks().map((p) => ({ id: p.id, label: p.label, description: p.description }));
+  }
+  async setChatPack(packId) {
+    if (!this.record) return;
+    const id = packId === "auto" || hasPack(packId) ? packId : "auto";
+    this.record.story = { ...this.record.story, packId: id, packSource: id === "auto" ? "auto" : "user" };
+    await this.persist();
+    this.notify();
+  }
+  /** Judged meter levels at the head of the transcript, for display. */
+  characterStateForUi() {
+    if (!this.record) return [];
+    const snap = snapshotAt(this.record.story, this.chainNow());
+    if (!snap) return [];
+    const pack = this.chatPack();
+    return Object.entries(snap.meters).map(([npc, values]) => ({
+      name: this.record.actors[npc]?.name ?? npc,
+      meters: pack.meters.filter((m) => Number.isInteger(values[m.key])).map((m) => ({ label: meterLabel(m, PLAYER_LABEL), level: m.levels[values[m.key]], rank: `${values[m.key] + 1} of ${m.levels.length}` }))
+    })).filter((entry) => entry.meters.length > 0);
+  }
+  /** The most recent lore choice on this branch, for display. */
+  lastLoreForUi() {
+    if (!this.record) return null;
+    const chain = this.chainNow();
+    const found = loreAt(this.record.story, chain, chain.length);
+    return found ? { at: found.at, entries: found.refs.map((r) => ({ book: r.world, title: r.title })), requests: found.requests } : null;
+  }
+  /** Every lorebook the open chat's cast could draw on, with its Director settings. */
+  async loreBooksForUi() {
+    if (!this.record) return [];
+    const catalog = await this.host.loreCatalog(Object.values(this.actorMap().byId).map((a) => a.avatar));
+    const roots = this.host.tunnelVisionRoots();
+    return catalog.books.map((book) => {
+      const entries = catalog.entries.filter((e) => e.world === book.world);
+      const own = bookSettings(this.settings.lore, book.world);
+      return {
+        world: book.world,
+        source: book.source,
+        entries: entries.length,
+        selectable: entries.filter(selectable).length,
+        index: roots[book.world] ? "tunnelvision" : "none",
+        tunnelVisionManages: this.host.tunnelVisionManages(book.world),
+        mode: own.mode,
+        public: own.public,
+        configured: Boolean(this.settings.lore.books[book.world])
+      };
+    });
+  }
+  /** Per book: what the last reply's World Info scan put into the prompt. */
+  loreActivationForUi() {
+    return this.host.lastLoreActivation();
+  }
+  setLoreBook(world, patch) {
+    const current = bookSettings(this.settings.lore, world);
+    this.settings.lore.books[world] = { ...current, ...patch };
+    this.host.saveSettings();
+    this.notify();
+  }
+  secretsForUi() {
+    if (!this.record) return [];
+    const known = knownByAt(this.record.story, this.chainNow());
+    return this.record.story.secrets.map((s) => ({ id: s.id, text: s.text, holders: [...s.holders], knownBy: known[s.id] ?? [...s.holders] }));
+  }
+  async addSecret(text2, holders) {
+    if (!this.record || !text2.trim()) return;
+    const used = new Set(this.record.story.secrets.map((s) => s.id));
+    let n = this.record.story.secrets.length + 1;
+    while (used.has(`s${n}`)) n++;
+    this.record.story = { ...this.record.story, secrets: [...this.record.story.secrets, { id: `s${n}`, text: text2.trim(), holders: [...new Set(holders)] }] };
+    await this.persist();
+    this.notify();
+  }
+  async removeSecret(id) {
+    if (!this.record) return;
+    this.record.story = { ...this.record.story, secrets: this.record.story.secrets.filter((s) => s.id !== id) };
+    await this.persist();
+    this.notify();
+  }
+  /** The judged state that applies at the end of this cursor chain, as writer text (swipes reuse it). */
+  storyBlockAt(chain) {
+    if (!this.record) return "";
+    const snap = snapshotAt(this.record.story, chain);
+    if (!snap) return "";
+    const names = {};
+    for (const a of Object.values(this.record.actors)) names[a.actorId] = a.name;
+    return stateBlock({
+      pack: this.chatPack(),
+      levels: snap.meters,
+      names,
+      playerName: this.host.playerName(),
+      secrets: this.record.story.secrets,
+      knownBy: knownByAt(this.record.story, chain),
+      meters: this.settings.modules.meters,
+      secretsOn: this.settings.modules.secrets && this.record.story.secrets.length > 0
+    });
+  }
+  /** A ruling's instruction with its placeholders filled exactly as the writer's binding block fills them. */
+  filledInstruction(resolution, speakerActorId) {
+    const names = Object.fromEntries(Object.values(this.record?.actors ?? {}).map((actor) => [actor.actorId, actor.name]));
+    const speakerName = speakerActorId ? names[speakerActorId] ?? null : null;
+    const targets = resolution.action.targetActorIds.map((id) => names[id] ?? id);
+    return fillPlaceholders(instructionForResolution(resolution), placeholderValues(resolution.action, targets, speakerName, this.host.playerName())).trim();
   }
   buildDeclaredAction(actors) {
     const draft = this.actionDraft;
@@ -4816,8 +7360,8 @@ var Controller = class {
     });
   }
   buildAutomaticAction(composerText, sceneId) {
-    const text = composerText.trim();
-    if (!text) return null;
+    const text2 = composerText.trim();
+    if (!text2) return null;
     return declareAction({
       actionId: newId("act"),
       // Replaced by the independent family Choice after the batch returns.
@@ -4825,8 +7369,8 @@ var Controller = class {
       actingActorId: PLAYER_ACTOR_ID,
       playerActorId: PLAYER_ACTOR_ID,
       targetActorIds: [],
-      attemptedAction: text,
-      requestedGain: "the first primary uncertain, consequential state change explicitly attempted in the latest user message",
+      attemptedAction: text2,
+      requestedGain: AUTOMATIC_GAIN,
       applicability: "favorable",
       uncertainConsequential: true,
       opposed: false,
@@ -4921,6 +7465,8 @@ var Controller = class {
       window2.permit = kept;
       window2.phase = "followup_pending";
       this.status = "Writing";
+      const priorReaction = this.record?.attempts[window2.attemptId]?.reaction;
+      if (priorReaction) this.pendingInjection = this.pendingInjection.replace(this.reactionBlock(priorReaction), "").trim();
       this.apply({ type: "tool_result", attemptId: window2.attemptId, permit: kept, status: "permitted", error: null });
       this.inspect({
         kind: "tool_checkpoint",
@@ -4984,6 +7530,12 @@ var Controller = class {
   // ---- interceptor ------------------------------------------------------------
   /** Host generate_interceptor. Injects the prepared block; never issues a network call. */
   async interceptor(_chat, _contextSize, _abort, type) {
+    void this.host.armLore(null);
+    if (Array.isArray(_chat)) {
+      for (const message of _chat) {
+        if (message && !message.is_user && typeof message.mes === "string") message.mes = stripResultFooter(message.mes);
+      }
+    }
     if (this.toolWindow?.phase === "cancelled") {
       _abort(true);
       this.host.clearInjection();
@@ -5025,14 +7577,17 @@ var Controller = class {
       const followup = permitFollowupBlock(window2.permit, window2.error);
       const ruling = this.pendingInjection.split("[Director NPC-action checkpoint]")[0] ?? "";
       this.setInjection([ruling, followup].filter(Boolean).join("\n\n"));
+      await this.armLoreForAttempt(window2.attemptId);
       this.currentAttemptId = window2.attemptId;
       this.status = "Writing";
       await this.persist();
       return;
     }
-    const replacementMarker = genType === "swipe" || genType === "regenerate" ? this.host.readMarker(chat.length - 1) : null;
-    const replacementAttempt = replacementMarker ? this.record.attempts[replacementMarker.a] ?? null : null;
-    if (genType === "swipe" || genType === "regenerate") {
+    const replacing = genType === "swipe" || genType === "regenerate" || genType === "continue";
+    const replacementMarker = replacing ? this.host.readMarker(chat.length - 1) : null;
+    const replacementVariant = replacementMarker ? this.record.variants[replacementMarker.v] : null;
+    const replacementAttempt = replacementMarker && replacementVariant?.cursorAfter === this.cursorOf(chat) ? this.record.attempts[replacementMarker.a] ?? null : null;
+    if (replacing) {
       const oldAttempt = replacementAttempt;
       if (oldAttempt && (oldAttempt.status === "observing" || oldAttempt.status === "provisional")) {
         if (oldAttempt.variantId) this.observerInFlight.get(oldAttempt.variantId)?.abort(new Error("wording swipe"));
@@ -5068,6 +7623,7 @@ var Controller = class {
       }
       this.currentAttemptId = pending.attemptId;
       this.setInjection(this.pendingInjection);
+      await this.armLoreForAttempt(pending.attemptId);
       this.status = "Writing";
       await this.persist();
       return;
@@ -5079,24 +7635,31 @@ var Controller = class {
     const actorId = actorAvatar ? this.actorMap().byAvatar[actorAvatar] ?? null : null;
     const active = source ? source.resolutionId ? this.record.resolutions[source.resolutionId] ?? null : null : activeResolutionForCursor(this.record, cursor);
     const permit = source ? source.permitId ? this.record.permits[source.permitId] ?? null : null : this.activePermitForCursor(cursor);
+    const reaction = source ? source.reaction : replacementAttempt?.reaction ?? null;
     const attemptId = newId("att");
     if (swipeMode !== "bypass" && (active || permit)) {
       const names = {};
       for (const a of Object.values(this.record.actors)) names[a.actorId] = a.name;
       const binding = active ? bindingBlock({ action: active.action, outcome: active.outcome, instruction: instructionForResolution(active), actorName: names[active.action.actingActorId ?? active.action.playerActorId] ?? active.action.actingActorId ?? active.action.playerActorId, speakerName: actorId ? names[actorId] ?? null : null, playerName: this.host.playerName(), targetNames: active.action.targetActorIds.map((id) => names[id] ?? id), npcActionPolicy: permit ? "permitted" : "defer" }) : "";
-      const injected = [binding, permit ? permitFollowupBlock(permit) : ""].filter(Boolean).join("\n\n");
-      this.apply({ type: "regeneration_attempt", attemptId, resolutionId: active?.resolutionId ?? null, permitId: permit?.permitId ?? null, cursorBefore: cursor, epoch: this.epoch, generationType: genType, actorId, injectedText: injected, unadjudicated: false, now: Date.now() });
+      const injected = [binding, this.storyBlockAt(cursorChain(this.record.seedId, this.host.fingerprintMessages(prefix))), permit ? permitFollowupBlock(permit) : "", this.reactionBlock(reaction)].filter(Boolean).join("\n\n");
+      this.apply({ type: "regeneration_attempt", attemptId, resolutionId: active?.resolutionId ?? null, permitId: permit?.permitId ?? null, reaction, cursorBefore: cursor, epoch: this.epoch, generationType: genType, actorId, injectedText: injected, unadjudicated: false, now: Date.now() });
       this.inspect({ kind: "wording_regeneration", attemptId, resolutionId: active?.resolutionId ?? null, actionId: active?.actionId ?? null, outcome: active?.outcome ?? null, policyBandId: active?.policyBand?.id ?? null, draw: active?.draw ?? null, injectedText: injected, networkCalls: 0, message: `Wording ${genType}: reused ${active ? `frozen ${active.outcome}` : "the frozen turn permit"}${permit ? ` and permit ${permit.permitId}` : ""}; no tool or decision call.` });
       this.setInjection(injected);
     } else if (swipeMode !== "bypass" && (swipeMode === "adopt" || swipeMode === "reuse" || replacementAttempt && !replacementAttempt.unadjudicated)) {
-      const injected = "[Director-managed wording swipe]\nThis is a new wording of the selected reply. No outcome reroll was requested. Preserve established facts, do not invent and resolve a new uncertain consequential NPC action, do not roll dice for a new action, and do not output state or metadata blocks.";
-      this.apply({ type: "regeneration_attempt", attemptId, resolutionId: null, permitId: null, cursorBefore: cursor, epoch: this.epoch, generationType: genType, actorId, injectedText: injected, unadjudicated: false, now: Date.now() });
+      const injected = ["[Director-managed wording swipe]\nThis is a new wording of the selected reply. No outcome reroll was requested. Preserve established facts, do not invent and resolve a new uncertain consequential NPC action, do not roll dice for a new action, and do not output state or metadata blocks.", this.storyBlockAt(cursorChain(this.record.seedId, this.host.fingerprintMessages(prefix))), this.reactionBlock(reaction)].filter(Boolean).join("\n\n");
+      this.apply({ type: "regeneration_attempt", attemptId, resolutionId: null, permitId: null, reaction, cursorBefore: cursor, epoch: this.epoch, generationType: genType, actorId, injectedText: injected, unadjudicated: false, now: Date.now() });
       this.inspect({ kind: "wording_regeneration", attemptId, injectedText: injected, networkCalls: 0, message: `Director-managed ${genType}: no frozen ruling applied and no new consequential NPC action permitted.` });
       this.setInjection(injected);
     } else {
       this.apply({ type: "regeneration_attempt", attemptId, resolutionId: null, cursorBefore: cursor, epoch: this.epoch, generationType: genType, actorId, injectedText: "", unadjudicated: true, now: Date.now() });
       this.inspect({ kind: "native_bypass", attemptId, networkCalls: 0, message: `Native ${genType} generation without a Director decision (unadjudicated).` });
       this.host.clearInjection();
+    }
+    const regenerated = this.record.attempts[attemptId];
+    if (regenerated && !regenerated.unadjudicated) {
+      const sourceMarker = source ? this.host.readMarker(source.index) : null;
+      regenerated.loreCursor = replacementAttempt?.loreCursor ?? (sourceMarker ? this.record.attempts[sourceMarker.a]?.loreCursor : null) ?? null;
+      await this.armLoreForAttempt(attemptId);
     }
     this.currentAttemptId = attemptId;
     this.swipeSource = null;
@@ -5105,8 +7668,15 @@ var Controller = class {
     this.status = "Writing";
     await this.persist();
   }
-  setInjection(text) {
-    if (text && text.trim()) this.host.setInjection(text, this.profile.injection.depth, this.profile.injection.role);
+  reactionBlock(reaction) {
+    if (!reaction) return "";
+    const name = this.record?.actors[reaction.actorId]?.name ?? reaction.actorId;
+    return `[Director NPC reaction \u2014 preserve on wording swipes]
+${name}: ${reaction.kind} \u2192 ${reaction.outcome}. ${reaction.instruction}
+This chosen response is already decided; do not roll or call the tool again for this same response. It is a direction for the reply, not proof that an event occurred. Respect established motives and knowledge and leave the player's choices open. A separate new uncertain consequential action still requires the Director tool before prose; its kept ruling supersedes this reaction.`;
+  }
+  setInjection(text2) {
+    if (text2 && text2.trim()) this.host.setInjection(text2, this.profile.injection.depth, this.profile.injection.role);
     else this.host.clearInjection();
   }
   // ---- host events ------------------------------------------------------------
@@ -5129,6 +7699,7 @@ var Controller = class {
     if (changed) await this.persist();
   }
   async onGenerationStopped() {
+    void this.host.armLore(null);
     this.continueRemaining = 0;
     this.inFlight?.abort(new Error("generation stopped"));
     if (!this.record || !this.currentAttemptId) return;
@@ -5143,14 +7714,16 @@ var Controller = class {
     this.refreshStatus();
   }
   onGenerationEnded() {
+    void this.host.armLore(null);
     if (!this.toolWindow || !["followup_pending", "failed_pending", "malformed_pending"].includes(this.toolWindow.phase)) this.host.clearInjection();
   }
   queueMessageReceived(mesId, type) {
     const attemptId = this.currentAttemptId;
     if (!attemptId) return;
     const phaseAtEvent = this.toolWindow?.attemptId === attemptId ? this.toolWindow.phase : null;
+    const writerSettled = this.writerSettled;
     let task;
-    task = new Promise((resolve) => setTimeout(resolve, 0)).then(() => this.completeMessage(mesId, type, attemptId, phaseAtEvent)).catch((error) => console.error("[RP Director] deferred message completion failed", error)).finally(() => this.messageTasks.delete(task));
+    task = new Promise((resolve) => setTimeout(resolve, 0)).then(() => writerSettled).then(() => this.completeMessage(mesId, type, attemptId, phaseAtEvent)).catch((error) => console.error("[RP Director] deferred message completion failed", error)).finally(() => this.messageTasks.delete(task));
     this.messageTasks.add(task);
   }
   async waitForMessageTasks(_attemptId) {
@@ -5163,7 +7736,7 @@ var Controller = class {
     if (phaseAtEvent === "initial" && this.toolWindow?.attemptId === attemptId && this.toolWindow.used) return;
     const chat = this.host.chat();
     const message = chat[mesId];
-    if (!message || message.is_system || message.is_user || !String(message.mes ?? "").trim()) return;
+    if (!message || message.is_system || message.is_user || !stripResultFooter(String(message.mes ?? "")).trim()) return;
     const cursorAfter = this.cursorOf(chat.slice(0, mesId + 1));
     const swipeId = typeof message.swipe_id === "number" ? message.swipe_id : 0;
     const variantId = newId("var");
@@ -5172,6 +7745,7 @@ var Controller = class {
     this.host.writeMarker(mesId, { v: variantId, a: attemptId, r: attempt.resolutionId });
     const notices = this.apply({ type: "completed", attemptId, epoch: this.epoch, operationId, variantId, hostMessageRef: mesId, hostVariantRef: swipeId, cursorAfter, now: Date.now(), actorId, observerRequired: true });
     void notices;
+    this.refreshResultFooter(mesId);
     this.currentAttemptId = null;
     this.host.clearInjection();
     await this.persist();
@@ -5189,6 +7763,17 @@ var Controller = class {
     this.notify();
     await this.observeVariant(attemptId, variantId, mesId);
     this.refreshStatus();
+  }
+  refreshResultFooter(mesId, cursorAfter) {
+    if (!this.record) return false;
+    const marker = this.host.readMarker(mesId);
+    if (!marker) return false;
+    const variant = this.record.variants[marker.v];
+    const matches = variant?.attemptId === marker.a && variant.cursorAfter === (cursorAfter ?? this.cursorOf(this.host.chat().slice(0, mesId + 1)));
+    return this.host.writeResultFooter(mesId, matches ? formatResultFooter(this.record, marker.a) : "");
+  }
+  refreshResultFooters(from, chain) {
+    for (let index = from; index < this.host.chat().length; index++) this.refreshResultFooter(index, chain[index + 1]);
   }
   observationProvider() {
     const connection = this.settings.connection;
@@ -5230,7 +7815,7 @@ var Controller = class {
       actingActorId: preResolution.action.actingActorId ?? preResolution.action.playerActorId,
       boundedResult: preResolution.action.requestedGain,
       outcome: preResolution.outcome,
-      instruction: instructionForResolution(preResolution)
+      instruction: this.filledInstruction(preResolution, attempt.actorId ?? null)
     });
     for (const permitted of permit?.actions ?? []) expectedRulings.push({
       resolutionId: permitted.resolutionId,
@@ -5249,7 +7834,7 @@ var Controller = class {
       baseCursor: attempt.cursorBefore,
       cursorAfter: variant.cursorAfter,
       stateRevision: priorState.revision,
-      acceptedSpan: { id: `span:${variantId}`, actorId, role: "assistant", text: String(message.mes ?? ""), accepted: true },
+      acceptedSpan: { id: `span:${variantId}`, actorId, role: "assistant", text: stripResultFooter(String(message.mes ?? "")), accepted: true },
       expectedResolutionIds,
       expectedRulings,
       permit,
@@ -5326,7 +7911,7 @@ var Controller = class {
     if (typeof index !== "number" || this.host.readMarker(index)?.v !== variant.variantId || this.cursorOf(liveMessages.slice(0, index + 1)) !== variant.cursorAfter) return false;
     if (variant.observerStatus === "pending") {
       this.status = "Observing";
-      this.host.toast("info", "The post-reply observer is still running. Try again when Director shows Provisional.");
+      this.host.toast("info", "The reply is still being checked. Try again when Director shows Ready to continue or Ready with an outcome.");
       this.notify();
       return false;
     }
@@ -5442,7 +8027,7 @@ var Controller = class {
       const matches = variant?.cursorAfter === this.cursorOf(chat.slice(0, mesId + 1));
       const priorAttempt = matches && marker2 ? this.record.attempts[marker2.a] ?? null : null;
       const baseCursor = priorAttempt?.cursorBefore ?? this.cursorOf(chat.slice(0, mesId));
-      const source = { epoch: this.epoch, chatKey: this.chatKey, message, index: mesId, swipe: swipeId, baseCursor, resolutionId: priorAttempt?.resolutionId ?? null, permitId: priorAttempt?.permitId ?? null };
+      const source = { epoch: this.epoch, chatKey: this.chatKey, message, index: mesId, swipe: swipeId, baseCursor, resolutionId: priorAttempt?.resolutionId ?? null, permitId: priorAttempt?.permitId ?? null, reaction: priorAttempt?.reaction ? structuredClone(priorAttempt.reaction) : null };
       this.swipeSource = source;
       const prefixAtPrompt = this.cursorOf(chat.slice(0, mesId));
       const isCurrent = () => source.epoch === this.epoch && source.chatKey === this.chatKey && this.settings.enabled && !this.host.isAutoDirectorEnabled() && this.host.chat()[mesId] === message && message.swipe_id === swipeId && this.cursorOf(this.host.chat().slice(0, mesId)) === prefixAtPrompt;
@@ -5506,6 +8091,7 @@ var Controller = class {
     } else {
       this.apply({ type: "head_changed", cursor: chain.at(-1), chain, reason: "unknown" });
     }
+    this.refreshResultFooters(mesId, chain);
     await this.persist();
     this.refreshStatus();
   }
@@ -5523,6 +8109,7 @@ var Controller = class {
     } else {
       this.inspect({ kind: "restore", networkCalls: 0, message: `Transcript changed (${reason}); projection ${this.record.projection.status} at ${head}.` });
     }
+    this.refreshResultFooters(mesId ?? 0, chain);
     await this.persist();
     this.refreshStatus();
   }
@@ -5539,9 +8126,16 @@ var Controller = class {
   }
   async prepareAdoptedSwipe(source, isCurrent) {
     if (!this.record || !isCurrent()) return false;
+    const predecessor = this.record.checkpoints[source.baseCursor]?.stateAfter;
+    if (!predecessor) {
+      this.fail("The swipe predecessor has no saved state. Repair the selected branch or restore a tracked swipe first.");
+      await this.persist();
+      return false;
+    }
+    const priorState = structuredClone(predecessor);
     const prefix = this.host.chat().slice(0, source.index);
     const latestUser = [...prefix].reverse().find((message) => message.is_user);
-    let action = this.buildAutomaticAction(latestUser?.mes ?? "", this.record.projection.state.sceneId);
+    let action = this.buildAutomaticAction(latestUser?.mes ?? "", priorState.sceneId);
     if (!action) return true;
     const actors = this.bindActors();
     const built = buildState({
@@ -5549,23 +8143,27 @@ var Controller = class {
       actors: this.record.actors,
       eligibleActorIds: actors.order,
       publicCards: {},
-      facts: jsonSafe(this.record.checkpoints[source.baseCursor]?.stateAfter.variables ?? {}),
+      facts: jsonSafe(priorState.variables),
       action,
       latestInput: latestUser?.mes ?? "",
       recentMessages: prefix.filter((message) => !message.is_system).slice(-this.profile.budgets.maxRecentMessages).map((message) => ({
         actorId: message.is_user ? PLAYER_ACTOR_ID : actors.byAvatar[message.original_avatar ?? ""] ?? `name:${message.name}`,
         role: message.is_user ? "user" : "assistant",
-        text: message.mes
+        text: message.is_user ? message.mes : stripResultFooter(message.mes)
       })),
-      sceneId: this.record.projection.state.sceneId,
-      acceptedReplyCount: this.record.projection.state.sceneReplyCount,
+      sceneId: priorState.sceneId,
+      acceptedReplyCount: priorState.sceneReplyCount,
       maxRecentMessages: this.profile.budgets.maxRecentMessages,
       maxSerializedCharacters: this.profile.budgets.maxSerializedCharacters
     });
+    if (!this.checkDecisionContext(built)) {
+      await this.persist();
+      return false;
+    }
     const snapshot = {
       chatId: this.chatKey,
       cursorBefore: source.baseCursor,
-      stateRevision: this.record.projection.state.revision,
+      stateRevision: priorState.revision,
       scopeId: "shared-public",
       profileRevision: this.profile.revision,
       catalogRevision: "",
@@ -5579,6 +8177,10 @@ var Controller = class {
     try {
       const result = await this.provider().evaluate({ requestId: newId("req"), phase: "guide", snapshot, questions }, abort.signal);
       if (!isCurrent() || this.profile.revision !== snapshot.profileRevision) return false;
+      if (this.record.checkpoints[source.baseCursor]?.stateAfter.revision !== priorState.revision) {
+        this.host.toast("warning", "The swipe predecessor changed while Director was deciding. Try the swipe again.");
+        return false;
+      }
       const interpreted = interpretAutomaticAttempt(action, result.answers, result.errors);
       if (!interpreted.ok) throw new Error(interpreted.error);
       action = interpreted.action;
@@ -5719,7 +8321,7 @@ var Controller = class {
       });
     } else if (previous.decisionSource === "provider") {
       const questionId = this.profile.drivingQuestionId;
-      const questions = { [questionId]: questionId === "gain_score" ? attemptScoreQuestion(previous.action) : attemptNoulQuestion(previous.action) };
+      const questions = { [questionId]: previous.action.pipeline === "staged" && previous.action.move ? this.stagedRulingQuestion(previous.action.move) : questionId === "gain_score" ? attemptScoreQuestion(previous.action) : attemptNoulQuestion(previous.action) };
       let provider;
       try {
         provider = this.provider();
@@ -5815,7 +8417,7 @@ var Controller = class {
         failureStake: next.action.failureStake ?? { kind: "other", detail: "" },
         opposed: next.action.opposed ?? false,
         outcome: next.outcome,
-        instruction: instructionForResolution(next),
+        instruction: this.filledInstruction(next, attempt?.actorId ?? null),
         recordedValue: next.outcomeRecords ?? "",
         finalForScope: next.outcomeFinal ?? false,
         scope: "attempt",
@@ -5873,7 +8475,7 @@ var Controller = class {
       return;
     }
     if (provisionalAttempts(this.record).length > 0) {
-      this.host.toast("warning", "Accept or reject the provisional reply before starting a new scene.");
+      this.host.toast("warning", "Wait for the reply to finish being checked, then try New scene & continue again.");
       return;
     }
     if (this.record.projection.status !== "current") {
@@ -6096,6 +8698,11 @@ function presetById(id) {
   const p = TABLE_PRESETS.find((x) => x.id === id);
   return p ? structuredClone(p) : null;
 }
+function presetDraft(preset, currentMethod) {
+  const label = (m) => m === "sample" ? "dice (sample)" : "threshold";
+  const note = preset.resolutionMethod && preset.resolutionMethod !== currentMethod ? `This preset was written for ${label(preset.resolutionMethod)}; your resolution method stays ${label(currentMethod)}.` : null;
+  return { table: structuredClone({ outcomes: preset.outcomes, bands: preset.bands }), method: currentMethod, note };
+}
 var ACTOR_POLICIES = ["player_favorable", "player_attempts", "contested", "any_declared_actor"];
 function registerLocalPresets(raw) {
   const loaded = [];
@@ -6175,9 +8782,9 @@ async function loadLocalPresets(fetcher = fetch) {
     const response = await fetcher(url.href, { cache: "no-store", credentials: "same-origin" });
     if (response.status === 404) return { loaded: [], warnings: [] };
     if (!response.ok) return { loaded: [], warnings: [`local preset fetch failed: HTTP ${response.status}`] };
-    const text = await response.text();
-    if (text.length > 65536) return { loaded: [], warnings: ["local preset document exceeds 64 KiB"] };
-    return registerLocalPresets(JSON.parse(text));
+    const text2 = await response.text();
+    if (text2.length > 65536) return { loaded: [], warnings: ["local preset document exceeds 64 KiB"] };
+    return registerLocalPresets(JSON.parse(text2));
   } catch (error) {
     return { loaded: [], warnings: [`local preset load failed: ${error instanceof Error ? error.message : String(error)}`] };
   }
@@ -6189,11 +8796,11 @@ var TABLE_HELP = [
   'Binding: the row the number lands in names the ruling directly, using the "outcome" column.',
   'Binding + dice: the row gives the odds instead. Each "w:" cell is the chance of that ruling, and one recorded roll picks it.',
   "Columns are the possible rulings, and every part of a ruling is yours to define: its name, exactly what the writer is told, what gets recorded when you accept the reply, and whether that record settles the matter. A ruling can be a real failure, a cost, a complication, or anything else you write.",
-  "Presets load a ready-made table into the editor. Optional local presets live in gitignored profiles/local/presets.json. Nothing changes in play until you press Apply table.",
+  "Presets load a ready-made table into the editor. Optional local presets live in gitignored profiles/local/presets.json. Nothing in the table changes in play until you press Apply table; the resolution method applies as soon as you change it.",
   'The table is applied in code. The judge never reads it during play, so "w:" and "b0" are labels of this extension, not a model format.'
 ];
 var TIP = {
-  method: "How a row becomes a ruling. threshold: the row's outcome is the ruling. sample: the row's weights are odds and one recorded roll decides.",
+  method: "How a row becomes a ruling. threshold: the row's outcome is the ruling. sample: the row's weights are odds and one recorded roll decides. Takes effect as soon as you change it; loading a preset never changes it. Rulings already frozen keep the method they were made with.",
   id: "Band id. Auto-numbered b0, b1, b2 \u2026 and written into every ruling so you can see which row decided. Not editable; add or remove rows instead.",
   from: 'Lower edge of this band, included. It always equals the "to" of the row above, so it is filled in for you.',
   to: 'Upper edge of this band, not included. Editing it moves the "from" of the next row. The last row always ends at 1 and includes it.',
@@ -6212,7 +8819,7 @@ var TIP = {
   addRow: `Add a band by splitting the widest row in half; the new row copies its outcome and weights. Up to ${MAX_BANDS} rows: Jev accepts at most 255 options in one Choice question, and the table test asks one over the band ids.`,
   addCol: `Add an outcome column. Up to ${MAX_OUTCOMES} columns, for the same 255-option limit.`,
   apply: "Check the table and start using it. Creates a new profile revision; rulings already frozen keep the table they were made with.",
-  reset: "Discard your table and go back to the profile's built-in one.",
+  reset: "Discard your table and go back to the profile's built-in one. Your resolution method is kept.",
   test: "Send this table, as edited, through one call to the selected judge connection. Passes only if every answer comes back in the expected format and resolves to one of your outcome columns. Costs one judge call."
 };
 function buildTableEditor(controller2) {
@@ -6263,6 +8870,10 @@ function buildTableEditor(controller2) {
     methodSelect.value = method;
     methodSelect.addEventListener("change", () => {
       method = methodSelect.value;
+      setResolutionMethod(controller2.settings, controller2.profile.id, method);
+      controller2.host.saveSettings();
+      controller2.reloadProfile();
+      controller2.host.toast("success", method === "sample" ? "Resolution method: dice (sample)." : "Resolution method: threshold.");
       render();
     });
     const uses = el("span", { class: "rpd-muted", text: method === "threshold" ? 'Using the "outcome" column. Weights are kept but ignored.' : 'Using the "w:" weights. The "outcome" column is kept but ignored.' });
@@ -6278,10 +8889,10 @@ function buildTableEditor(controller2) {
     const loadPreset = button("rpd-preset-load", "Load preset", TIP.preset, () => {
       const preset = presetById(presetSelect.value);
       if (!preset) return;
-      draft = cloneTable({ outcomes: preset.outcomes, bands: preset.bands });
-      method = preset.resolutionMethod ?? method;
+      const loaded = presetDraft(preset, method);
+      draft = cloneTable(loaded.table);
       pendingPresetActorPolicy = preset.actorPolicy ?? null;
-      report = { status: "info", headline: `Loaded the "${preset.label}" preset into the editor. Press Apply table to use it.`, lines: [] };
+      report = { status: "info", headline: `Loaded the "${preset.label}" preset into the editor. Press Apply table to use it.`, lines: loaded.note ? [loaded.note] : [] };
       render();
     });
     host2.append(el("div", { class: "rpd-row" }, [el("label", { text: "Preset", title: TIP.preset }), presetSelect, loadPreset]), el("div", { class: "rpd-row" }, [presetHelp]));
@@ -6464,7 +9075,9 @@ function buildTableEditor(controller2) {
       reload();
     });
     const reset = button("rpd-bands-reset", "Reset to profile default", TIP.reset, () => {
+      const keptMethod = controller2.profile.resolutionMethod;
       delete controller2.settings.profileOverrides[controller2.profile.id];
+      setResolutionMethod(controller2.settings, controller2.profile.id, keptMethod);
       pendingPresetActorPolicy = null;
       controller2.host.saveSettings();
       controller2.reloadProfile();
@@ -6606,6 +9219,113 @@ function field(label, control) {
   return el("label", { class: "rpd-field" }, [el("span", { class: "rpd-muted", text: label }), control]);
 }
 
+// src/loreui.ts
+var MODE_LABELS = {
+  off: "Off",
+  judge: "Rulings only",
+  assist: "Rulings + writer",
+  managed: "Director decides"
+};
+var MODE_TIPS = {
+  off: "The Director ignores this book.",
+  judge: "Rulings may read the entries the Director picks. The writer keeps SillyTavern's keyword activation only.",
+  assist: "As Rulings only, and the picked entries are also activated for the writer, beside the keyword matches.",
+  managed: "Keyword activation of this book is switched off; the writer gets exactly the entries the Director picks (constant entries stay on)."
+};
+function modeSelect(value, onChange, id) {
+  const select = el("select", { id, class: "text_pole", title: MODE_TIPS[value] });
+  for (const mode of Object.keys(MODE_LABELS)) select.append(el("option", { value: mode, text: MODE_LABELS[mode], title: MODE_TIPS[mode] }));
+  select.value = value;
+  select.addEventListener("change", () => {
+    select.title = MODE_TIPS[select.value];
+    onChange(select.value);
+  });
+  return select;
+}
+function buildLorePanel(controller2) {
+  const lore = controller2.settings.lore;
+  const defaultMode = modeSelect(lore.defaultMode, (mode) => {
+    controller2.settings.lore.defaultMode = mode;
+    controller2.host.saveSettings();
+    void refreshLorePanel(controller2, true);
+  }, "rpd-lore-default");
+  const number = (id, current, min, max, step, tip, save) => {
+    const input = el("input", { id, type: "number", class: "text_pole", min: String(min), max: String(max), step, value: String(current()), title: tip, style: "width: 5em;" });
+    input.addEventListener("change", () => {
+      const n = Number(input.value);
+      if (!Number.isFinite(n) || n < min || n > max) {
+        input.value = String(current());
+        return;
+      }
+      save(n);
+      controller2.host.saveSettings();
+    });
+    return input;
+  };
+  const maxEntries = number("rpd-lore-max", () => controller2.settings.lore.maxEntries, 1, 20, "1", "Most entries picked per turn, across all books.", (n) => {
+    controller2.settings.lore.maxEntries = Math.round(n);
+  });
+  const width = number("rpd-lore-width", () => controller2.settings.lore.width, 1, 6, "1", "Most sections kept at each level of a book.", (n) => {
+    controller2.settings.lore.width = Math.round(n);
+  });
+  const judgeChars = number("rpd-lore-judge-chars", () => controller2.settings.lore.judgeChars, 1e3, 4e4, "500", "Characters of lore a ruling may read.", (n) => {
+    controller2.settings.lore.judgeChars = Math.round(n);
+  });
+  return el("div", { id: "rpd-lore" }, [
+    el("div", { class: "rpd-note", text: "Each turn the judge walks the lorebooks of the chat's cast (using TunnelVision's index where you built one) and picks the entries the scene depends on. Rulings read the picks; depending on the mode, the writer gets them too. Swipes and continues reuse the turn's picks. Discovery rulings (search, read someone) only ever see books marked public." }),
+    el("div", { class: "rpd-row" }, [el("label", { text: "Other books", title: "Mode for books without their own setting" }), defaultMode]),
+    el("div", { class: "rpd-row" }, [
+      el("label", { class: "rpd-inline" }, ["Entries per turn ", maxEntries]),
+      el("label", { class: "rpd-inline" }, ["Width ", width]),
+      el("label", { class: "rpd-inline" }, ["Ruling characters ", judgeChars])
+    ]),
+    el("div", { id: "rpd-lore-books" }, [el("div", { class: "rpd-muted", text: "Open a chat to list its lorebooks." })]),
+    el("div", { id: "rpd-lore-status", class: "rpd-note" })
+  ]);
+}
+var loreSignature = "";
+var loreSeq = 0;
+async function refreshLorePanel(controller2, force = false) {
+  const host2 = document.getElementById("rpd-lore-books");
+  if (!host2) return;
+  const status = document.getElementById("rpd-lore-status");
+  if (status) {
+    status.textContent = !controller2.loreHooked ? "This SillyTavern version lacks the World Info hooks, so picks reach rulings only." : !controller2.settings.modules.lore ? "Lore selection is off (Modules)." : "";
+  }
+  const activation = controller2.loreActivationForUi();
+  const signature = JSON.stringify([controller2.host.chatKey(), controller2.settings.lore, controller2.actorsForUi().map((a) => a.actorId), activation?.at ?? null]);
+  if (!force && signature === loreSignature) return;
+  loreSignature = signature;
+  const seq = ++loreSeq;
+  let books;
+  try {
+    books = await controller2.loreBooksForUi();
+  } catch (error) {
+    if (seq === loreSeq) host2.replaceChildren(el("div", { class: "rpd-muted", text: `Could not list lorebooks: ${error.message}` }));
+    return;
+  }
+  if (seq !== loreSeq) return;
+  if (!books.length) {
+    host2.replaceChildren(el("div", { class: "rpd-muted", text: "This chat has no lorebooks." }));
+    return;
+  }
+  host2.replaceChildren(...books.map((book, index) => {
+    const mode = modeSelect(book.mode, (value) => controller2.setLoreBook(book.world, { mode: value }), `rpd-lore-mode-${index}`);
+    const pub = el("input", { id: `rpd-lore-public-${index}`, type: "checkbox", title: "Public: discovery rulings may read this book. Leave off for books that hold secrets, private thoughts or authorial truth." });
+    pub.checked = book.public;
+    pub.addEventListener("change", () => controller2.setLoreBook(book.world, { public: pub.checked }));
+    const facts = [book.source, `${book.selectable} of ${book.entries} entries pickable`, book.index === "tunnelvision" ? "TunnelVision index" : "no index (entries listed directly)"];
+    if (book.tunnelVisionManages) facts.push("TunnelVision is managing it, so rulings only");
+    const last = activation?.books[book.world];
+    const cost = last ? `Last reply: ${last.entries} entr${last.entries === 1 ? "y" : "ies"} in the prompt, about ${Math.round(last.chars / 4).toLocaleString()} tokens${last.picked ? ` (${last.picked} picked by the Director)` : ""}.` : "";
+    return el("div", { class: "rpd-lore-book" }, [
+      el("div", {}, [el("b", { text: book.world }), el("span", { class: "rpd-muted", text: ` \u2014 ${facts.join(" \xB7 ")}` })]),
+      ...cost ? [el("div", { class: "rpd-muted", text: cost })] : [],
+      el("div", { class: "rpd-row" }, [mode, el("label", { title: pub.title }, [pub, " Public"])])
+    ]);
+  }));
+}
+
 // src/ui.ts
 function mountUi(controller2) {
   const bar = buildBar(controller2);
@@ -6618,9 +9338,13 @@ function mountUi(controller2) {
   controller2.onChange(() => {
     refreshBar(controller2);
     refreshInspector(controller2);
+    refreshStory(controller2);
+    void refreshLorePanel(controller2);
   });
   refreshBar(controller2);
   refreshInspector(controller2);
+  refreshStory(controller2);
+  void refreshLorePanel(controller2);
 }
 var overflowOpen = false;
 function buildBar(controller2) {
@@ -6662,7 +9386,7 @@ function refreshBar(controller2) {
   const speaker = document.getElementById("rpd-speaker");
   if (speaker) {
     const previous = controller2.speakerOverride ?? "auto";
-    speaker.replaceChildren(el("option", { value: "auto", text: "Automatic" }), el("option", { value: "YIELD", text: "Yield to player" }));
+    speaker.replaceChildren(el("option", { value: "auto", text: "Automatic" }), el("option", { value: "YIELD", text: "Yield to {{user}}" }));
     for (const actor of controller2.actorsForUi()) {
       const option = el("option", { value: actor.actorId, text: actor.name + (actor.disabled ? " (muted)" : "") });
       option.disabled = actor.disabled;
@@ -6695,10 +9419,14 @@ function buildSettings(controller2) {
   content.append(
     el("div", { class: "rpd-row" }, [el("label", {}, [enabled, " Enabled"]), el("label", {}, [showBar, " Show play strip"])]),
     el("div", { class: "rpd-note", text: "Normal use: type your message and use SillyTavern\u2019s native Send or Enter. New generated swipes are also routed through Director; a choice appears before generation only when reuse, reroll, or explicit bypass are materially different." }),
-    collapsible("Connections", "Decision model and optional observer profile.", buildConnection(controller2))
+    collapsible("Connections", "Decision model and optional observer profile.", buildConnection(controller2)),
+    collapsible("Modules", "Pipeline and which Director suites run.", buildModuleSettings(controller2))
   );
   const tableEditor = buildTableEditor(controller2);
   content.append(collapsible("Outcome table", "All policy rows, outcomes, presets, and test controls.", tableEditor.element));
+  content.append(collapsible("This chat", "Genre pack, judged character state, secrets and lore picks for the open chat.", buildStoryPanel(controller2)));
+  content.append(collapsible("Lore selection", "Which lorebooks the Director reads and how its picks reach the writer.", buildLorePanel(controller2)));
+  content.append(collapsible("NPC reactions", "Relative weights for reactions when no action is ruled.", buildReactionSettings(controller2)));
   content.append(collapsible("Manual attempt override", "Optional: declare one specific attempt instead of automatic detection.", buildActionPanel(controller2)));
   const inspector = el("div", { id: "rpd-inspector" });
   const exportInspector = button("rpd-inspector-export", "Copy inspector JSON", "Copy recorded inputs and decisions; credentials are never stored", () => {
@@ -6721,6 +9449,169 @@ function buildSettings(controller2) {
     ])
   ]);
 }
+function buildModuleSettings(controller2) {
+  const pipelineTip = "Legacy: one judge batch per turn. Staged: select the exact passage of your message that is the move, route it (who acts, on whom, what kind), then rule on that passage with the evidence its kind allows.";
+  const pipeline = el("select", { id: "rpd-pipeline", class: "text_pole", title: pipelineTip });
+  for (const [value, label] of [["legacy", "Legacy (one batch)"], ["staged", "Staged (move, routing, ruling)"]]) pipeline.append(el("option", { value, text: label }));
+  pipeline.value = controller2.settings.pipeline;
+  pipeline.addEventListener("change", () => {
+    controller2.settings.pipeline = pipeline.value === "staged" ? "staged" : "legacy";
+    controller2.host.saveSettings();
+    controller2.host.toast("success", `Pipeline: ${controller2.settings.pipeline}.`);
+  });
+  const toggle = (id, label, key, tip) => {
+    const input = el("input", { id, type: "checkbox", title: tip });
+    input.checked = controller2.settings.modules[key];
+    input.addEventListener("change", () => {
+      controller2.settings.modules[key] = input.checked;
+      controller2.host.saveSettings();
+    });
+    return el("label", { title: tip }, [input, ` ${label}`]);
+  };
+  return el("div", { id: "rpd-modules" }, [
+    el("div", { class: "rpd-row" }, [el("label", { text: "Pipeline", title: pipelineTip }), pipeline]),
+    el("div", { class: "rpd-note", text: `Staged rules on your own words and tells apart your attempt, an order to a character, and a hand-off ("go ahead, make me"). A hand-off gets that character's reaction, not a failed check. Legacy stays available.` }),
+    el("div", { class: "rpd-row" }, [
+      toggle("rpd-module-speaker", "Speaker", "speaker", "Choose who replies in group chats. Off: SillyTavern picks."),
+      toggle("rpd-module-decisions", "Decisions", "decisions", "Rule on attempts, freeze outcomes, and offer the NPC-action tool."),
+      toggle("rpd-module-meters", "Meters", "meters", "The judge places each character on the pack scales (regard, loyalty, suspicion) every turn, at most one step at a time. The writer plays them at those levels. Staged only."),
+      toggle("rpd-module-secrets", "Secrets", "secrets", "Tell the writer who knows each secret of this chat, and let the judge record when one is revealed. Staged only."),
+      toggle("rpd-module-lore", "Lore", "lore", "The judge picks the lorebook entries each turn depends on; rulings read them and, per book, the writer gets them too. Staged only.")
+    ]),
+    el("div", { class: "rpd-note", text: "NPC reactions have their own switch below. With every module off, Director stands aside and makes no requests." })
+  ]);
+}
+function buildStoryPanel(controller2) {
+  const packTip = "The genre pack decides what counts as a move, the kinds of move, and the meters. Auto lets the judge pick once for this chat.";
+  const pack = el("select", { id: "rpd-pack", class: "text_pole", title: packTip });
+  pack.addEventListener("change", () => void controller2.setChatPack(pack.value));
+  const packNote = el("div", { id: "rpd-pack-note", class: "rpd-note" });
+  const meters = el("div", { id: "rpd-meters" });
+  const secrets = el("div", { id: "rpd-secrets-list" });
+  const text2 = el("textarea", { id: "rpd-secret-text", class: "text_pole", rows: "2", placeholder: "A secret, for example: The captain has been skimming the treasury.", title: "What the secret is. The writer is told who knows it; characters who do not know it will not act on it." });
+  const holders = el("div", { id: "rpd-secret-holders", class: "rpd-row" });
+  const add = button("rpd-secret-add", "Add secret", "Add this secret, known from the start by the characters ticked above", () => {
+    const chosen = [...holders.querySelectorAll("input[type=checkbox]:checked")].map((box) => box.value);
+    void controller2.addSecret(text2.value, chosen).then(() => {
+      text2.value = "";
+    });
+  });
+  return el("div", { id: "rpd-story" }, [
+    el("div", { class: "rpd-row" }, [el("label", { text: "Genre pack", title: packTip }), pack]),
+    packNote,
+    el("div", { class: "rpd-subhead", text: "Character state (judged from play)" }),
+    meters,
+    el("div", { class: "rpd-subhead", text: "Lore picked for the latest turn" }),
+    el("div", { id: "rpd-lore-last" }),
+    el("div", { class: "rpd-subhead", text: "Secrets" }),
+    secrets,
+    text2,
+    el("div", { class: "rpd-muted", text: "Known from the start by:" }),
+    holders,
+    el("div", { class: "rpd-row" }, [add])
+  ]);
+}
+var storySignature = "";
+function refreshStory(controller2) {
+  const pack = document.getElementById("rpd-pack");
+  if (!pack) return;
+  const info = controller2.chatPackInfo();
+  const packs = controller2.packsForUi();
+  const state = controller2.characterStateForUi();
+  const secrets = controller2.secretsForUi();
+  const actors = controller2.actionActorsForUi();
+  const lastLore = controller2.lastLoreForUi();
+  const signature = JSON.stringify([info, packs.map((p) => p.id), state, secrets, actors, lastLore]);
+  if (signature === storySignature) return;
+  storySignature = signature;
+  pack.replaceChildren(el("option", { value: "auto", text: "Auto (the judge picks once)" }), ...packs.map((p) => el("option", { value: p.id, text: p.label })));
+  pack.disabled = !info;
+  pack.value = info?.packId ?? "auto";
+  const note = document.getElementById("rpd-pack-note");
+  if (note) {
+    const chosen = packs.find((p) => p.id === info?.packId);
+    note.textContent = !info ? "Open a chat to choose its pack." : chosen ? `${chosen.description}${info.source === "judge" ? " Picked by the judge for this chat." : ""}` : "The judge picks a pack on this chat\u2019s first staged turn. Until then the General pack applies.";
+  }
+  const meters = document.getElementById("rpd-meters");
+  if (meters) {
+    meters.replaceChildren(...state.length ? state.map((c) => el("div", { class: "rpd-meter-line", text: `${c.name}: ${c.meters.map((m) => `${m.label} ${m.level} (${m.rank})`).join(" \xB7 ")}` })) : [el("div", { class: "rpd-muted", text: "Not judged yet on this branch. With the staged pipeline and Meters on, the judge places each character on the pack\u2019s scales every turn." })]);
+  }
+  const loreLast = document.getElementById("rpd-lore-last");
+  if (loreLast) {
+    loreLast.replaceChildren(...lastLore && lastLore.entries.length ? lastLore.entries.map((e) => el("div", { class: "rpd-meter-line", text: `${e.book} \u203A ${e.title}` })) : [el("div", { class: "rpd-muted", text: lastLore ? "Nothing was needed from the lorebooks." : "No lore picked yet on this branch." })]);
+  }
+  const nameOf = (id) => actors.find((a) => a.actorId === id)?.name ?? id;
+  const list = document.getElementById("rpd-secrets-list");
+  if (list) {
+    list.replaceChildren(...secrets.length ? secrets.map((s) => el("div", { class: "rpd-secret" }, [
+      el("div", { text: s.text }),
+      el("div", { class: "rpd-row" }, [
+        el("span", { class: "rpd-muted", text: `Known to: ${s.knownBy.map(nameOf).join(", ") || "no one"}` }),
+        button(`rpd-secret-remove-${s.id}`, "Remove", "Remove this secret from the chat", () => void controller2.removeSecret(s.id))
+      ])
+    ])) : [el("div", { class: "rpd-muted", text: "No secrets in this chat." })]);
+  }
+  const holders = document.getElementById("rpd-secret-holders");
+  if (holders) {
+    const ticked = new Set([...holders.querySelectorAll("input:checked")].map((box) => box.value));
+    holders.replaceChildren(...actors.map((a) => {
+      const box = el("input", { type: "checkbox", value: a.actorId });
+      box.checked = ticked.has(a.actorId);
+      return el("label", {}, [box, ` ${a.name}`]);
+    }));
+  }
+}
+function buildReactionSettings(controller2) {
+  const enabled = el("input", { id: "rpd-reactions-enabled", type: "checkbox" });
+  enabled.checked = controller2.settings.reactions.enabled;
+  enabled.addEventListener("change", () => {
+    controller2.settings.reactions.enabled = enabled.checked;
+    controller2.host.saveSettings();
+  });
+  const body = el("div", { id: "rpd-reactions" }, [
+    el("label", {}, [enabled, " Enable NPC reactions"]),
+    el("div", { class: "rpd-note", text: "Jev identifies the relevant moment. On turns without an action ruling, these relative weights choose the reaction. They are not model confidence. A weight of 0 excludes an option; each group needs at least one positive weight." })
+  ]);
+  for (const group of NPC_REACTION_GROUPS) {
+    const titleId = `rpd-reaction-${group.id}-label`;
+    const errorId = `rpd-reaction-${group.id}-error`;
+    const error = el("div", { id: errorId, class: "rpd-note", role: "status" });
+    error.hidden = true;
+    const controls = el("div", { class: "rpd-row" });
+    const fields = /* @__PURE__ */ new Map();
+    const save = () => {
+      const weights = Object.fromEntries([...fields].map(([id, input]) => [id, input.value.trim() === "" ? NaN : Number(input.value)]));
+      const validNumbers = Object.values(weights).every((weight) => Number.isFinite(weight) && weight >= 0);
+      const total = Object.values(weights).reduce((sum, weight) => sum + weight, 0);
+      const validTotal = Number.isFinite(total) && total > 0;
+      for (const [id, input] of fields) {
+        input.setAttribute("aria-invalid", String(!Number.isFinite(weights[id]) || weights[id] < 0 || validNumbers && !validTotal));
+      }
+      error.textContent = !validNumbers ? "Not saved: use a finite weight of 0 or greater for every option. The last valid weights are kept." : !validTotal ? "Not saved: the group total must be finite and greater than 0. The last valid weights are kept." : "";
+      error.hidden = !error.textContent;
+      if (!validNumbers || !validTotal) return;
+      controller2.settings.reactions.weights[group.id] = weights;
+      controller2.host.saveSettings();
+    };
+    for (const option of group.options) {
+      const input = el("input", {
+        id: `rpd-reaction-${group.id}-${option.id}`,
+        type: "number",
+        class: "text_pole",
+        min: "0",
+        step: "any",
+        value: String(controller2.settings.reactions.weights[group.id][option.id]),
+        style: "width: 5em;",
+        "aria-describedby": errorId
+      });
+      fields.set(option.id, input);
+      input.addEventListener("change", save);
+      controls.append(el("label", { style: "min-width: 0; display: inline-flex; align-items: center; gap: 4px;" }, [option.label, input]));
+    }
+    body.append(el("div", { role: "group", "aria-labelledby": titleId }, [el("b", { id: titleId, text: group.label }), controls, error]));
+  }
+  return body;
+}
 function buildConnection(controller2) {
   const current = controller2.settings.connection;
   const host2 = el("div", { class: "rpd-connection" });
@@ -6742,7 +9633,7 @@ function buildConnection(controller2) {
   for (const p of controller2.host.connectionProfiles()) stProfile.append(el("option", { value: p.id, text: `${p.name}${p.model ? " / " + p.model : ""}` }));
   stProfile.value = current.stProfileId;
   const observerProfile = el("select", { class: "text_pole" });
-  observerProfile.append(el("option", { value: "", text: "Jev bounded observer (fallback)" }));
+  observerProfile.append(el("option", { value: "", text: "Use judge connection" }));
   for (const p of controller2.host.connectionProfiles()) observerProfile.append(el("option", { value: p.id, text: `${p.name}${p.model ? " / " + p.model : ""}` }));
   observerProfile.value = controller2.settings.observerConnection.stProfileId;
   const sessionKey = el("input", { type: "password", class: "text_pole", placeholder: "Session-only key", autocomplete: "off" });
@@ -6757,7 +9648,7 @@ function buildConnection(controller2) {
   const rowUrl = row("Endpoint", baseUrl);
   const rowModel = row("Model", model);
   const rowKey = row("Session key", sessionKey);
-  const rowObserver = row("Observer sidecar", observerProfile);
+  const rowObserver = row("Reply observer", observerProfile);
   const update = () => {
     const value = kind.value;
     rowScenario.style.display = value === "mock" ? "" : "none";
@@ -6787,7 +9678,7 @@ function buildConnection(controller2) {
     rowModel,
     rowKey,
     rowObserver,
-    el("div", { class: "rpd-note", text: "The judge uses Jev. The observer can use a separate ST chat-completion profile; leaving it on fallback asks Jev only bounded ruling-entailment questions." })
+    el("div", { class: "rpd-note", text: "The observer checks the generated reply. Use the judge connection or choose a separate ST chat-completion profile. Jev only checks whether the reply follows frozen rulings; a structured observer can also track registered facts. Changes commit when you continue from the reply." })
   );
   update();
   return host2;
@@ -6804,10 +9695,26 @@ function refreshInspector(controller2) {
   const head = el("div", { class: "rpd-muted", text: controller2.record ? `projection ${controller2.record.projection.status} \xB7 scene ${controller2.record.projection.state.sceneId} \xB7 accepted ${controller2.record.projection.state.acceptedResolutionIds.length}` : "no chat" });
   const tool = controller2.host.writerToolCapability("normal");
   const toolInfo = el("div", { class: "rpd-note", text: tool.supported ? "Writer tool: RPDirector_AdjudicateTurn. Appears in chat only when the writer calls it for a new consequential NPC action. The Jev pre-pass and observer run in the background; their calls are recorded below." : `Writer tool unavailable: ${tool.reason}. Background decisions are recorded below.` });
-  host2.replaceChildren(head, toolInfo, ...(controller2.record?.inspector ?? []).slice(-30).reverse().map(renderEntry));
+  host2.replaceChildren(head, toolInfo, ...(controller2.record?.inspector ?? []).slice(-30).reverse().map((entry) => renderEntry(entry, entry.speaker ? controller2.record?.actors[entry.speaker.selected]?.name : void 0)));
 }
-function renderEntry(entry) {
-  const details = el("details", { class: "rpd-entry" }, [el("summary", { text: `${new Date(entry.at).toLocaleTimeString()} \xB7 ${entry.message}` })]);
+function renderEntry(entry, speakerName) {
+  const item = el("div", { class: "rpd-entry" }, [el("div", {}, [
+    el("span", { class: "rpd-muted", text: new Date(entry.at).toLocaleTimeString() }),
+    " \xB7 ",
+    entry.message
+  ])]);
+  const summary = [];
+  if (entry.speaker) summary.push(`Speaker: ${speakerName || (entry.speaker.selected === "YIELD" ? "Yield to {{user}}" : entry.speaker.selected)}`);
+  if (entry.outcome) summary.push(`Outcome: ${entry.outcome}`);
+  if (entry.policyBandId) summary.push(`Band: ${entry.policyBandId}`);
+  if (summary.length) item.append(el("div", { text: summary.join(" \xB7 ") }));
+  const network = [entry.networkCalls === 0 ? "No network calls" : `${entry.networkCalls} network ${entry.networkCalls === 1 ? "call" : "calls"}`];
+  if (entry.providerKind) network.push(entry.providerKind);
+  if (entry.returnedModel) network.push(entry.returnedModel);
+  else if (entry.requestedModel) network.push(`requested ${entry.requestedModel}`);
+  if (entry.durationMs !== null) network.push(`${Math.round(entry.durationMs)} ms`);
+  item.append(el("div", { class: "rpd-muted", text: network.join(" \xB7 ") }));
+  const details = el("details", {}, [el("summary", { text: "Details" })]);
   const lines = [];
   lines.push(`network calls: ${entry.networkCalls}`);
   if (entry.providerKind) lines.push(`provider: ${entry.providerKind}; model: ${entry.returnedModel ?? entry.requestedModel ?? "not reported"}`);
@@ -6820,21 +9727,22 @@ function renderEntry(entry) {
   if (entry.injectedText) lines.push(`injected:
 ${entry.injectedText}`);
   details.append(el("pre", { text: lines.join("\n") }));
-  return details;
+  item.append(details);
+  return item;
 }
 
 // src/index.ts
 var host = new Host();
 var controller = new Controller(host);
 globalThis.rpDirectorInterceptor = (chat, contextSize, abort, type) => controller.interceptor(chat, contextSize, abort, type);
-globalThis.rpDirector = { controller, host, version: "0.5.0" };
+globalThis.rpDirector = { controller, host, version: "0.7.0" };
 async function boot() {
   try {
     host.takeOverAuto();
     await controller.init();
     mountUi(controller);
     host.saveSettings();
-    console.log("[RP Director] ready (v0.5.0)");
+    console.log("[RP Director] ready (v0.7.0)");
   } catch (error) {
     console.error("[RP Director] failed to initialise", error);
   }

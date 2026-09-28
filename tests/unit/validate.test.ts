@@ -306,3 +306,14 @@ test('provenance is passed through unchanged', () => {
   assert.equal(expectOk(SPEAKER, 'oren', 'fixture').provenance, 'fixture');
   assert.equal(expectOk(GAIN_NOUL, 0.1, 'native').provenance, 'native');
 });
+
+test('probabilities rounded to two decimals are accepted and renormalised (live Jev, many options)', () => {
+  const keys = Array.from({ length: 62 }, (_, i) => `a${i}`);
+  const raw = Object.fromEntries(keys.map((key, i) => [key, i === 0 ? 0.62 : i === 1 ? 0.21 : i === 2 ? 0.16 : 0]));
+  const result = validateProbabilities(keys, raw);
+  assert.ok(result.ok, result.ok ? '' : result.error);
+  if (result.ok) assert.ok(Math.abs(Object.values(result.value).reduce((a, b) => a + b, 0) - 1) < 1e-9, 'renormalised to exactly 1');
+  const two = validateProbabilities(['a', 'b'], { a: 0.5, b: 0.49 });
+  assert.ok(two.ok, 'two options may be off by one rounding step');
+  assert.ok(!validateProbabilities(['a', 'b'], { a: 0.5, b: 0.6 }).ok, 'a real error is still rejected');
+});

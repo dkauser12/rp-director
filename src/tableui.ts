@@ -3,11 +3,13 @@
  * columns (outcomes), a tooltip on every field, and a "Test table" button
  * that sends the edited table through one judge call.
  *
- * All edits happen on a draft. Nothing changes play until "Apply table".
+ * Table edits happen on a draft; nothing in the table changes play until
+ * "Apply table". The resolution method is a mode and applies immediately.
  */
 import type { Controller } from './controller.ts';
 import { el, button } from './dom.ts';
-import { loadLocalPresets, TABLE_PRESETS, presetById } from './presets.ts';
+import { loadLocalPresets, TABLE_PRESETS, presetById, presetDraft } from './presets.ts';
+import { setResolutionMethod } from './profiles.ts';
 import type { ActorPolicy } from './types.ts';
 import type { PolicyTable } from './table.ts';
 import {
@@ -22,12 +24,12 @@ export const TABLE_HELP = [
   'Binding: the row the number lands in names the ruling directly, using the "outcome" column.',
   'Binding + dice: the row gives the odds instead. Each "w:" cell is the chance of that ruling, and one recorded roll picks it.',
   'Columns are the possible rulings, and every part of a ruling is yours to define: its name, exactly what the writer is told, what gets recorded when you accept the reply, and whether that record settles the matter. A ruling can be a real failure, a cost, a complication, or anything else you write.',
-  'Presets load a ready-made table into the editor. Optional local presets live in gitignored profiles/local/presets.json. Nothing changes in play until you press Apply table.',
+  'Presets load a ready-made table into the editor. Optional local presets live in gitignored profiles/local/presets.json. Nothing in the table changes in play until you press Apply table; the resolution method applies as soon as you change it.',
   'The table is applied in code. The judge never reads it during play, so "w:" and "b0" are labels of this extension, not a model format.',
 ];
 
 export const TIP = {
-  method: 'How a row becomes a ruling. threshold: the row\'s outcome is the ruling. sample: the row\'s weights are odds and one recorded roll decides.',
+  method: 'How a row becomes a ruling. threshold: the row\'s outcome is the ruling. sample: the row\'s weights are odds and one recorded roll decides. Takes effect as soon as you change it; loading a preset never changes it. Rulings already frozen keep the method they were made with.',
   id: 'Band id. Auto-numbered b0, b1, b2 … and written into every ruling so you can see which row decided. Not editable; add or remove rows instead.',
   from: 'Lower edge of this band, included. It always equals the "to" of the row above, so it is filled in for you.',
   to: 'Upper edge of this band, not included. Editing it moves the "from" of the next row. The last row always ends at 1 and includes it.',
@@ -46,7 +48,7 @@ export const TIP = {
   addRow: `Add a band by splitting the widest row in half; the new row copies its outcome and weights. Up to ${MAX_BANDS} rows: Jev accepts at most 255 options in one Choice question, and the table test asks one over the band ids.`,
   addCol: `Add an outcome column. Up to ${MAX_OUTCOMES} columns, for the same 255-option limit.`,
   apply: 'Check the table and start using it. Creates a new profile revision; rulings already frozen keep the table they were made with.',
-  reset: 'Discard your table and go back to the profile\'s built-in one.',
+  reset: 'Discard your table and go back to the profile\'s built-in one. Your resolution method is kept.',
   test: 'Send this table, as edited, through one call to the selected judge connection. Passes only if every answer comes back in the expected format and resolves to one of your outcome columns. Costs one judge call.',
 };
 
@@ -101,7 +103,15 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
     const methodSelect = el('select', { class: 'text_pole', title: TIP.method });
     for (const m of ['threshold', 'sample'] as const) methodSelect.append(el('option', { value: m, text: m === 'threshold' ? 'threshold (Binding)' : 'sample (Binding + dice)' }));
     methodSelect.value = method;
-    methodSelect.addEventListener('change', () => { method = methodSelect.value as 'threshold' | 'sample'; render(); });
+    methodSelect.addEventListener('change', () => {
+      // The method is a mode, not table data: it applies now, without Apply table.
+      method = methodSelect.value as 'threshold' | 'sample';
+      setResolutionMethod(controller.settings, controller.profile.id, method);
+      controller.host.saveSettings();
+      controller.reloadProfile();
+      controller.host.toast('success', method === 'sample' ? 'Resolution method: dice (sample).' : 'Resolution method: threshold.');
+      render();
+    });
     const uses = el('span', { class: 'rpd-muted', text: method === 'threshold' ? 'Using the "outcome" column. Weights are kept but ignored.' : 'Using the "w:" weights. The "outcome" column is kept but ignored.' });
     host.append(el('div', { class: 'rpd-row' }, [el('label', { text: 'Resolution method', title: TIP.method }), methodSelect, uses]));
 
@@ -114,10 +124,10 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
     const loadPreset = button('rpd-preset-load', 'Load preset', TIP.preset, () => {
       const preset = presetById(presetSelect.value);
       if (!preset) return;
-      draft = cloneTable({ outcomes: preset.outcomes, bands: preset.bands });
-      method = preset.resolutionMethod ?? method;
+      const loaded = presetDraft(preset, method);
+      draft = cloneTable(loaded.table);
       pendingPresetActorPolicy = preset.actorPolicy ?? null;
-      report = { status: 'info', headline: `Loaded the "${preset.label}" preset into the editor. Press Apply table to use it.`, lines: [] };
+      report = { status: 'info', headline: `Loaded the "${preset.label}" preset into the editor. Press Apply table to use it.`, lines: loaded.note ? [loaded.note] : [] };
       render();
     });
     host.append(el('div', { class: 'rpd-row' }, [el('label', { text: 'Preset', title: TIP.preset }), presetSelect, loadPreset]), el('div', { class: 'rpd-row' }, [presetHelp]));
@@ -262,7 +272,9 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
       reload();
     });
     const reset = button('rpd-bands-reset', 'Reset to profile default', TIP.reset, () => {
+      const keptMethod = controller.profile.resolutionMethod;
       delete controller.settings.profileOverrides[controller.profile.id];
+      setResolutionMethod(controller.settings, controller.profile.id, keptMethod);
       pendingPresetActorPolicy = null;
       controller.host.saveSettings();
       controller.reloadProfile();

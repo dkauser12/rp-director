@@ -246,6 +246,10 @@ export async function adjudicateTurnProposal(input: AdjudicateProposalInput): Pr
     ? input.snapshot.state as Record<string, Json>
     : {};
   const snapshot: DecisionSnapshot = { ...input.snapshot, state: { ...base, plannedActions } };
+  const contextCharacters = JSON.stringify(snapshot.state).length;
+  if (contextCharacters > input.profile.budgets.maxSerializedCharacters) {
+    throw new Error(`Planned action context exceeds the limit (${contextCharacters}/${input.profile.budgets.maxSerializedCharacters} characters). No decision was requested.`);
+  }
   const evaluation = await input.provider.evaluate({ requestId: newId('req'), phase: 'guide', snapshot, questions }, input.signal);
   const actions = [];
   for (const [index, proposal] of input.proposal.actions.entries()) {

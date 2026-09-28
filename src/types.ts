@@ -11,6 +11,8 @@
 // Primitives and questions
 // ---------------------------------------------------------------------------
 
+import type { ReactionResult, ReactionSettings } from './npc-reaction.ts';
+
 export type Primitive = 'choice' | 'score' | 'noul';
 export type Phase = 'guide' | 'observe';
 export type ProviderKind = 'mock' | 'rules' | 'jev' | 'structured';
@@ -175,6 +177,9 @@ export interface ActionSpec {
   availableEvidence?: string;
   /** Automatic mode resolves only the first qualifying attempt in a bundled message. */
   additionalAttemptsPolicy?: 'defer_after_first';
+  /** Set when the staged pipeline declared this action; frozen with the ruling and used to reassess it. */
+  pipeline?: 'staged';
+  move?: StagedMove;
   preconditions: Precondition[];
   /** Legacy (pre player-defined outcomes). New actions do not carry it; the outcome's own instruction is used. */
   outcomeText?: Record<OutcomeTier, { required: string[]; forbidden: string[] }>;
@@ -255,6 +260,7 @@ export interface GenerationAttempt {
   resolutionId: string | null;
   /** Optional permit for newly planned NPC actions in this writer attempt. */
   permitId?: string | null;
+  reaction?: ReactionResult | null;
   actorId: string | null;
   /** Null until bound by the interceptor. */
   cursorBefore: string | null;
@@ -273,6 +279,8 @@ export interface GenerationAttempt {
   /** Tool checkpoint state. Missing on records from earlier builds. */
   toolStatus?: 'not_offered' | 'offered' | 'permitted' | 'failed' | 'malformed' | 'reused';
   toolError?: string | null;
+  /** Key of the lore picks (story.lore) this attempt is written with; null or missing = none. */
+  loreCursor?: string | null;
   createdAt: number;
 }
 
@@ -497,6 +505,24 @@ export interface PendingGeneration {
   createdAt: number;
 }
 
+/** The staged pipeline's record of what was ruled: the player's own passage and its routing. */
+export interface StagedMove {
+  packId: string;
+  packVersion: number;
+  spanId: string;
+  /** Verbatim passage of the player's message. */
+  passage: string;
+  /** Verbatim earlier NPC passage the move referred to, if any. */
+  antecedent: string | null;
+  route: 'DIRECT_ATTEMPT' | 'SPECIFIED_NPC_MOVE' | 'HANDOFF' | 'UNRULED';
+  familyKey: string;
+  ownerId: string;
+  /** An actor id, SELF, SEVERAL, SCENE, or null. */
+  targetId: string | null;
+  specification: 'SPECIFIED_HERE' | 'SPECIFIED_BY_PUBLIC_REFERENCE' | 'UNSPECIFIED_INITIATIVE' | null;
+  count: 'one' | 'multiple' | null;
+}
+
 export interface SpeakerDecision {
   questionId: string | null;
   eligibleActorIds: string[];
@@ -505,7 +531,7 @@ export interface SpeakerDecision {
   /** Values after priors and repetition factor, renormalised. */
   adjusted: Record<string, number> | null;
   selected: string;
-  source: 'explicit' | 'provider' | 'rules' | 'all_zero' | 'single' | 'yield';
+  source: 'explicit' | 'provider' | 'rules' | 'all_zero' | 'single' | 'yield' | 'move_owner';
   tieBroken: boolean;
 }
 
@@ -554,6 +580,72 @@ export interface DirectorChatRecord {
   inspector: InspectorEntry[];
   /** Active profile revision when the record was last touched. */
   profileRevision: string;
+  /** Genre pack, secrets and judged character state for this chat. */
+  story: StoryState;
+}
+
+/** Something only some characters know. Holders know it from the start. */
+export interface SecretRecord {
+  id: string;
+  text: string;
+  holders: string[];
+}
+
+/** Character state judged at one point of the transcript. */
+export interface StorySnapshot {
+  at: number;
+  /** NPC id -> meter key -> level index. */
+  meters: Record<string, Record<string, number>>;
+  /** Secret id -> actor ids who know it (always including its holders). */
+  knownBy: Record<string, string[]>;
+}
+
+export interface StoryState {
+  /** A pack id, or 'auto' until the judge picks one for this chat. */
+  packId: string;
+  packSource: 'auto' | 'judge' | 'user';
+  secrets: SecretRecord[];
+  /** Snapshots keyed by the transcript cursor they were judged at; the nearest earlier one on the current branch applies. */
+  history: Record<string, StorySnapshot>;
+  /** Lore chosen for a turn, keyed by the cursor the turn was decided at; swipes and continues reuse it. */
+  lore: Record<string, LoreSelectionRecord>;
+}
+
+export interface LoreSelectionRecord {
+  at: number;
+  refs: { world: string; uid: number; title: string; score: number }[];
+  requests: number;
+  /** Books the turn could draw on; managed books among them lose keyword activation while this turn is written. */
+  books: string[];
+  /** Books whose walk got no valid answer; their keyword lore stays on even when managed. */
+  failed: string[];
+}
+
+/**
+ * How the Director treats one lorebook.
+ *   off      ignored entirely
+ *   judge    rulings may read the chosen entries; the writer keeps SillyTavern's keyword activation only
+ *   assist   as judge, and the chosen entries are also activated for the writer
+ *   managed  as assist, and keyword activation of the book is switched off (constant entries stay)
+ */
+export type LoreBookMode = 'off' | 'judge' | 'assist' | 'managed';
+
+export interface LoreBookSettings {
+  mode: LoreBookMode;
+  /** Public books may inform discovery rulings; everything else is private to them. */
+  public: boolean;
+}
+
+export interface LoreSettings {
+  books: Record<string, LoreBookSettings>;
+  /** Mode for books without their own setting. */
+  defaultMode: LoreBookMode;
+  maxEntries: number;
+  width: number;
+  minProbability: number;
+  maxDepth: number;
+  /** Characters of lore a ruling may read. */
+  judgeChars: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -624,10 +716,18 @@ export interface DirectorSettings {
   bindingConfirmedAt: string | null;
   connection: ConnectionSettings;
   observerConnection: ObserverConnectionSettings;
+  reactions: ReactionSettings;
   showBar: boolean;
   inspectorOpen: boolean;
   /** Per-profile user edits (bands, priors) keyed by profile id. */
   profileOverrides: Record<string, Partial<DirectorProfile>>;
+  /** Which decision pipeline runs a turn. Staged is the default; legacy stays selectable. */
+  pipeline: 'legacy' | 'staged';
+  /** Settings migrations applied (2: staged became the default once). */
+  settingsRevision: number;
+  /** Independently switchable suites. NPC reactions keep their own `reactions.enabled` switch. */
+  modules: { speaker: boolean; decisions: boolean; meters: boolean; secrets: boolean; lore: boolean };
+  lore: LoreSettings;
 }
 
 // ---------------------------------------------------------------------------

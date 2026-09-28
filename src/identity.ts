@@ -8,6 +8,18 @@
  * same cursor; variant identity is tracked separately.
  */
 
+/**
+ * How the settings and popups name the player. The persona's real name still
+ * goes to the judge and the writer, which read it in the transcript; the UI
+ * uses SillyTavern's generic tag so it never shows one persona's name.
+ */
+export const PLAYER_LABEL = '{{user}}';
+
+/** Display name of an actor for the UI: the player is always {{user}}. */
+export function uiActorName(actorId: string, name: string | undefined): string {
+  return actorId === 'player' ? PLAYER_LABEL : name ?? actorId;
+}
+
 /** Small, fast, deterministic 53-bit string hash (cyrb53), rendered as hex. */
 export function hash53(input: string, seed = 0): string {
   let h1 = 0xdeadbeef ^ seed;

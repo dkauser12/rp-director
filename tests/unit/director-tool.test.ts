@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { adjudicateTurnProposal, validateTurnProposal } from '../../src/director-tool.ts';
 import { profileById } from '../../src/profiles.ts';
 import type { DecisionProvider, TurnProposal } from '../../src/types.ts';
+import { createMockProvider } from '../../src/providers.ts';
 
 const context = {
   requestId: 'toolreq-1', attemptId: 'attempt-1', speakerActorId: 'npc-a',
@@ -77,4 +78,22 @@ test('adjudication makes one batch call and freezes an attempt-scoped permit', a
   assert.equal(result.permit.actions[0]!.scope, 'attempt');
   assert.equal(result.permit.baseCursor, 'c0');
   assert.equal(result.permit.stateRevision, 4);
+});
+
+test('planned actions cannot push the frozen snapshot past the context limit', async () => {
+  const profile = profileById('binding')!;
+  profile.budgets = { ...profile.budgets, maxSerializedCharacters: 1000 };
+  const state = { latestInput: 'x'.repeat(900) };
+  assert.ok(JSON.stringify(state).length < profile.budgets.maxSerializedCharacters);
+  let calls = 0;
+  const provider: DecisionProvider = {
+    ...createMockProvider({ scenario: 'default' }),
+    async evaluate() { calls++; throw new Error('unexpected judge call'); },
+  };
+  await assert.rejects(adjudicateTurnProposal({
+    proposal: proposal(), provider, profile,
+    snapshot: { chatId: 'chat', cursorBefore: 'c0', stateRevision: 4, scopeId: 'shared-public', profileRevision: profile.revision, catalogRevision: '', actorBindingRevision: '', state },
+    actorNames: { player: 'Player', 'npc-a': 'A' }, playerName: 'Player', signal: new AbortController().signal,
+  }), /context.*limit/i);
+  assert.equal(calls, 0);
 });
