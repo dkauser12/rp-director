@@ -31,13 +31,14 @@ test('forwarder never includes the API key in its body and preserves typed answe
         seen = options;
         return new Response(JSON.stringify({
             model: 'typesafe/jev-1.13', answers: { light: { type: 'choice', choice: 'on', probabilities: { on: 1, off: 0 }, confidence: 1 } },
-            usage: { input_tokens: 20, output_tokens: 4 }, provider: 'TypeSafe', id: 'dec_1',
+            usage: { cost: 0.0012, input_tokens: 20, output_tokens: 4 }, provider: 'TypeSafe', id: 'dec_1',
         }), { status: 200, headers: { 'content-type': 'application/json' } });
     };
     const forward = createDecisionForwarder({ getApiKey: () => 'secret-value', fetchImpl });
     const result = await forward(request());
     assert.equal(result.status, 200);
     assert.equal(result.body.answers.light.choice, 'on');
+    assert.deepEqual(result.body.usage, { cost: 0.0012, input_tokens: 20, output_tokens: 4 });
     assert.equal(JSON.stringify(result.body).includes('secret-value'), false);
     assert.equal(seen.headers.authorization, 'Bearer secret-value');
     assert.equal(JSON.parse(seen.body).requestId, undefined);

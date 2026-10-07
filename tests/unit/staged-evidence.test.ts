@@ -24,7 +24,6 @@ function input(familyKey: string, overrides: Partial<EvidenceInput> = {}): Evide
       { actorId: 'player', role: 'user', text: 'I study her reaction.' },
     ],
     latestInput: 'I study her reaction to see whether she recognised me.',
-    facts: { door: 'locked' },
     move: { passage: 'I study her reaction to see whether she recognised me.', antecedent: null },
     maxChars: 60000,
     ...overrides,
@@ -74,10 +73,8 @@ test('the move is named in the state and oldest messages are trimmed first', () 
   assert.ok(projection.chars <= 6000 || projection.overBudget);
 });
 
-test('Director facts are included only when the family allows state', () => {
-  assert.match(JSON.stringify(judgeProjection(input('influence_negotiate')).state), /locked/);
-  const family = { ...familyByKey(DEFAULT_PACK, 'influence_negotiate')!, evidence: ['transcript'] as ('transcript')[] };
-  assert.doesNotMatch(JSON.stringify(judgeProjection({ ...input('influence_negotiate'), family }).state), /locked/);
+test('old tracked facts never reach the ruling after removal of the observer', () => {
+  assert.doesNotMatch(JSON.stringify(judgeProjection(input('influence_negotiate')).state), /locked|"facts"/);
 });
 
 const LORE_CANARY = 'CANARY-LORE-5b1e';
@@ -123,4 +120,29 @@ test('lore never takes more than 40% of the ruling\'s budget, so recent messages
   const loreChars = (state.lore ?? []).reduce((sum, item) => sum + item.text.length, 0);
   assert.ok(loreChars <= 8000, String(loreChars));
   assert.equal(state.recentAcceptedMessages?.length, 2);
+});
+
+test('collapsed details are excluded from every allowed source, including the current input and authorial cards', () => {
+  const hidden = '<details><summary>Private</summary>HIDDEN-SOURCE-CANARY</details>';
+  const projection = judgeProjection(input('influence_negotiate', {
+    actors: { player: { name: 'Player', control: 'user' }, 'juno-1': { name: 'Character', control: 'npc', card: `Visible trait. ${hidden}` } },
+    latestInput: `I ask her to stay. ${hidden}`,
+    move: { passage: `I ask her to stay. ${hidden}`, antecedent: `She offered to leave. ${hidden}` },
+    meters: { 'juno-1': { regard: `warm ${hidden}` } },
+    lore: [{ book: 'Book', title: 'Title', text: `Visible lore. ${hidden}`, public: true }],
+  }));
+  const serialized = JSON.stringify(projection.state);
+  assert.doesNotMatch(serialized, /HIDDEN-SOURCE-CANARY/);
+  for (const visible of ['Visible trait', 'I ask her to stay', 'She offered to leave', 'warm', 'Visible lore']) assert.ok(serialized.includes(visible));
+  assert.doesNotMatch(serialized, /Visible fact/);
+});
+
+test('discovery never receives meters or private lore even when its pack permits those sources', () => {
+  const family = { ...familyByKey(DEFAULT_PACK, 'detect_discover')!, evidence: ['transcript', 'target_card', 'meters', 'lore'] as const };
+  const projection = judgeProjection(input('detect_discover', {
+    family: { ...family, evidence: [...family.evidence] },
+    meters: { 'juno-1': { regard: 'METER-HIDDEN-CANARY' } },
+    lore: [{ book: 'Hidden', title: 'Secret', text: 'PRIVATE-HIDDEN-CANARY', public: false }],
+  }));
+  assert.doesNotMatch(JSON.stringify(projection.state), /METER-HIDDEN-CANARY|PRIVATE-HIDDEN-CANARY|CANARY-CARD/);
 });

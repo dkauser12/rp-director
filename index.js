@@ -172,12 +172,12 @@ function validateChoice(question, raw, provenance) {
   if (optionKeys.length === 0) {
     return { ok: false, error: "choice question has no options" };
   }
-  const choice = raw.choice;
-  if (typeof choice !== "string") {
-    return { ok: false, error: `choice must be an option key string, got ${describe(choice)}` };
+  const choice2 = raw.choice;
+  if (typeof choice2 !== "string") {
+    return { ok: false, error: `choice must be an option key string, got ${describe(choice2)}` };
   }
-  if (!Object.hasOwn(question.criteria, choice)) {
-    return { ok: false, error: `choice ${JSON.stringify(choice)} is not one of the options: ${optionKeys.join(", ")}` };
+  if (!Object.hasOwn(question.criteria, choice2)) {
+    return { ok: false, error: `choice ${JSON.stringify(choice2)} is not one of the options: ${optionKeys.join(", ")}` };
   }
   let probabilities = null;
   if (raw.probabilities !== null && raw.probabilities !== void 0) {
@@ -189,7 +189,7 @@ function validateChoice(question, raw, provenance) {
   if (!confidence.ok) return confidence;
   return {
     ok: true,
-    answer: { type: "choice", choice, probabilities, confidence: confidence.value, provenance }
+    answer: { type: "choice", choice: choice2, probabilities, confidence: confidence.value, provenance }
   };
 }
 function validateScore(question, raw, provenance) {
@@ -237,6 +237,59 @@ function validateNoul(raw, provenance) {
     return { ok: false, error: `noul must be a finite number in [0, 1], got ${describe(noul2)}` };
   }
   return { ok: true, answer: { type: "noul", noul: noul2, confidence: null, provenance } };
+}
+
+// src/usage.ts
+function reportedNumber(value) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null;
+}
+function requestUsage(result, stage) {
+  return {
+    requestId: result.requestId,
+    stage,
+    costUsd: reportedNumber(result.costUsd),
+    inputTokens: reportedNumber(result.inputTokens),
+    outputTokens: reportedNumber(result.outputTokens),
+    durationMs: reportedNumber(result.durationMs)
+  };
+}
+function failedRequestUsage(requestId, stage, durationMs) {
+  return { requestId, stage, costUsd: null, inputTokens: null, outputTokens: null, durationMs: reportedNumber(durationMs) };
+}
+function isRequestUsage(value) {
+  if (!value || typeof value !== "object") return false;
+  const item = value;
+  return typeof item.requestId === "string" && typeof item.stage === "string" && [item.costUsd, item.inputTokens, item.outputTokens, item.durationMs].every((number) => number === null || reportedNumber(number) !== null);
+}
+function mergeRequestUsage(...groups) {
+  const unique = /* @__PURE__ */ new Map();
+  for (const group of groups) for (const item of group ?? []) if (isRequestUsage(item)) unique.set(item.requestId, { ...item });
+  return [...unique.values()];
+}
+function summarizeUsage(records) {
+  const unique = mergeRequestUsage(records);
+  const sum = (key) => {
+    const known = unique.flatMap((item) => item[key] === null ? [] : [item[key]]);
+    return known.length ? known.reduce((total, number) => total + number, 0) : null;
+  };
+  return {
+    requests: unique.length,
+    costUsd: sum("costUsd"),
+    inputTokens: sum("inputTokens"),
+    outputTokens: sum("outputTokens"),
+    durationMs: sum("durationMs"),
+    unreportedCostRequests: unique.filter((item) => item.costUsd === null).length
+  };
+}
+function costLabel(costUsd, unreportedRequests = 0) {
+  if (costUsd === null) return "cost not reported";
+  const amount = costUsd > 0 && costUsd < 5e-5 ? "$<0.0001" : `$${costUsd.toFixed(4)}`;
+  return unreportedRequests ? `${amount} reported \xB7 ${unreportedRequests} cost${unreportedRequests === 1 ? "" : "s"} not reported` : amount;
+}
+function usageLabel(records, fallbackRequests = null) {
+  const totals = summarizeUsage(records);
+  const requests = Math.max(totals.requests, fallbackRequests ?? 0);
+  return `Requests: ${requests || (fallbackRequests === 0 ? 0 : "not recorded")} \xB7 ${costLabel(totals.costUsd, totals.unreportedCostRequests + requests - totals.requests)} \xB7 Tokens in/out: ${totals.inputTokens ?? "not reported"}/${totals.outputTokens ?? "not reported"}`;
 }
 
 // src/providers.ts
@@ -764,6 +817,7 @@ function createOpenRouterDecisionsProvider(options) {
         errors: batch.errors,
         inputTokens: usageNumber(usage?.input_tokens),
         outputTokens: usageNumber(usage?.output_tokens),
+        costUsd: reportedNumber(usage?.cost),
         durationMs: now() - started,
         transportAttempts: 1
       };
@@ -806,13 +860,13 @@ function buildStructuredMessages(request) {
   ];
 }
 function structuredAnswerFormat(questions) {
-  const lines = ["Answer format: return exactly one JSON object with these keys and value types, nothing else."];
+  const lines2 = ["Answer format: return exactly one JSON object with these keys and value types, nothing else."];
   for (const [id, q] of Object.entries(questions)) {
-    if (q.type === "choice") lines.push(`- "${id}": one of the option keys ${JSON.stringify(Object.keys(q.criteria))} (a string).`);
-    else if (q.type === "score") lines.push(`- "${id}": an integer from 0 to ${q.criteria.length - 1}, the index of the best-matching criterion.`);
-    else lines.push(`- "${id}": a number from 0 to 1 giving the probability that the "true" criterion holds (not a boolean, not a word).`);
+    if (q.type === "choice") lines2.push(`- "${id}": one of the option keys ${JSON.stringify(Object.keys(q.criteria))} (a string).`);
+    else if (q.type === "score") lines2.push(`- "${id}": an integer from 0 to ${q.criteria.length - 1}, the index of the best-matching criterion.`);
+    else lines2.push(`- "${id}": a number from 0 to 1 giving the probability that the "true" criterion holds (not a boolean, not a word).`);
   }
-  return lines.join("\n");
+  return lines2.join("\n");
 }
 function parseStructuredContent(questions, content) {
   let parsed = content;
@@ -1536,44 +1590,122 @@ function chooseReaction(kind, settings, actorId, draw) {
   return Object.freeze({ kind, actorId, outcome: selected.id, draw, instruction: selected.instruction });
 }
 
+// src/pipeline/spans.ts
+var MAX_SPAN_OPTIONS = 253;
+var BOUNDARY2 = /[.!?…]+["'”’)\]]*(?=\s)|\n+/g;
+function trimmed(source, start, end) {
+  while (start < end && /\s/.test(source[start])) start++;
+  while (end > start && /\s/.test(source[end - 1])) end--;
+  return end > start ? { start, end } : null;
+}
+function sentenceSpans(source) {
+  const text2 = String(source ?? "");
+  const spans = [];
+  let from = 0;
+  const push = (to) => {
+    const range = trimmed(text2, from, to);
+    if (range) spans.push({ id: `s${spans.length + 1}`, kind: "sentence", ...range, text: text2.slice(range.start, range.end) });
+    from = to;
+  };
+  for (const match of text2.matchAll(BOUNDARY2)) push(match.index + match[0].length);
+  push(text2.length);
+  return spans;
+}
+function candidateSpans(source, maxOptions = MAX_SPAN_OPTIONS) {
+  const text2 = String(source ?? "");
+  let sentences = sentenceSpans(text2);
+  if (sentences.length === 0) return [];
+  const whole = () => {
+    if (sentences.length < 2) return null;
+    const range = trimmed(text2, 0, text2.length);
+    return { id: "all", kind: "whole", ...range, text: text2.slice(range.start, range.end) };
+  };
+  const pairs = sentences.slice(1).map((next, i) => {
+    const first = sentences[i];
+    return { id: `p${i + 1}`, kind: "pair", start: first.start, end: next.end, text: text2.slice(first.start, next.end) };
+  });
+  const all = whole();
+  const full = [...sentences, ...pairs, ...all ? [all] : []];
+  if (full.length <= maxOptions) return full;
+  const withoutPairs = [...sentences, ...all ? [all] : []];
+  if (withoutPairs.length <= maxOptions) return withoutPairs;
+  sentences = sentences.slice(0, maxOptions - 1);
+  return [...sentences, ...all ? [all] : []];
+}
+var ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", apos: "'", nbsp: " " };
+function visibleText(html) {
+  let text2 = String(html ?? "").replace(/<!--[\s\S]*?(?:-->|$)/g, " ").replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, " ");
+  for (let guard = 0; guard < 50 && /<details\b/i.test(text2); guard++) {
+    const next = text2.replace(/<details\b[^>]*>(?:(?!<details\b)[\s\S])*?<\/details\s*>/gi, " ");
+    if (next === text2) break;
+    text2 = next;
+  }
+  text2 = text2.replace(/<details\b[\s\S]*$/i, " ");
+  text2 = text2.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6])>/gi, "\n").replace(/<[^>]+>/g, " ");
+  text2 = text2.replace(/&(amp|lt|gt|quot|#39|apos|nbsp);/g, (_, key) => ENTITIES[key] ?? "");
+  return text2.split("\n").map((line) => line.replace(/[ \t]+/g, " ").trim()).filter(Boolean).join("\n");
+}
+function stripOutOfCharacterSegments(source) {
+  let text2 = String(source ?? "");
+  const opener = /[([]\s*OOC\s*:/gi;
+  let match;
+  while (match = opener.exec(text2)) {
+    const open = match[0][0];
+    const close = open === "(" ? ")" : "]";
+    let depth = 1;
+    let end = opener.lastIndex;
+    for (; end < text2.length && depth; end++) {
+      if (text2[end] === open) depth++;
+      else if (text2[end] === close) depth--;
+    }
+    text2 = text2.slice(0, match.index) + " " + text2.slice(end);
+    opener.lastIndex = match.index + 1;
+  }
+  text2 = text2.replace(/^\s*OOC\s*:[^\r\n]*(?:\r?\n|$)/i, "");
+  return text2.trim();
+}
+function isOutOfCharacterMessage(text2) {
+  return Boolean(text2.trim()) && stripOutOfCharacterSegments(text2).length === 0;
+}
+
 // src/lore/tree.ts
 var DEFAULT_TREE_OPTIONS = { maxOptions: 40, maxLeafEntries: 3, excerptChars: 240, flatLimit: 40 };
 function selectable(entry) {
   return !entry.disabled && !entry.constant && entry.content.trim().length > 0;
 }
 function excerpt(text2, max) {
-  const flat = text2.replace(/\s+/g, " ").trim();
+  const flat = visibleText(text2).replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}\u2026` : flat;
 }
 function cleanSummary(value) {
-  return String(value ?? "").replace(/\n?\[Keywords:[^\]]*\]\s*$/i, "").replace(/\s+/g, " ").trim();
+  return visibleText(String(value ?? "")).replace(/\n?\[Keywords:[^\]]*\]\s*$/i, "").replace(/\s+/g, " ").trim();
 }
 function entryLeaf(entry, options) {
-  return { id: `e${entry.uid}`, label: entry.title || `Entry ${entry.uid}`, summary: excerpt(entry.content, options.excerptChars), entryUids: [entry.uid], children: [] };
+  return { id: `e${entry.uid}`, label: visibleText(entry.title) || `Entry ${entry.uid}`, summary: excerpt(entry.content, options.excerptChars), entryUids: [entry.uid], children: [] };
 }
 function uidList(value) {
   return Array.isArray(value) ? value.map(Number).filter((n) => Number.isInteger(n)) : [];
 }
-function fromTunnelVision(raw, entries, options, claimed, path) {
-  const own = uidList(raw.entryUids).filter((uid) => entries.has(uid) && !claimed.has(uid));
+function fromTunnelVision(raw, entries2, options, claimed, path) {
+  const own2 = uidList(raw.entryUids).filter((uid) => entries2.has(uid) && !claimed.has(uid));
   const rawChildren = Array.isArray(raw.children) ? raw.children : [];
-  const label = String(raw.label ?? "").trim() || "Untitled section";
+  const label = visibleText(String(raw.label ?? "")) || "Untitled section";
   const summary = cleanSummary(raw.summary);
   const id = `t${path}`;
-  if (rawChildren.length === 0 && own.length <= options.maxLeafEntries) {
-    if (own.length === 0) return null;
-    own.forEach((uid) => claimed.add(uid));
-    return { id, label, summary, entryUids: own, children: [] };
+  if (rawChildren.length === 0 && own2.length <= options.maxLeafEntries) {
+    if (own2.length === 0) return null;
+    own2.forEach((uid) => claimed.add(uid));
+    return { id, label, summary, entryUids: own2, children: [] };
   }
   const children = [];
   rawChildren.forEach((child, index) => {
-    const node = fromTunnelVision(child, entries, options, claimed, `${path}.${index}`);
+    const node = fromTunnelVision(child, entries2, options, claimed, `${path}.${index}`);
     if (node) children.push(node);
   });
-  for (const uid of own) {
+  for (const uid of own2) {
     if (claimed.has(uid)) continue;
     claimed.add(uid);
-    children.push(entryLeaf(entries.get(uid), options));
+    children.push(entryLeaf(entries2.get(uid), options));
   }
   if (children.length === 0) return null;
   if (children.length === 1 && path !== "") return { ...children[0], label: `${label}: ${children[0].label}` };
@@ -1602,21 +1734,21 @@ function bound(node, options) {
   return { ...node, children };
 }
 function buildTree(world, allEntries, tunnelVisionRoot, options = DEFAULT_TREE_OPTIONS) {
-  const entries = /* @__PURE__ */ new Map();
-  for (const entry of allEntries) if (entry.world === world && selectable(entry)) entries.set(entry.uid, entry);
-  if (entries.size === 0) return null;
+  const entries2 = /* @__PURE__ */ new Map();
+  for (const entry of allEntries) if (entry.world === world && selectable(entry)) entries2.set(entry.uid, entry);
+  if (entries2.size === 0) return null;
   const claimed = /* @__PURE__ */ new Set();
   let root = null;
   let source = "derived";
-  if (tunnelVisionRoot && typeof tunnelVisionRoot === "object" && entries.size > options.flatLimit) {
-    root = fromTunnelVision(tunnelVisionRoot, entries, options, claimed, "");
+  if (tunnelVisionRoot && typeof tunnelVisionRoot === "object" && entries2.size > options.flatLimit) {
+    root = fromTunnelVision(tunnelVisionRoot, entries2, options, claimed, "");
     if (root) source = "tunnelvision";
   }
-  const loose = [...entries.values()].filter((entry) => !claimed.has(entry.uid)).map((entry) => entryLeaf(entry, options));
+  const loose = [...entries2.values()].filter((entry) => !claimed.has(entry.uid)).map((entry) => entryLeaf(entry, options));
   if (!root) root = { id: "root", label: world, summary: "", entryUids: [], children: loose };
   else if (root.children.length === 0) root = { id: "root", label: world, summary: "", entryUids: [], children: [root, ...loose] };
   else root = { ...root, id: "root", children: [...root.children, ...loose] };
-  return { world, source, root: bound(root, options), entries };
+  return { world, source, root: bound(root, options), entries: entries2 };
 }
 function entriesUnder(node) {
   if (node.children.length === 0) return node.entryUids.slice();
@@ -1628,8 +1760,8 @@ var DEFAULT_BEAM = { width: 3, minProbability: 0.15, maxEntries: 6, maxDepth: 4 
 var LORE_MAX_QUESTIONS = 16;
 var OPTION_CHARS = 360;
 var CONTENTS_CHARS = 220;
-function contents(node, entries) {
-  const titles = entriesUnder(node).map((uid) => entries?.get(uid)?.title ?? "").filter(Boolean);
+function contents(node, entries2) {
+  const titles = entriesUnder(node).map((uid) => entries2?.get(uid)?.title ?? "").filter(Boolean);
   return [...new Set(titles)];
 }
 function beamFloor(optionCount, minProbability) {
@@ -1646,15 +1778,15 @@ function beamPicks(answer, optionKeys, beam) {
   const floor = beamFloor(optionKeys.length, beam.minProbability);
   return ranked.filter((o) => o.p >= floor && o.p >= leader.p / 2 && o.p > pNone).slice(0, Math.max(1, beam.width));
 }
-function frontierQuestion(world, node, isRoot, hasMove, entries) {
+function frontierQuestion(world, node, isRoot, hasMove, entries2) {
   const options = {};
   const criteria = {};
   node.children.forEach((child, index) => {
     const key = `n${index + 1}`;
     options[key] = child.id;
-    const own = excerpt(child.summary ? `${child.label}: ${child.summary}` : child.label, OPTION_CHARS);
-    const inside = child.children.length ? contents(child, entries) : [];
-    criteria[key] = inside.length ? `${own} Includes: ${excerpt(inside.join("; "), CONTENTS_CHARS)}` : own;
+    const own2 = excerpt(child.summary ? `${child.label}: ${child.summary}` : child.label, OPTION_CHARS);
+    const inside = child.children.length ? contents(child, entries2) : [];
+    criteria[key] = inside.length ? `${own2} Includes: ${excerpt(inside.join("; "), CONTENTS_CHARS)}` : own2;
   });
   criteria.NONE = isRoot ? `Nothing in the lorebook "${world}" is needed for the next reply.` : "None of these parts is needed for the next reply.";
   const where = isRoot ? `the lorebook "${world}"` : `the section "${node.label}" of the lorebook "${world}"`;
@@ -1755,6 +1887,7 @@ function defaultLoreSettings() {
   return {
     books: {},
     defaultMode: "assist",
+    placeNearEnd: true,
     maxEntries: 5,
     width: DEFAULT_BEAM.width,
     minProbability: DEFAULT_BEAM.minProbability,
@@ -1785,6 +1918,7 @@ function normalizeLoreSettings(raw) {
   return {
     books,
     defaultMode: isMode(saved.defaultMode) ? saved.defaultMode : base.defaultMode,
+    placeNearEnd: saved.placeNearEnd !== false,
     maxEntries: bounded(saved.maxEntries, 1, 20, base.maxEntries),
     width: bounded(saved.width, 1, 6, base.width),
     minProbability: bounded(saved.minProbability, 0.01, 0.9, base.minProbability, false),
@@ -1800,14 +1934,44 @@ function effectiveMode(settings, world, tunnelVisionManages) {
   if (tunnelVisionManages && (mode === "assist" || mode === "managed")) return "judge";
   return mode;
 }
-function lorePlan(refs, modeOf, books, failed = []) {
+function lorePlan(refs, modeOf, books, failed = [], nearEnd = true) {
   const force = /* @__PURE__ */ new Set();
   for (const ref of refs) {
     const mode = modeOf(ref.world);
     if (mode === "assist" || mode === "managed") force.add(`${ref.world}.${ref.uid}`);
   }
   const managed = new Set(books.filter((world) => modeOf(world) === "managed" && !failed.includes(world)));
-  return { force, managed };
+  return { force, managed, nearEnd };
+}
+
+// src/ui-preferences.ts
+var DEFAULT_PACING_TEXTS = {
+  combat: "Use short beats and one exchange; do not end the fight or skip time.",
+  conversation: "Answer with small actions and no time skips; start a major event only when the scene\u2019s own systems call for it.",
+  travel: "Keep travel brief without skipping time, and stop at the first moment {{user}} must decide.",
+  intimate: "Stay in the moment without skipping ahead or ending the scene.",
+  downtime: ""
+};
+var REPLY_CHECK_FIELDS = [
+  { key: "speaksForUser", label: "Writes for {{user}} (0\u20134)", max: 4, value: 2.85 },
+  { key: "followsRuling", label: "Follows the ruling (0\u20131)", max: 1, value: 0.35 },
+  { key: "responds", label: "Responds to {{user}} (0\u20132)", max: 2, value: 0.4 },
+  { key: "repeats", label: "Repetition (0\u20134)", max: 4, value: 3 }
+];
+function normalizeUiPreferences(saved = {}) {
+  const texts = saved.pacingTexts;
+  const thresholds = saved.replyCheckThresholds;
+  return {
+    handBackBeats: typeof saved.handBackBeats === "boolean" ? saved.handBackBeats : true,
+    pacingTexts: Object.fromEntries(Object.entries(DEFAULT_PACING_TEXTS).map(([key, value]) => [
+      key,
+      texts && typeof texts[key] === "string" ? texts[key] : value
+    ])),
+    replyCheckThresholds: Object.fromEntries(REPLY_CHECK_FIELDS.map((field2) => {
+      const value = thresholds?.[field2.key];
+      return [field2.key, typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.min(field2.max, value)) : field2.value];
+    }))
+  };
 }
 
 // src/migration.ts
@@ -1818,29 +1982,32 @@ function normalizeBaseSettings(defaults, existing) {
   const saved = object2(existing) ?? {};
   const result = structuredClone({
     ...defaults,
-    ...saved,
     enabled: typeof saved.enabled === "boolean" ? saved.enabled : defaults.enabled,
+    askWhenSwiping: typeof saved.askWhenSwiping === "boolean" ? saved.askWhenSwiping : defaults.askWhenSwiping,
+    reviewNpcRolls: typeof saved.reviewNpcRolls === "boolean" ? saved.reviewNpcRolls : defaults.reviewNpcRolls,
     profileId: canonicalProfileId(typeof saved.profileId === "string" ? saved.profileId : defaults.profileId),
-    bindingConfirmedAt: typeof saved.bindingConfirmedAt === "string" || saved.bindingConfirmedAt === null ? saved.bindingConfirmedAt : defaults.bindingConfirmedAt,
     connection: { ...defaults.connection, ...object2(saved.connection) ?? {} },
-    observerConnection: { ...defaults.observerConnection, ...object2(saved.observerConnection) ?? {} },
     reactions: normalizeReactionSettings(saved.reactions),
-    showBar: typeof saved.showBar === "boolean" ? saved.showBar : defaults.showBar,
-    inspectorOpen: typeof saved.inspectorOpen === "boolean" ? saved.inspectorOpen : defaults.inspectorOpen,
+    showBadges: typeof saved.showBadges === "boolean" ? saved.showBadges : defaults.showBadges,
+    ...normalizeUiPreferences(saved),
     profileOverrides: { ...defaults.profileOverrides, ...object2(saved.profileOverrides) ?? {} },
-    // Revision 2 moved everyone to the staged pipeline once; later choices are kept.
-    pipeline: typeof saved.settingsRevision === "number" && saved.settingsRevision >= 2 && (saved.pipeline === "staged" || saved.pipeline === "legacy") ? saved.pipeline : defaults.pipeline,
-    settingsRevision: Math.max(2, typeof saved.settingsRevision === "number" ? saved.settingsRevision : 0),
+    // Revision 3 removes the legacy pipeline and its state machine permanently.
+    pipeline: "staged",
+    settingsRevision: 3,
+    waitForJudgeSeconds: typeof saved.waitForJudgeSeconds === "number" && Number.isFinite(saved.waitForJudgeSeconds) && saved.waitForJudgeSeconds >= 0 ? Math.max(2, Math.min(saved.waitForJudgeSeconds, 120)) : defaults.waitForJudgeSeconds,
     modules: {
+      replyCheck: typeof object2(saved.modules)?.replyCheck === "boolean" ? object2(saved.modules).replyCheck : object2(saved.modules) && ["speaker", "decisions", "meters", "secrets"].every((key) => object2(saved.modules)[key] === false) && object2(saved.modules).lore !== true ? false : true,
       speaker: typeof object2(saved.modules)?.speaker === "boolean" ? object2(saved.modules).speaker : defaults.modules.speaker,
       decisions: typeof object2(saved.modules)?.decisions === "boolean" ? object2(saved.modules).decisions : defaults.modules.decisions,
       meters: typeof object2(saved.modules)?.meters === "boolean" ? object2(saved.modules).meters : defaults.modules.meters,
       secrets: typeof object2(saved.modules)?.secrets === "boolean" ? object2(saved.modules).secrets : defaults.modules.secrets,
+      pacing: typeof object2(saved.modules)?.pacing === "boolean" ? object2(saved.modules).pacing : object2(saved.modules) && ["speaker", "decisions", "meters", "secrets"].every((key) => object2(saved.modules)[key] === false) && object2(saved.modules).lore !== true ? false : defaults.modules.pacing ?? true,
       // Lore arrived after the other suites: off for anyone who had switched them all off.
       lore: typeof object2(saved.modules)?.lore === "boolean" ? object2(saved.modules).lore : object2(saved.modules) && ["speaker", "decisions", "meters", "secrets"].every((key) => object2(saved.modules)[key] === false) ? false : defaults.modules.lore
     },
     lore: normalizeLoreSettings(saved.lore)
   });
+  if (result.connection.kind === "mock") result.connection = { ...defaults.connection, kind: "openrouter" };
   for (const [legacy, current] of Object.entries(LEGACY_PROFILE_IDS)) {
     if (result.profileOverrides[legacy]) {
       if (!result.profileOverrides[current]) result.profileOverrides[current] = result.profileOverrides[legacy];
@@ -1848,35 +2015,6 @@ function normalizeBaseSettings(defaults, existing) {
     }
   }
   return result;
-}
-function recoverInterruptedObservations(input) {
-  const record = structuredClone(input);
-  const recoveredVariantIds = [];
-  for (const variant of Object.values(record.variants)) {
-    if (variant.acceptance !== "pending") continue;
-    const attempt = record.attempts[variant.attemptId];
-    if (!attempt || attempt.variantId !== variant.variantId || attempt.status === "accepted") continue;
-    if (variant.observerStatus === "ready" && variant.observation) continue;
-    const legacy = variant.observerStatus === void 0 || variant.observerStatus === "not_required";
-    const interrupted = variant.observerStatus === "pending" || attempt.status === "observing";
-    if (!legacy && !interrupted) continue;
-    const reason = legacy ? "This reply predates post-reply observation. Retry observation before continuing." : "Post-reply observation was interrupted by a reload. Retry observation before continuing.";
-    variant.observerStatus = "failed";
-    variant.observerError = reason;
-    variant.observation = null;
-    attempt.status = "stale";
-    recoveredVariantIds.push(variant.variantId);
-    if (record.projection.cursor === variant.cursorAfter) {
-      const predecessor = variant.cursorBefore ? record.checkpoints[variant.cursorBefore] : void 0;
-      record.projection = {
-        cursor: variant.cursorAfter,
-        state: structuredClone(predecessor?.stateAfter ?? record.projection.state),
-        status: "stale",
-        reason
-      };
-    }
-  }
-  return { record, recoveredVariantIds };
 }
 function migrateAutoHistory(metadata, messages) {
   if (Object.prototype.hasOwnProperty.call(metadata, "rpDirector")) return { metadata, messages, migrated: false };
@@ -1886,12 +2024,12 @@ function migrateAutoHistory(metadata, messages) {
   const attempts = object2(auto.attempts) ?? {};
   const migratedMessages = structuredClone(messages);
   const copyMarker = (container) => {
-    const marker = object2(container.extra?.rpda);
-    if (!marker || typeof marker.v !== "string" || typeof marker.a !== "string") return;
-    const variant = object2(variants[marker.v]);
-    const attempt = object2(attempts[marker.a]);
-    if (!variant || !attempt || variant.attemptId !== marker.a || attempt.variantId !== marker.v) return;
-    container.extra = { ...container.extra ?? {}, rpd: structuredClone(marker) };
+    const marker2 = object2(container.extra?.rpda);
+    if (!marker2 || typeof marker2.v !== "string" || typeof marker2.a !== "string") return;
+    const variant = object2(variants[marker2.v]);
+    const attempt = object2(attempts[marker2.a]);
+    if (!variant || !attempt || variant.attemptId !== marker2.a || attempt.variantId !== marker2.v) return;
+    container.extra = { ...container.extra ?? {}, rpd: structuredClone(marker2) };
   };
   for (const message of migratedMessages) {
     copyMarker(message);
@@ -1902,6 +2040,2291 @@ function migrateAutoHistory(metadata, messages) {
     messages: migratedMessages,
     migrated: true
   };
+}
+
+// src/story.ts
+var HISTORY_LIMIT = 400;
+function emptyStory() {
+  return { packId: "auto", packSource: "auto", secrets: [], history: {}, lore: {} };
+}
+var isStrings = (value) => Array.isArray(value) && value.every((x) => typeof x === "string");
+function normalizeSecret(raw) {
+  const s = raw;
+  if (!s || typeof s !== "object" || typeof s.id !== "string" || !s.id || typeof s.text !== "string" || !isStrings(s.holders)) return null;
+  return { id: s.id, text: s.text, holders: [...s.holders] };
+}
+function normalizeSnapshot(raw) {
+  const s = raw;
+  if (!s || typeof s !== "object" || typeof s.at !== "number") return null;
+  const meters = {};
+  for (const [npc, values] of Object.entries(s.meters && typeof s.meters === "object" ? s.meters : {})) {
+    if (!values || typeof values !== "object") continue;
+    meters[npc] = Object.fromEntries(Object.entries(values).filter(([, v]) => Number.isInteger(v) && v >= 0));
+  }
+  const knownBy = {};
+  for (const [id, who] of Object.entries(s.knownBy && typeof s.knownBy === "object" ? s.knownBy : {})) if (isStrings(who)) knownBy[id] = [...who];
+  const assessed = {};
+  if (s.assessed && typeof s.assessed === "object" && !Array.isArray(s.assessed)) {
+    for (const [npc, values] of Object.entries(s.assessed)) {
+      if (!values || typeof values !== "object" || Array.isArray(values)) continue;
+      assessed[npc] = Object.fromEntries(Object.entries(values).filter(([, value]) => typeof value === "boolean"));
+    }
+  }
+  return { at: s.at, meters, knownBy, ...s.assessed === void 0 ? {} : { assessed } };
+}
+function normalizeStory(raw) {
+  const base = emptyStory();
+  const r = raw;
+  if (!r || typeof r !== "object") return base;
+  const history = {};
+  if (r.history && typeof r.history === "object" && !Array.isArray(r.history)) {
+    for (const [cursor, snap] of Object.entries(r.history)) {
+      const normalized = normalizeSnapshot(snap);
+      if (normalized) history[cursor] = normalized;
+    }
+  }
+  return {
+    packId: typeof r.packId === "string" && r.packId ? r.packId : base.packId,
+    packSource: r.packSource === "judge" || r.packSource === "user" || r.packSource === "auto" ? r.packSource : base.packSource,
+    secrets: Array.isArray(r.secrets) ? r.secrets.map(normalizeSecret).filter((s) => s !== null) : [],
+    history,
+    ...r.historyAliases && typeof r.historyAliases === "object" && !Array.isArray(r.historyAliases) ? { historyAliases: Object.fromEntries(Object.entries(r.historyAliases).filter(([cursor, target]) => typeof target === "string" && cursor !== target && !history[cursor] && Boolean(history[target]))) } : {},
+    lore: normalizeLoreHistory(r.lore)
+  };
+}
+function normalizeLoreHistory(raw) {
+  const out = {};
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
+  for (const [cursor, value] of Object.entries(raw)) {
+    const r = value;
+    if (!r || typeof r !== "object" || typeof r.at !== "number" || !Array.isArray(r.refs)) continue;
+    const refs = r.refs.filter((ref) => ref && typeof ref.world === "string" && Number.isInteger(ref.uid)).map((ref) => ({ world: ref.world, uid: ref.uid, title: typeof ref.title === "string" ? ref.title : "", score: typeof ref.score === "number" ? ref.score : 0 }));
+    const books = Array.isArray(r.books) ? r.books.filter((b) => typeof b === "string") : [...new Set(refs.map((ref) => ref.world))];
+    const failed = Array.isArray(r.failed) ? r.failed.filter((b) => typeof b === "string") : [];
+    const evidenceRefs = Array.isArray(r.evidenceRefs) ? r.evidenceRefs.filter((ref) => ref && typeof ref.world === "string" && Number.isInteger(ref.uid)).map((ref) => ({ world: ref.world, uid: ref.uid, title: typeof ref.title === "string" ? ref.title : "", score: typeof ref.score === "number" ? ref.score : 0 })) : void 0;
+    out[cursor] = {
+      at: r.at,
+      refs,
+      requests: typeof r.requests === "number" ? r.requests : 0,
+      books,
+      failed,
+      ...evidenceRefs ? { evidenceRefs } : {},
+      ...r.scene === void 0 ? {} : { scene: structuredClone(r.scene) },
+      ...typeof r.configuration === "string" ? { configuration: r.configuration } : {}
+    };
+  }
+  return out;
+}
+function loreAt(story, chain, lookback = 3) {
+  for (let i = chain.length - 1; i >= Math.max(0, chain.length - lookback); i--) {
+    const found = story.lore[chain[i]];
+    if (found) return found;
+  }
+  return null;
+}
+function withLore(story, cursor, record) {
+  const lore = { ...story.lore, [cursor]: record };
+  const keys = Object.keys(lore);
+  if (keys.length > HISTORY_LIMIT) {
+    for (const key of keys.sort((a, b) => lore[a].at - lore[b].at).slice(0, keys.length - HISTORY_LIMIT)) delete lore[key];
+  }
+  return { ...story, lore };
+}
+function snapshotAt(story, chain) {
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const cursor = chain[i];
+    const snap = story.history[cursor] ?? story.history[story.historyAliases?.[cursor] ?? ""];
+    if (snap) return snap;
+  }
+  return null;
+}
+function levelsAt(story, chain, pack, npcIds) {
+  const snap = snapshotAt(story, chain);
+  const levels = {};
+  const assessed = {};
+  for (const npc of npcIds) {
+    const saved = snap?.meters[npc];
+    assessed[npc] = {};
+    levels[npc] = {};
+    for (const meter of pack.meters) {
+      const value = saved?.[meter.key];
+      assessed[npc][meter.key] = Number.isInteger(value) && value < meter.levels.length && (snap?.assessed === void 0 || snap.assessed[npc]?.[meter.key] === true);
+      levels[npc][meter.key] = Number.isInteger(value) && value < meter.levels.length ? value : meter.initial;
+    }
+  }
+  return { levels, assessed };
+}
+function knownByAt(story, chain) {
+  const snap = snapshotAt(story, chain);
+  const known = {};
+  for (const secret of story.secrets) known[secret.id] = [.../* @__PURE__ */ new Set([...secret.holders, ...snap?.knownBy[secret.id] ?? []])];
+  return known;
+}
+function withSnapshot(story, cursor, snapshot) {
+  const history = { ...story.history };
+  const historyAliases = { ...story.historyAliases };
+  const followers = Object.keys(historyAliases).filter((key) => historyAliases[key] === cursor);
+  if (history[cursor] && followers.length && JSON.stringify(history[cursor]) !== JSON.stringify(snapshot)) {
+    const promoted = followers[0];
+    history[promoted] = history[cursor];
+    delete historyAliases[promoted];
+    for (const key of followers.slice(1)) historyAliases[key] = promoted;
+  }
+  delete historyAliases[cursor];
+  const serialized = JSON.stringify(snapshot);
+  const shared = Object.keys(history).find((key) => key !== cursor && JSON.stringify(history[key]) === serialized);
+  if (shared) {
+    delete history[cursor];
+    historyAliases[cursor] = shared;
+    for (const key of followers) if (historyAliases[key] === cursor) historyAliases[key] = shared;
+  } else history[cursor] = snapshot;
+  const keys = Object.keys(history);
+  if (keys.length > HISTORY_LIMIT) {
+    for (const key of keys.sort((a, b) => history[a].at - history[b].at).slice(0, keys.length - HISTORY_LIMIT)) delete history[key];
+  }
+  for (const [key, target] of Object.entries(historyAliases)) if (!history[target]) delete historyAliases[key];
+  return { ...story, history, ...Object.keys(historyAliases).length || story.historyAliases ? { historyAliases } : {} };
+}
+
+// src/state-storage.ts
+var TEXT = "$t";
+var OBJECT = "$o";
+var VALUES = "$v";
+var lines = (text2) => text2.split(/(?<=\n)/);
+var object3 = (value) => Boolean(value && typeof value === "object" && !Array.isArray(value));
+var entries = (value) => Object.entries(value).filter(([, item]) => item !== void 0);
+function encodeRecordForStorage(record) {
+  if (Object.keys(record.attempts).length <= 20) return structuredClone(record);
+  const input = structuredClone(record);
+  const actions = {};
+  for (const [id, resolution] of Object.entries(input.resolutions)) {
+    const action = input.actions[resolution.actionId];
+    if (action && JSON.stringify(action) === JSON.stringify(resolution.action)) {
+      actions[resolution.actionId] = id;
+      delete input.actions[resolution.actionId];
+    }
+  }
+  const counts = /* @__PURE__ */ new Map();
+  const shapeCounts = /* @__PURE__ */ new Map();
+  const count = (text2) => {
+    if (text2.length >= 40) counts.set(text2, (counts.get(text2) ?? 0) + 1);
+  };
+  const visit = (value) => {
+    if (typeof value === "string") {
+      count(value);
+      const parts = lines(value);
+      if (parts.length > 1) parts.forEach(count);
+    } else if (Array.isArray(value)) value.forEach(visit);
+    else if (object3(value)) {
+      const shape = JSON.stringify(entries(value).map(([key]) => key));
+      if (shape.length >= 32) shapeCounts.set(shape, (shapeCounts.get(shape) ?? 0) + 1);
+      entries(value).forEach(([, item]) => visit(item));
+    }
+  };
+  visit(input);
+  const strings = [];
+  const indexes = /* @__PURE__ */ new Map();
+  const shapes = [];
+  const shapeIndexes = /* @__PURE__ */ new Map();
+  const share = (text2) => {
+    if ((counts.get(text2) ?? 0) < 2) return text2;
+    let index = indexes.get(text2);
+    if (index === void 0) {
+      index = strings.length;
+      strings.push(text2);
+      indexes.set(text2, index);
+    }
+    return index;
+  };
+  const encode = (value) => {
+    if (typeof value === "string") {
+      const full = share(value);
+      const parts = typeof full === "number" ? [full] : lines(value).map(share);
+      if (!parts.some((part) => typeof part === "number")) return value;
+      return { [TEXT]: parts };
+    }
+    if (Array.isArray(value)) return value.map(encode);
+    if (!object3(value)) return value;
+    const fields = entries(value);
+    if (Object.hasOwn(value, TEXT) || Object.hasOwn(value, OBJECT) || Object.hasOwn(value, VALUES)) return { [OBJECT]: fields.map(([key, item]) => [key, encode(item)]) };
+    const keys = fields.map(([key]) => key);
+    const shape = JSON.stringify(keys);
+    if ((shapeCounts.get(shape) ?? 0) > 1) {
+      let index = shapeIndexes.get(shape);
+      if (index === void 0) {
+        index = shapes.length;
+        shapes.push(keys);
+        shapeIndexes.set(shape, index);
+      }
+      return { [VALUES]: [index, ...fields.map(([, item]) => encode(item))] };
+    }
+    return Object.fromEntries(fields.map(([key, item]) => [key, encode(item)]));
+  };
+  const encoded = encode(input);
+  encoded.sharedStorage = { version: 1, strings, shapes, actions };
+  return encoded;
+}
+function decodeRecordStorage(raw) {
+  if (!object3(raw)) return raw;
+  const storage = raw.sharedStorage;
+  if (!object3(storage) || storage.version !== 1 || !Array.isArray(storage.strings) || !storage.strings.every((value) => typeof value === "string")) return raw;
+  const strings = storage.strings;
+  const shapes = Array.isArray(storage.shapes) ? storage.shapes : [];
+  const decode = (value) => {
+    if (Array.isArray(value)) return value.map(decode);
+    if (!object3(value)) return value;
+    if (Object.keys(value).length === 1 && [TEXT, OBJECT, VALUES].some((key) => Object.hasOwn(value, key) && !Array.isArray(value[key]))) return void 0;
+    if (Object.keys(value).length === 1 && Array.isArray(value[VALUES])) {
+      const [index, ...items] = value[VALUES];
+      const keys = Number.isInteger(index) ? shapes[index] : null;
+      if (Array.isArray(keys) && keys.length === items.length && keys.every((key) => typeof key === "string")) {
+        return Object.fromEntries(keys.map((key, position) => [key, decode(items[position])]).filter(([, item]) => item !== void 0));
+      }
+      return void 0;
+    }
+    if (Object.keys(value).length === 1 && Array.isArray(value[TEXT])) {
+      const parts = value[TEXT];
+      if (parts.every((part) => typeof part === "string" || Number.isInteger(part) && typeof strings[part] === "string")) {
+        return parts.map((part) => typeof part === "number" ? strings[part] : part).join("");
+      }
+      return void 0;
+    }
+    if (Object.keys(value).length === 1 && Array.isArray(value[OBJECT])) {
+      const entries2 = value[OBJECT];
+      if (entries2.every((entry) => Array.isArray(entry) && entry.length === 2 && typeof entry[0] === "string")) {
+        return Object.fromEntries(entries2.map((entry) => [entry[0], decode(entry[1])]));
+      }
+      return void 0;
+    }
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, decode(item)]).filter(([, item]) => item !== void 0));
+  };
+  const expanded = decode(Object.fromEntries(Object.entries(raw).filter(([key]) => key !== "sharedStorage")));
+  if (!object3(expanded)) return expanded;
+  if (object3(expanded.actions) && object3(expanded.resolutions) && object3(storage.actions)) {
+    for (const [actionId, resolutionId] of Object.entries(storage.actions)) {
+      const resolution = typeof resolutionId === "string" ? expanded.resolutions[resolutionId] : null;
+      if (object3(resolution) && object3(resolution.action) && !Object.hasOwn(expanded.actions, actionId)) {
+        Object.defineProperty(expanded.actions, actionId, { value: structuredClone(resolution.action), enumerable: true, writable: true, configurable: true });
+      }
+    }
+  }
+  return expanded;
+}
+
+// src/state.ts
+var INSPECTOR_LIMIT = 200;
+var INSPECTOR_DETAIL_LIMIT = 8;
+var REPLAY_TURN_LIMIT = 20;
+var RECORD_BACKUP_KEY = "rpDirector_0_7_backup";
+function needsLegacyRecordBackup(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const record = raw;
+  return record.schemaVersion === 1 && record.dataVersion !== 2;
+}
+function trimInspector(entries2) {
+  const kept = entries2.slice(-INSPECTOR_LIMIT);
+  const cut = kept.length - INSPECTOR_DETAIL_LIMIT;
+  return kept.map((entry, index) => index < cut && (entry.stateSent != null || entry.questions != null || entry.injectedText != null || entry.answers != null) ? { ...entry, stateSent: null, questions: null, injectedText: null, answers: null } : entry);
+}
+function newRecord(seedId, profileRevision) {
+  return {
+    schemaVersion: 1,
+    dataVersion: 2,
+    seedId,
+    actors: {},
+    actions: {},
+    resolutions: {},
+    permits: {},
+    attempts: {},
+    variants: {},
+    appliedOperationIds: [],
+    pending: null,
+    paused: false,
+    replyCheckRerolls: [],
+    inspector: [],
+    profileRevision,
+    story: emptyStory()
+  };
+}
+function normalizeRecord(raw, seedId, profileRevision) {
+  raw = decodeRecordStorage(raw);
+  const base = newRecord(seedId, profileRevision);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return base;
+  const r = raw;
+  if (r.schemaVersion !== 1) return base;
+  const map = (value) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item && typeof item === "object" && !Array.isArray(item)).map(([key, item]) => [key, structuredClone(item)]));
+  };
+  const normalized = {
+    ...base,
+    seedId: typeof r.seedId === "string" && r.seedId ? r.seedId : seedId,
+    actors: map(r.actors),
+    actions: map(r.actions),
+    resolutions: map(r.resolutions),
+    permits: map(r.permits),
+    attempts: map(r.attempts),
+    variants: map(r.variants),
+    appliedOperationIds: Array.isArray(r.appliedOperationIds) ? r.appliedOperationIds.filter((x) => typeof x === "string") : [],
+    paused: r.paused === true,
+    replyCheckRerolls: Array.isArray(r.replyCheckRerolls) ? [...new Set(r.replyCheckRerolls.filter((key) => typeof key === "string"))] : [],
+    inspector: Array.isArray(r.inspector) ? trimInspector(structuredClone(r.inspector)) : [],
+    profileRevision: typeof r.profileRevision === "string" ? r.profileRevision : profileRevision,
+    story: normalizeStory(r.story),
+    ...Array.isArray(r.transcriptCursors) && r.transcriptCursors.every((cursor) => typeof cursor === "string") ? { transcriptCursors: [...r.transcriptCursors] } : {},
+    ...r.dataVersion !== 2 || r.legacyStoryLayout ? { legacyStoryLayout: true } : {}
+  };
+  for (const variant of Object.values(normalized.variants)) {
+    const saved = variant;
+    delete saved.observerStatus;
+    delete saved.observation;
+    delete saved.observerError;
+    const attempt = normalized.attempts[variant.attemptId];
+    if (attempt && attempt.variantId === variant.variantId && saved.acceptance !== "rejected") {
+      attempt.status = "accepted";
+    }
+    delete saved.acceptance;
+  }
+  for (const attempt of Object.values(normalized.attempts)) {
+    if (typeof attempt.injectedText !== "string") attempt.injectedText = "";
+    if (attempt.frozenStateBlock !== void 0 && typeof attempt.frozenStateBlock !== "string") delete attempt.frozenStateBlock;
+    if (attempt.inputText !== void 0 && typeof attempt.inputText !== "string") delete attempt.inputText;
+    if (["prepared", "writing", "observing", "provisional"].includes(attempt.status)) attempt.status = "cancelled";
+  }
+  for (const entry of normalized.inspector) if (["observer", "acceptance", "restore", "native_bypass"].includes(entry.kind)) entry.kind = "info";
+  return normalized;
+}
+var clone = (value) => structuredClone(value);
+var frozenTurn = (event) => ({
+  reaction: clone(event.reaction ?? null),
+  frozenSpeaker: clone(event.frozenSpeaker ?? null),
+  frozenStateBlock: event.frozenStateBlock ?? "",
+  frozenLorePlan: clone(event.frozenLorePlan ?? null),
+  judgeErrors: [...event.judgeErrors ?? []],
+  loreCursor: event.loreCursor ?? null,
+  ...event.judgeFailedStages === void 0 ? {} : { judgeFailedStages: [...event.judgeFailedStages] },
+  ...event.stageRecords === void 0 ? {} : { stageRecords: clone(event.stageRecords) },
+  ...event.turnKind === void 0 ? {} : { turnKind: event.turnKind },
+  ...event.inputText === void 0 ? {} : { inputText: event.inputText },
+  ...event.storyBefore === void 0 ? {} : { storyBefore: clone(event.storyBefore) },
+  ...event.storyAfter === void 0 ? {} : { storyAfter: clone(event.storyAfter) }
+});
+function applyEvent(input, event) {
+  const record = clone(input);
+  const notices = [];
+  const done = () => ({ record, notices, changed: true });
+  const ignore = (why) => ({ record: input, notices: [why], changed: false });
+  switch (event.type) {
+    case "bind_actor":
+      record.actors[event.binding.actorId] = clone(event.binding);
+      return done();
+    case "prepare": {
+      if (record.attempts[event.attemptId]) return ignore("attempt already exists");
+      if (record.pending) {
+        const previous = record.attempts[record.pending.attemptId];
+        if (previous?.status === "prepared") previous.status = "cancelled";
+      }
+      if (event.action) record.actions[event.action.actionId] = clone(event.action);
+      if (event.resolution) record.resolutions[event.resolution.resolutionId] = clone(event.resolution);
+      record.attempts[event.attemptId] = {
+        attemptId: event.attemptId,
+        resolutionId: event.resolution?.resolutionId ?? null,
+        permitId: null,
+        ...frozenTurn(event),
+        actorId: event.actorId,
+        cursorBefore: null,
+        status: "prepared",
+        generationType: "normal",
+        hostMessageRef: null,
+        hostVariantRef: null,
+        variantId: null,
+        injectedText: "",
+        epoch: event.epoch,
+        unadjudicated: false,
+        toolStatus: "not_offered",
+        toolError: null,
+        createdAt: event.now
+      };
+      record.pending = {
+        attemptId: event.attemptId,
+        resolutionId: event.resolution?.resolutionId ?? null,
+        actorId: event.actorId,
+        epoch: event.epoch,
+        composerText: event.composerText,
+        createdAt: event.now
+      };
+      return done();
+    }
+    case "bind": {
+      const pending = record.pending;
+      const attempt = record.attempts[event.attemptId];
+      if (!pending || pending.attemptId !== event.attemptId || pending.epoch !== event.epoch || !attempt) return ignore("bind does not match pending attempt");
+      attempt.cursorBefore = event.cursorBefore;
+      attempt.status = "writing";
+      attempt.injectedText = event.injectedText;
+      attempt.toolStatus = event.toolOffered ? "offered" : "not_offered";
+      const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
+      if (resolution) {
+        if (resolution.cursorBefore === null) resolution.cursorBefore = event.cursorBefore;
+        else if (resolution.cursorBefore !== event.cursorBefore) {
+          attempt.resolutionId = null;
+          attempt.unadjudicated = true;
+          attempt.injectedText = "";
+          notices.push("stored ruling did not match this message; proceeding unruled");
+        }
+      }
+      record.pending = null;
+      return done();
+    }
+    case "store_permit":
+      record.permits[event.permit.permitId] = clone(event.permit);
+      return done();
+    case "store_resolution":
+      record.actions[event.resolution.actionId] = clone(event.resolution.action);
+      record.resolutions[event.resolution.resolutionId] = clone(event.resolution);
+      return done();
+    case "tool_result": {
+      const attempt = record.attempts[event.attemptId];
+      if (!attempt || attempt.status !== "writing") return ignore("tool result is not for the active attempt");
+      if (event.permit && (event.permit.attemptId !== attempt.attemptId || event.permit.baseCursor !== attempt.cursorBefore)) return ignore("tool result identity does not match");
+      attempt.toolStatus = event.status;
+      attempt.toolError = event.error;
+      if (event.permit) {
+        record.permits[event.permit.permitId] = clone(event.permit);
+        attempt.permitId = event.permit.permitId;
+        attempt.reaction = null;
+      }
+      return done();
+    }
+    case "regeneration_attempt":
+      if (record.attempts[event.attemptId]) return ignore("attempt already exists");
+      record.attempts[event.attemptId] = {
+        attemptId: event.attemptId,
+        resolutionId: event.resolutionId,
+        permitId: event.permitId ?? null,
+        ...frozenTurn(event),
+        actorId: event.actorId,
+        cursorBefore: event.cursorBefore,
+        status: "writing",
+        generationType: event.generationType,
+        hostMessageRef: null,
+        hostVariantRef: null,
+        variantId: null,
+        injectedText: event.injectedText,
+        epoch: event.epoch,
+        unadjudicated: event.unadjudicated,
+        toolStatus: event.permitId ? "reused" : "not_offered",
+        toolError: null,
+        createdAt: event.now
+      };
+      return done();
+    case "completed": {
+      if (record.appliedOperationIds.includes(event.operationId)) return ignore("duplicate completion");
+      const attempt = record.attempts[event.attemptId];
+      if (!attempt || attempt.epoch !== event.epoch || attempt.status !== "writing") return ignore("completion does not match an active attempt");
+      record.appliedOperationIds.push(event.operationId);
+      attempt.hostMessageRef = event.hostMessageRef;
+      attempt.hostVariantRef = event.hostVariantRef;
+      attempt.variantId = event.variantId;
+      if (attempt.actorId === null && event.actorId) attempt.actorId = event.actorId;
+      attempt.status = "accepted";
+      const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
+      if (resolution?.status === "prepared") resolution.status = "accepted";
+      record.variants[event.variantId] = {
+        variantId: event.variantId,
+        attemptId: attempt.attemptId,
+        resolutionId: attempt.resolutionId,
+        permitId: attempt.permitId ?? null,
+        actorId: attempt.actorId,
+        cursorBefore: attempt.cursorBefore,
+        cursorAfter: event.cursorAfter
+      };
+      return done();
+    }
+    case "cancel":
+    case "abort_epoch": {
+      let changed = false;
+      const attemptId = event.type === "cancel" ? event.attemptId : null;
+      for (const attempt of Object.values(record.attempts)) {
+        if (attemptId !== null ? attempt.attemptId !== attemptId : attempt.epoch !== event.epoch) continue;
+        if (attempt.status === "prepared" || attempt.status === "writing") {
+          attempt.status = "cancelled";
+          changed = true;
+        }
+      }
+      if (record.pending && record.pending.epoch === event.epoch && (attemptId === null || record.pending.attemptId === attemptId)) {
+        record.pending = null;
+        changed = true;
+      }
+      return changed ? done() : ignore("nothing in flight");
+    }
+    case "select_variant":
+    case "head_changed":
+      return ignore("transcript selection does not change frozen history");
+    case "reroll": {
+      const previous = record.resolutions[event.previousResolutionId];
+      if (!previous) return ignore("unknown prior ruling");
+      const next = clone(event.resolution);
+      next.previousResolutionId = previous.resolutionId;
+      next.cursorBefore = previous.cursorBefore;
+      next.generation = previous.generation + 1;
+      next.status = "prepared";
+      if (previous.status === "prepared") previous.status = "superseded";
+      record.resolutions[next.resolutionId] = next;
+      return done();
+    }
+    case "invalidate_prepared": {
+      let changed = false;
+      for (const resolution of Object.values(record.resolutions)) {
+        if (resolution.status !== "prepared" || resolution.cursorBefore !== null) continue;
+        if (event.profileRevision && resolution.policyRevision === event.profileRevision) continue;
+        resolution.status = "invalidated";
+        changed = true;
+      }
+      if (record.pending) {
+        const attempt = record.attempts[record.pending.attemptId];
+        if (attempt?.status === "prepared") attempt.status = "cancelled";
+        record.pending = null;
+        changed = true;
+      }
+      if (event.profileRevision && record.profileRevision !== event.profileRevision) {
+        record.profileRevision = event.profileRevision;
+        changed = true;
+      }
+      return changed ? done() : ignore("no unused preparation");
+    }
+    case "inspect":
+      record.inspector.push(clone(event.entry));
+      record.inspector = trimInspector(record.inspector);
+      return done();
+    default:
+      return ignore("unknown event");
+  }
+}
+function activeResolutionForCursor(record, cursor) {
+  let best = null;
+  for (const resolution of Object.values(record.resolutions)) {
+    if (resolution.cursorBefore !== cursor || resolution.status !== "prepared" && resolution.status !== "accepted") continue;
+    if (!best || resolution.generation > best.generation || resolution.generation === best.generation && resolution.createdAt > best.createdAt) best = resolution;
+  }
+  return best;
+}
+function compactRecord(input, live) {
+  const record = clone(input);
+  const cursors = new Set(live.liveCursors);
+  const attemptIds = new Set(live.activeAttemptIds?.filter((id) => typeof id === "string"));
+  const resolutionIds = new Set(live.activeResolutionIds?.filter((id) => typeof id === "string"));
+  const permitIds = new Set(live.activePermitIds?.filter((id) => typeof id === "string"));
+  const variantIds = new Set(live.liveVariantIds);
+  const newestByCursor = /* @__PURE__ */ new Map();
+  const firstByCursor = /* @__PURE__ */ new Map();
+  for (const attempt of Object.values(record.attempts)) {
+    if (!attempt.cursorBefore) continue;
+    const first = firstByCursor.get(attempt.cursorBefore);
+    if (!first || attempt.createdAt < first.createdAt) firstByCursor.set(attempt.cursorBefore, attempt);
+  }
+  const turns = [...firstByCursor.values()].sort((a, b) => b.createdAt - a.createdAt);
+  const userTurns = turns.filter((attempt) => attempt.turnKind !== "director_next");
+  const cutoff = (userTurns.length ? userTurns : turns)[REPLAY_TURN_LIMIT - 1]?.createdAt ?? -Infinity;
+  const recentCursors = new Set(turns.filter((attempt) => attempt.createdAt >= cutoff).map((attempt) => attempt.cursorBefore));
+  const replayResolutionIds = new Set(resolutionIds);
+  const replayPermitIds = new Set(permitIds);
+  for (const attempt of Object.values(record.attempts)) {
+    if (attempt.status === "writing" || record.pending?.attemptId === attempt.attemptId) attemptIds.add(attempt.attemptId);
+    if (attempt.cursorBefore && recentCursors.has(attempt.cursorBefore)) {
+      if (attempt.resolutionId || attempt.permitId) attemptIds.add(attempt.attemptId);
+      if (attempt.resolutionId) replayResolutionIds.add(attempt.resolutionId);
+      if (attempt.permitId) replayPermitIds.add(attempt.permitId);
+    }
+    if (attemptIds.has(attempt.attemptId)) {
+      if (attempt.resolutionId) replayResolutionIds.add(attempt.resolutionId);
+      if (attempt.permitId) replayPermitIds.add(attempt.permitId);
+    }
+    if (!attempt.cursorBefore || !cursors.has(attempt.cursorBefore)) continue;
+    const prior = newestByCursor.get(attempt.cursorBefore);
+    if (!prior || attempt.createdAt >= prior.createdAt) newestByCursor.set(attempt.cursorBefore, attempt);
+  }
+  for (const attempt of newestByCursor.values()) attemptIds.add(attempt.attemptId);
+  for (const [id, variant] of Object.entries(record.variants)) {
+    if (!variantIds.has(id)) {
+      delete record.variants[id];
+      continue;
+    }
+    attemptIds.add(variant.attemptId);
+    if (variant.resolutionId) resolutionIds.add(variant.resolutionId);
+    if (variant.permitId) permitIds.add(variant.permitId);
+    if (variant.cursorBefore) cursors.add(variant.cursorBefore);
+    if (variant.cursorAfter) cursors.add(variant.cursorAfter);
+  }
+  for (const [id, attempt] of Object.entries(record.attempts)) {
+    if (!attemptIds.has(id)) {
+      delete record.attempts[id];
+      continue;
+    }
+    if (attempt.resolutionId) resolutionIds.add(attempt.resolutionId);
+    if (attempt.permitId) permitIds.add(attempt.permitId);
+    if (attempt.cursorBefore) cursors.add(attempt.cursorBefore);
+    if (attempt.loreCursor) cursors.add(attempt.loreCursor);
+    if (attempt.cursorBefore && !recentCursors.has(attempt.cursorBefore) && !live.activeAttemptIds?.includes(id)) {
+      attempt.replayTrimmed = true;
+      delete attempt.stageRecords;
+    }
+    if (!attempt.judgeFailedStages?.some((stage) => ["move", "route", "ruling"].includes(stage))) delete attempt.stageRecords;
+    else if (attempt.stageRecords) {
+      attempt.stageRecords = attempt.stageRecords.map((stage) => ({ ...stage, state: null }));
+    }
+    if (attempt.variantId && !record.variants[attempt.variantId]) {
+      attempt.variantId = null;
+      attempt.hostMessageRef = null;
+      attempt.hostVariantRef = null;
+    }
+  }
+  const actionIds = /* @__PURE__ */ new Set();
+  for (const [id, resolution] of Object.entries(record.resolutions)) {
+    if (!resolutionIds.has(id)) {
+      delete record.resolutions[id];
+      continue;
+    }
+    if (!replayResolutionIds.has(id)) {
+      resolution.snapshot.state = null;
+      resolution.replayTrimmed = true;
+    }
+    actionIds.add(resolution.actionId);
+  }
+  for (const [id, permit] of Object.entries(record.permits)) {
+    if (!permitIds.has(id)) {
+      delete record.permits[id];
+      continue;
+    }
+    if (!replayPermitIds.has(id)) {
+      delete permit.proposal;
+      delete permit.snapshot;
+      delete permit.profile;
+      delete permit.reviewHistory;
+      permit.replayTrimmed = true;
+    }
+    if (permit.reviewHistory) permit.reviewHistory = permit.reviewHistory.slice(-INSPECTOR_DETAIL_LIMIT);
+  }
+  for (const id of Object.keys(record.actions)) if (!actionIds.has(id)) delete record.actions[id];
+  record.inspector = trimInspector(record.inspector);
+  record.appliedOperationIds = record.appliedOperationIds.slice(-INSPECTOR_LIMIT);
+  record.replyCheckRerolls = record.replyCheckRerolls?.filter((cursor) => cursors.has(cursor) || recentCursors.has(cursor));
+  const aliases = {};
+  const historyKeys = new Set(cursors);
+  for (const [cursor, target] of Object.entries(record.story.historyAliases ?? {})) {
+    if (!cursors.has(cursor) || !record.story.history[target]) continue;
+    aliases[cursor] = target;
+    historyKeys.add(target);
+  }
+  for (const cursor of Object.keys(record.story.history)) if (!historyKeys.has(cursor)) delete record.story.history[cursor];
+  const byValue = /* @__PURE__ */ new Map();
+  for (const [cursor, snapshot] of Object.entries(record.story.history)) {
+    const key = JSON.stringify(snapshot);
+    const shared = byValue.get(key);
+    if (!shared) {
+      byValue.set(key, cursor);
+      continue;
+    }
+    delete record.story.history[cursor];
+    if (cursors.has(cursor)) aliases[cursor] = shared;
+    for (const alias of Object.keys(aliases)) if (aliases[alias] === cursor) aliases[alias] = shared;
+  }
+  if (record.story.historyAliases || Object.keys(aliases).length) record.story.historyAliases = aliases;
+  for (const cursor of Object.keys(record.story.lore)) if (!cursors.has(cursor)) delete record.story.lore[cursor];
+  return record;
+}
+function replayIsTrimmed(record, attempt) {
+  return attempt.replayTrimmed === true || Boolean(attempt.resolutionId && record.resolutions[attempt.resolutionId]?.replayTrimmed) || Boolean(attempt.permitId && record.permits[attempt.permitId]?.replayTrimmed);
+}
+
+// src/result-footer.ts
+function stripResultFooter(text2) {
+  return text2.replace(/(?:\r?\n){0,2}^\[RP_DIRECTOR\]\r?\n\{[^\r\n]*\}\r?\n\[\/RP_DIRECTOR\]/gm, "");
+}
+function stripChatResultFooters(messages) {
+  let copies = 0;
+  const changedMessageIds = [];
+  const strip = (value) => {
+    const clean = stripResultFooter(value);
+    if (clean !== value) copies += (value.match(/^\[RP_DIRECTOR\]\r?\n\{[^\r\n]*\}\r?\n\[\/RP_DIRECTOR\]/gm) ?? []).length;
+    return clean;
+  };
+  for (const [index, message] of messages.entries()) {
+    const before = copies;
+    if (typeof message.mes === "string") message.mes = strip(message.mes);
+    if (typeof message.display_text === "string") message.display_text = strip(message.display_text);
+    if (Array.isArray(message.swipes)) message.swipes = message.swipes.map((value) => typeof value === "string" ? strip(value) : value);
+    const extras = /* @__PURE__ */ new Set([message.extra, ...(message.swipe_info ?? []).map((info) => info?.extra)]);
+    for (const extra of extras) if (extra && typeof extra.display_text === "string") extra.display_text = strip(extra.display_text);
+    if (copies > before) changedMessageIds.push(index);
+  }
+  return { messages: changedMessageIds.length, copies, changedMessageIds };
+}
+
+// src/lore/apply.ts
+function placeLorePick(entry, nearEnd = true) {
+  return nearEnd ? { ...entry, position: 4, depth: 1 } : { ...entry };
+}
+function applyLorePlan(lists, plan) {
+  let removed = 0;
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (let i = list.length - 1; i >= 0; i--) {
+      const entry = list[i];
+      if (!entry || typeof entry !== "object") continue;
+      if (plan.force.has(`${String(entry.world)}.${String(entry.uid)}`)) continue;
+      if (plan.managed.has(String(entry.world)) && entry.constant !== true) {
+        list.splice(i, 1);
+        removed += 1;
+      }
+    }
+  }
+  return removed;
+}
+function summarizeActivation(entries2, forced, at = Date.now()) {
+  const books = {};
+  for (const raw of entries2) {
+    const entry = raw;
+    if (!entry || typeof entry !== "object" || typeof entry.world !== "string") continue;
+    const book = books[entry.world] ??= { entries: 0, chars: 0, picked: 0 };
+    book.entries += 1;
+    book.chars += typeof entry.content === "string" ? entry.content.length : 0;
+    if (forced?.has(`${entry.world}.${String(entry.uid)}`)) book.picked += 1;
+  }
+  return { at, books };
+}
+
+// src/pack/pack.ts
+var EVIDENCE_SOURCES = ["transcript", "owner_card", "target_card", "meters", "lore"];
+var PRIVATE_SOURCES = ["owner_card", "target_card", "meters"];
+var CORE_PROTECTED = Object.freeze([
+  "The player's voluntary speech, actions, feelings, consent and decisions are the player's own; never decide them.",
+  "Do not assume feelings, attraction, trust or willingness beyond what the supplied evidence shows."
+]);
+var RESERVED_KEYS = /* @__PURE__ */ new Set(["NONE", "UNSUPPORTED", "UNRESOLVED", "ROUTINE"]);
+var KEY = /^[a-z][a-z0-9_]{0,39}$/;
+function deepFreeze(value) {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) deepFreeze(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+var HANDOFF_LINE = "An explicit hand-off: the player invites, orders or dares a character to act, or gives them the initiative.";
+var ROUTINE_LINE = "Actions that are routine or effectively certain for whoever performs them, such as a ruler's everyday command to their own servants or a practised task done in calm conditions.";
+var SMALL_TALK_LINE = "Ordinary conversation, the player's own feelings, wants or decisions, observation, out-of-character remarks, trivial activity, and anything the scene has already settled.";
+var DEFAULT_PACK = deepFreeze({
+  id: "default",
+  version: 4,
+  label: "General",
+  description: "Works for most roleplay. Rules physical, social and stealth attempts with seven broad kinds of move; tracks how each character regards the player.",
+  actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
+  gate: {
+    include: [
+      "An attempt to change the situation where failure is genuinely possible and would materially change what happens: overcoming an obstacle, contesting opposition, evading, concealing or deceiving, discovering a hidden fact, pressing someone for specific conduct, or securing access, information, possession or a commitment.",
+      HANDOFF_LINE
+    ],
+    exclude: [SMALL_TALK_LINE, ROUTINE_LINE]
+  },
+  protected: [],
+  families: [
+    {
+      key: "overcome_operate",
+      label: "Overcome / operate",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card"],
+      definition: "Overcome an obstacle, or operate, repair, treat, craft, break or create something.",
+      successSemantics: "The concrete method, given the actor's established competence, tools and conditions, produces the specified result now."
+    },
+    {
+      key: "contest_impose",
+      label: "Contest / impose",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
+      definition: "Actively overcome opposition: attack, grapple, restrain, seize, interrupt, force or outmanoeuvre.",
+      successSemantics: "The acting side overcomes the active opposition in this one exchange; the same contest is not resolved twice."
+    },
+    {
+      key: "evade_resist",
+      label: "Evade / resist",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
+      definition: "Escape, dodge, withstand, keep control, or avoid an imposed consequence.",
+      successSemantics: "The actor avoids or withstands the specified consequence in this exchange."
+    },
+    {
+      key: "conceal_deceive",
+      label: "Conceal / deceive",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
+      definition: "Lie, hide, sneak, take something unnoticed, disguise, misdirect or keep up an alibi.",
+      successSemantics: "The concealment or deception holds now against the named observers, judged by what they could perceive or verify."
+    },
+    {
+      key: "detect_discover",
+      label: "Detect / discover",
+      kind: "discovery",
+      evidence: ["transcript", "lore"],
+      definition: "Notice, search, investigate, read a tell, catch a lie, or establish a hidden fact from visible cues.",
+      successSemantics: "The observer establishes the specified fact now from cues visible in the scene and their own public capabilities; hidden truth that nothing in the scene has shown is not evidence."
+    },
+    {
+      key: "influence_negotiate",
+      label: "Influence / negotiate",
+      kind: "change",
+      evidence: ["transcript", "lore", "target_card", "meters"],
+      definition: "Seek one specific, immediate conduct from someone through a request, bargain, argument, threat or pressure.",
+      successSemantics: "The target chooses the specified conduct now, given their established interests, boundaries and leverage; what the player says or offers is evidence about how the target may respond."
+    },
+    {
+      key: "acquire_secure",
+      label: "Acquire / secure",
+      kind: "change",
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
+      definition: "Secure bounded access, information, possession, permission or a commitment.",
+      successSemantics: "The specified access, information, possession or commitment is secured now."
+    }
+  ],
+  meters: [
+    { key: "regard", label: "regard for {{player}}", about: "How the character feels about the player right now: warmth, respect and trust together.", levels: ["hostile", "cold", "neutral", "warm", "devoted"], initial: 2 }
+  ]
+});
+function protectedLines(pack) {
+  return [...CORE_PROTECTED, ...pack.protected.filter((line) => typeof line === "string" && line.trim())];
+}
+function familyByKey(pack, key) {
+  return pack.families.find((f) => f.key === key) ?? null;
+}
+function meterLabel(meter, playerName) {
+  return meter.label.replace(/\{\{\s*player\s*\}\}/gi, playerName);
+}
+var text = (value, max) => typeof value === "string" && value.trim().length > 0 && value.length <= max;
+function validatePack(pack) {
+  const errors = [];
+  if (!pack || typeof pack !== "object") return { ok: false, errors: ["pack must be an object"] };
+  if (!KEY.test(String(pack.id ?? ""))) errors.push("id must be lowercase letters, digits and underscores");
+  if (!Number.isInteger(pack.version) || pack.version < 1) errors.push("version must be a positive integer");
+  if (!text(pack.label, 80)) errors.push("label is required (up to 80 characters)");
+  if (!text(pack.description, 300)) errors.push("description is required (up to 300 characters)");
+  const kinds = pack.actors?.kinds ?? [];
+  const owners = pack.actors?.rulableOwners ?? [];
+  if (!kinds.includes("player")) errors.push("actors.kinds must include player");
+  if (!owners.includes("player")) errors.push("actors.rulableOwners must include player");
+  for (const owner of owners) if (!kinds.includes(owner)) errors.push(`actors.rulableOwners has ${owner}, which is not in actors.kinds`);
+  if (!Array.isArray(pack.gate?.include) || pack.gate.include.length === 0 || !pack.gate.include.every((line) => text(line, 600))) errors.push("gate.include needs at least one criterion (up to 600 characters each)");
+  if (!Array.isArray(pack.gate?.exclude) || !pack.gate.exclude.every((line) => text(line, 600))) errors.push("gate.exclude must be a list of criteria");
+  if (!Array.isArray(pack.protected) || !pack.protected.every((line) => text(line, 600))) errors.push("protected must be a list of sentences");
+  const families = Array.isArray(pack.families) ? pack.families : [];
+  if (families.length === 0 || families.length > 250) errors.push("families: between 1 and 250 are required");
+  const seen = /* @__PURE__ */ new Set();
+  for (const family of families) {
+    const key = String(family?.key ?? "");
+    if (RESERVED_KEYS.has(key)) {
+      errors.push(`family key ${key} is reserved`);
+      continue;
+    }
+    if (!KEY.test(key)) {
+      errors.push(`family key "${key}" must be lowercase letters, digits and underscores`);
+      continue;
+    }
+    if (seen.has(key)) errors.push(`duplicate family ${key}`);
+    seen.add(key);
+    if (!text(family.label, 80)) errors.push(`${key}: label is required`);
+    if (!text(family.definition, 600)) errors.push(`${key}: definition is required (up to 600 characters)`);
+    if (!text(family.successSemantics, 600)) errors.push(`${key}: successSemantics is required (up to 600 characters)`);
+    if (family.kind !== "change" && family.kind !== "discovery") errors.push(`${key}: kind must be change or discovery`);
+    const evidence = Array.isArray(family.evidence) ? family.evidence : [];
+    for (const source of evidence) if (!EVIDENCE_SOURCES.includes(source)) errors.push(`${key}: unknown evidence source ${String(source)}`);
+    if (!evidence.includes("transcript")) errors.push(`${key}: evidence must include transcript`);
+    if (family.kind === "discovery") {
+      for (const source of evidence) if (PRIVATE_SOURCES.includes(source)) errors.push(`${key}: a discovery family may not read ${source}`);
+    }
+  }
+  const meters = Array.isArray(pack.meters) ? pack.meters : null;
+  if (!meters) errors.push("meters must be a list (it may be empty)");
+  else {
+    if (meters.length > 4) errors.push("at most 4 meters");
+    const meterKeys = /* @__PURE__ */ new Set();
+    for (const meter of meters) {
+      const key = String(meter?.key ?? "");
+      if (!KEY.test(key)) {
+        errors.push(`meter key "${key}" must be lowercase letters, digits and underscores`);
+        continue;
+      }
+      if (meterKeys.has(key)) errors.push(`duplicate meter ${key}`);
+      meterKeys.add(key);
+      if (!text(meter.label, 80)) errors.push(`meter ${key}: label is required`);
+      if (!text(meter.about, 300)) errors.push(`meter ${key}: about is required (up to 300 characters)`);
+      const levels = Array.isArray(meter.levels) ? meter.levels : [];
+      if (levels.length < 3 || levels.length > 7) errors.push(`meter ${key}: needs 3 to 7 levels`);
+      if (!levels.every((level) => text(level, 40))) errors.push(`meter ${key}: every level needs a short name`);
+      if (new Set(levels).size !== levels.length) errors.push(`meter ${key}: level names must be unique`);
+      if (!Number.isInteger(meter.initial) || meter.initial < 0 || meter.initial >= levels.length) errors.push(`meter ${key}: initial must be a level index`);
+    }
+  }
+  return { ok: errors.length === 0, errors };
+}
+
+// src/workflow-badge.ts
+var WORKFLOW_BADGE_KEY = "rpdWorkflow";
+function buildWorkflowBadge(input) {
+  const { attempt, resolution, permit, record, pack } = input;
+  const results = [];
+  if (resolution) results.push({
+    source: "move",
+    actorId: resolution.action.actingActorId ?? resolution.action.playerActorId,
+    action: resolution.action.attemptedAction,
+    outcome: resolution.outcome,
+    instruction: resolution.outcomeInstruction ?? "",
+    odds: resolution.method === "sample" ? resolution.policyBand?.sampleWeights[resolution.outcome] ?? null : null,
+    draw: resolution.draw
+  });
+  for (const action of permit?.actions ?? []) results.push({
+    source: "npc",
+    actorId: action.actingActorId,
+    action: action.method,
+    outcome: action.outcome,
+    instruction: action.instruction,
+    odds: action.methodUsed === "sample" ? action.policyBand?.sampleWeights[action.outcome] ?? null : null,
+    draw: action.draw ?? null
+  });
+  const errors = [...new Set(attempt.judgeErrors ?? [])];
+  if (attempt.toolError && !errors.includes(attempt.toolError)) errors.push(attempt.toolError);
+  const actorNames = Object.fromEntries(Object.values(record?.actors ?? {}).map((actor) => [actor.actorId, uiActorName(actor.actorId, actor.name)]));
+  actorNames.player = PLAYER_LABEL;
+  actorNames[YIELD] = PLAYER_LABEL;
+  const speakerId = attempt.frozenSpeaker?.selected ?? null;
+  const moveStage = attempt.stageRecords?.find((stage) => stage.stage === "move");
+  const selectedMove = moveStage?.result.answers.move;
+  const moveQuestion2 = moveStage?.questions.move;
+  const selectedSentence = selectedMove?.type === "choice" && !["NONE", "ROUTINE"].includes(selectedMove.choice) && moveQuestion2?.type === "choice" ? moveQuestion2.criteria[selectedMove.choice] ?? null : null;
+  const routeStage = attempt.stageRecords?.find((stage) => stage.stage === "route");
+  const routeChoice = (key) => {
+    const answer = routeStage?.result.answers[key];
+    return answer?.type === "choice" && answer.choice !== "UNRESOLVED" ? answer.choice : null;
+  };
+  const actorId = resolution?.action.actingActorId ?? resolution?.action.playerActorId ?? routeChoice("owner");
+  const family = resolution?.action.move?.familyKey ?? resolution?.action.templateId ?? routeChoice("family");
+  const target = routeChoice("target");
+  const route = actorId && family ? {
+    actorId,
+    targetActorIds: resolution ? [...resolution.action.targetActorIds] : target ? [target === "SELF" ? actorId : target] : [],
+    kind: pack?.families.find((item) => item.key === family)?.label ?? family.replaceAll("_", " ")
+  } : null;
+  const meterChanges = [];
+  for (const [id, meters] of Object.entries(attempt.storyAfter?.meters ?? {})) {
+    for (const [key, to] of Object.entries(meters)) {
+      const definition = pack?.meters.find((meter) => meter.key === key);
+      const from = attempt.storyBefore?.meters[id]?.[key] ?? definition?.initial ?? null;
+      if (from === to) continue;
+      meterChanges.push({
+        actorId: id,
+        meter: key,
+        label: definition ? meterLabel(definition, PLAYER_LABEL) : key,
+        from,
+        to,
+        fromLabel: from === null ? "Not recorded" : definition?.levels[from] ?? String(from),
+        toLabel: definition?.levels[to] ?? String(to)
+      });
+    }
+  }
+  const reveals = [];
+  for (const [secretId, knownBy] of Object.entries(attempt.storyAfter?.knownBy ?? {})) {
+    const secret = record?.story.secrets.find((item) => item.id === secretId);
+    const previous = attempt.storyBefore?.knownBy[secretId] ?? secret?.holders ?? [];
+    const actorIds = knownBy.filter((id) => !previous.includes(id));
+    if (actorIds.length) reveals.push({ secretId, text: secret?.text ?? "", actorIds });
+  }
+  const lore = attempt.loreCursor ? record?.story.lore[attempt.loreCursor] : null;
+  return {
+    schemaVersion: 1,
+    requestUsage: mergeRequestUsage(attempt.requestUsage, ...record?.inspector.filter((entry) => entry.attemptId === attempt.attemptId).map((entry) => entry.requestUsage) ?? []),
+    pacing: attempt.frozenPacing ? {
+      ...structuredClone(attempt.frozenPacing),
+      handBack: attempt.injectedText.includes("[Director hand-back \u2014 preserve on wording swipes]") ? attempt.frozenPacing.handBack : null
+    } : null,
+    replyCheck: attempt.replyCheck ? structuredClone(attempt.replyCheck) : void 0,
+    replyCheckError: attempt.replyCheckError,
+    rerolledByCheck: attempt.rerolledByCheck,
+    replyOriginalSwipe: attempt.replyOriginalSwipe,
+    attemptId: attempt.attemptId,
+    unavailable: (attempt.judgeErrors?.length ?? 0) > 0,
+    retryEligible: attempt.judgeFailedStages === void 0 ? (attempt.judgeErrors?.length ?? 0) > 0 && !resolution && !permit : attempt.judgeFailedStages.some((stage) => ["move", "route", "ruling"].includes(stage)),
+    toolError: attempt.toolError ?? null,
+    errors,
+    results,
+    reaction: attempt.reaction ? { actorId: attempt.reaction.actorId, outcome: attempt.reaction.outcome, draw: attempt.reaction.draw } : null,
+    createdAt: attempt.createdAt,
+    actorNames,
+    move: resolution?.action.move?.passage ?? resolution?.action.attemptedAction ?? selectedSentence,
+    route,
+    writerInstruction: attempt.injectedText,
+    speaker: speakerId ? { actorId: speakerId, name: uiActorName(speakerId === YIELD ? "player" : speakerId, actorNames[speakerId]) } : null,
+    meterChanges,
+    reveals,
+    lore: (lore?.refs ?? []).map(({ world, uid, title }) => ({ world, uid, title }))
+  };
+}
+function workflowBadgeLabel(badge) {
+  const result = badge.results[0];
+  const parts = ["Director"];
+  if (badge.rerolledByCheck) parts.push(`rerolled (${badge.rerolledByCheck})`);
+  if (badge.pacing?.handBack === "HAND_BACK") parts.push("your turn at the next beat");
+  if (badge.unavailable) parts.push("judge unavailable");
+  else if (badge.toolError) parts.push("writer tool request rejected");
+  if (result) {
+    parts.push(result.outcome.replaceAll("_", " "));
+    if (result.odds !== null) parts.push(`${Math.round(result.odds * 100)}%`);
+    if (result.draw !== null) parts.push(`rolled ${Math.round(result.draw * 100)}`);
+    if (badge.results.length > 1) parts.push(`+${badge.results.length - 1} ${badge.results.length === 2 ? "roll" : "rolls"}`);
+  } else if (badge.reaction) parts.push(`${uiActorName(badge.reaction.actorId, badge.actorNames?.[badge.reaction.actorId])} \xB7 ${badge.reaction.outcome.replaceAll("_", " ")}`);
+  else if (!badge.unavailable && !badge.toolError && badge.speaker) parts.push(`${badge.speaker.name} takes the lead`);
+  else if (!badge.unavailable) parts.push("no move");
+  return parts.join(" \xB7 ");
+}
+function isWorkflowBadge(value) {
+  if (!value || typeof value !== "object") return false;
+  const badge = value;
+  const strings = (items) => Array.isArray(items) && items.every((item) => typeof item === "string");
+  return badge.schemaVersion === 1 && typeof badge.attemptId === "string" && typeof badge.unavailable === "boolean" && (badge.requestUsage === void 0 || Array.isArray(badge.requestUsage) && badge.requestUsage.every(isRequestUsage)) && (badge.rerolledByCheck === void 0 || ["writes for {{user}}", "broken ruling"].includes(badge.rerolledByCheck)) && (badge.replyCheckError === void 0 || typeof badge.replyCheckError === "string") && (badge.pacing === void 0 || badge.pacing === null || typeof badge.pacing === "object" && (badge.pacing.scene === null || ["combat", "conversation", "travel", "intimate", "downtime"].includes(badge.pacing.scene)) && (badge.pacing.handBack === null || ["HAND_BACK", "CONTINUE"].includes(badge.pacing.handBack)) && typeof badge.pacing.dynamicResponse === "boolean" && typeof badge.pacing.instruction === "string" && typeof badge.pacing.handBackInstruction === "string") && (badge.replyCheck === void 0 || badge.replyCheck !== null && typeof badge.replyCheck === "object" && [badge.replyCheck.speaksForUser, badge.replyCheck.responds, badge.replyCheck.repeats, badge.replyCheck.followsRuling].every((value2) => value2 === null || Number.isFinite(value2)) && (badge.replyCheck.reason === null || ["writes for {{user}}", "broken ruling"].includes(badge.replyCheck.reason)) && typeof badge.replyCheck.nudge === "string") && (badge.retryEligible === void 0 || typeof badge.retryEligible === "boolean") && (badge.toolError === void 0 || badge.toolError === null || typeof badge.toolError === "string") && Array.isArray(badge.errors) && badge.errors.every((error) => typeof error === "string") && Array.isArray(badge.results) && badge.results.every((result) => result && ["move", "npc"].includes(result.source) && typeof result.actorId === "string" && typeof result.action === "string" && typeof result.outcome === "string" && typeof result.instruction === "string" && (result.odds === null || Number.isFinite(result.odds) && result.odds >= 0 && result.odds <= 1) && (result.draw === null || Number.isFinite(result.draw) && result.draw >= 0 && result.draw < 1)) && (badge.reaction === null || Boolean(badge.reaction) && typeof badge.reaction.actorId === "string" && typeof badge.reaction.outcome === "string" && Number.isFinite(badge.reaction.draw)) && (badge.createdAt === void 0 || Number.isFinite(badge.createdAt)) && (badge.actorNames === void 0 || badge.actorNames !== null && typeof badge.actorNames === "object" && !Array.isArray(badge.actorNames) && Object.values(badge.actorNames).every((name) => typeof name === "string")) && (badge.move === void 0 || badge.move === null || typeof badge.move === "string") && (badge.writerInstruction === void 0 || typeof badge.writerInstruction === "string") && (badge.route === void 0 || badge.route === null || typeof badge.route.actorId === "string" && strings(badge.route.targetActorIds) && typeof badge.route.kind === "string") && (badge.speaker === void 0 || badge.speaker === null || typeof badge.speaker.actorId === "string" && typeof badge.speaker.name === "string") && (badge.meterChanges === void 0 || Array.isArray(badge.meterChanges) && badge.meterChanges.every((change) => change && typeof change.actorId === "string" && typeof change.meter === "string" && typeof change.label === "string" && (change.from === null || Number.isInteger(change.from)) && Number.isInteger(change.to) && typeof change.fromLabel === "string" && typeof change.toLabel === "string")) && (badge.reveals === void 0 || Array.isArray(badge.reveals) && badge.reveals.every((reveal) => reveal && typeof reveal.secretId === "string" && typeof reveal.text === "string" && strings(reveal.actorIds))) && (badge.lore === void 0 || Array.isArray(badge.lore) && badge.lore.every((pick) => pick && typeof pick.world === "string" && Number.isInteger(pick.uid) && typeof pick.title === "string"));
+}
+
+// src/activity.ts
+function activityUsage(turn) {
+  return mergeRequestUsage(turn.badge?.requestUsage, ...turn.entries.map((entry) => entry.requestUsage));
+}
+function activityTurns(chat, readBadge, entries2) {
+  const messageIds = [];
+  for (let id = chat.length - 1; id >= 0 && messageIds.length < 20; id--) {
+    const message = chat[id];
+    if (!message.is_user && !message.is_system && message.mes?.trim()) messageIds.push(id);
+  }
+  return messageIds.reverse().map((messageId) => {
+    const message = chat[messageId];
+    const badge = readBadge(messageId);
+    return {
+      messageId,
+      swipeId: message.swipe_id ?? 0,
+      badge,
+      entries: badge ? entries2.filter((entry) => entry.attemptId === badge.attemptId) : []
+    };
+  });
+}
+function activityMetrics(entries2) {
+  const durations = entries2.flatMap((entry) => entry.durationMs === null ? [] : [entry.durationMs]);
+  return {
+    requests: entries2.length ? entries2.reduce((total, entry) => total + entry.networkCalls, 0) : null,
+    durationMs: durations.length ? durations.reduce((total, duration) => total + duration, 0) : null
+  };
+}
+function playerUiText(text2, playerName) {
+  if (!playerName?.trim() || playerName === "{{user}}") return text2;
+  const escaped = playerName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return text2.replace(new RegExp(`(?<![\\p{L}\\p{M}\\p{N}_])${escaped}(?![\\p{L}\\p{M}\\p{N}_])`, "gu"), "{{user}}");
+}
+
+// src/macros.ts
+var moduleNames = {
+  speaker: "speaker",
+  decisions: "decisions",
+  meters: "meters",
+  secrets: "secrets",
+  lore: "lore",
+  reactions: "reactions",
+  "npc reactions": "reactions",
+  pacing: "pacing",
+  replycheck: "replyCheck",
+  "reply-check": "replyCheck",
+  reply_check: "replyCheck",
+  "reply check": "replyCheck"
+};
+var scenes = /* @__PURE__ */ new Set(["combat", "conversation", "travel", "intimate", "downtime"]);
+function keyParts(key) {
+  let bare = key.trim();
+  if (bare.startsWith("{{") && bare.endsWith("}}")) bare = bare.slice(2, -2).trim();
+  const parts = bare.split("::").map((part) => part.trim());
+  if (parts[0]?.toLowerCase() === "director") parts.shift();
+  return parts;
+}
+function own(record, key) {
+  if (!record) return void 0;
+  if (Object.hasOwn(record, key)) return record[key];
+  const matches = Object.keys(record).filter((name) => name.toLowerCase() === key.toLowerCase());
+  return matches.length === 1 ? record[matches[0]] : void 0;
+}
+function resolveDirectorMacro(state, key) {
+  try {
+    if (!state?.active || typeof key !== "string") return "";
+    const [name, member, detail, ...extra] = keyParts(key);
+    if (extra.length) return "";
+    if (name?.toLowerCase() === "module") {
+      if (!member || detail) return "";
+      const module = moduleNames[member.toLowerCase()];
+      return module && state.modules[module] ? "true" : "";
+    }
+    if (name?.toLowerCase() === "meter") {
+      if (!state.modules.meters || !member || !detail) return "";
+      return own(own(state.meters, member), detail) ?? "";
+    }
+    if (member !== void 0 || detail !== void 0) return "";
+    switch (name?.toLowerCase()) {
+      case "active":
+        return "true";
+      case "outcome":
+        return state.modules.decisions ? (state.outcome ?? "").replaceAll("_", " ") : "";
+      case "odds":
+        return state.modules.decisions && typeof state.odds === "number" && Number.isFinite(state.odds) && state.odds >= 0 && state.odds <= 1 ? `${Math.round(state.odds * 100)}%` : "";
+      case "roll":
+        return state.modules.decisions && typeof state.roll === "number" && Number.isFinite(state.roll) && state.roll >= 0 && state.roll < 1 ? `${Math.round(state.roll * 100)}/100` : "";
+      case "scene":
+        return state.modules.pacing && state.scene && scenes.has(state.scene) ? state.scene : "";
+      case "pack":
+        return state.pack && state.pack !== "auto" ? state.pack : "";
+      default:
+        return "";
+    }
+  } catch {
+    return "";
+  }
+}
+function registerDirectorMacros(registry, getState) {
+  if (!registry?.registerMacro) return false;
+  const registered = registry.registerMacro("director", {
+    category: "state",
+    unnamedArgs: [{ name: "key", optional: true }, { name: "member", optional: true }, { name: "detail", optional: true }],
+    // Unknown/incomplete reader keys should resolve empty, including during dry runs.
+    strictArgs: false,
+    description: "Read the Director decision for the generation being built; use in depth 0\u20131 prompts.",
+    returns: "A frozen value, true for enabled guards, or an empty string when unavailable.",
+    exampleUsage: ["{{director::outcome}}", "{{director::roll}}", "{{director::meter::Guide::regard}}", "{{director::module::meters}}"],
+    handler: (context) => {
+      try {
+        const args = context?.args ?? context?.unnamedArgs;
+        if (!Array.isArray(args) || !args.every((arg) => typeof arg === "string")) return "";
+        return resolveDirectorMacro(getState(), args.join("::"));
+      } catch {
+        return "";
+      }
+    }
+  });
+  return registered !== null && registered !== false;
+}
+
+// src/commands.ts
+function registerDirectorCommands(context, actions) {
+  const { SlashCommandParser, SlashCommand } = context;
+  if (!SlashCommandParser || !SlashCommand) return false;
+  const add = (name, helpString, callback, returns = "Nothing") => {
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+      name,
+      helpString,
+      returns,
+      splitUnnamedArgument: false,
+      callback: async (_named, unnamed) => callback(typeof unnamed === "string" ? unnamed.trim() : "")
+    }));
+  };
+  add("director-pause", "Pause this chat: /director-pause on|off.", async (text2) => {
+    const value = text2.toLowerCase();
+    if (value !== "on" && value !== "off") throw new Error("Use /director-pause on or /director-pause off.");
+    await actions.pause(value === "on");
+    return "";
+  });
+  add("director-reroll", "Draw new dice for the selected Director reply and generate a new swipe.", async () => {
+    await actions.reroll();
+    return "";
+  });
+  add("director-reassess", "Ask the judge again for the selected Director reply and generate a new swipe.", async () => {
+    await actions.reassess();
+    return "";
+  });
+  add("director-pack", "Set this chat\u2019s genre pack: /director-pack <id|auto>.", async (text2) => {
+    if (!text2) throw new Error("Use /director-pack <id|auto>.");
+    await actions.setPack(text2.toLowerCase() === "auto" ? "auto" : text2);
+    return "";
+  });
+  add("director-speaker", "Choose the next speaker: /director-speaker <name|auto|yield>.", async (text2) => {
+    if (!text2) throw new Error("Use /director-speaker <name|auto|yield>.");
+    await actions.setSpeaker(["auto", "yield"].includes(text2.toLowerCase()) ? text2.toLowerCase() : text2);
+    return "";
+  });
+  add("director-get", "Read a Director macro: /director-get <key>, for example meter::Guide::regard.", (text2) => actions.get(text2), "The macro value, or an empty string");
+  return true;
+}
+
+// src/host.ts
+var INJECTION_KEY = "rp_director_binding";
+var SETTINGS_KEY = "rpDirector";
+var METADATA_KEY = "rpDirector";
+var VARIANT_MARKER_KEY = "rpd";
+var EXTENSION_PROMPT_TYPE_IN_CHAT = 1;
+var ROLE_NUMBER = { system: 0, user: 1, assistant: 2 };
+function defaultSettings() {
+  return {
+    enabled: true,
+    profileId: DEFAULT_PROFILE_ID,
+    connection: { kind: "openrouter", baseUrl: "", model: "", stProfileId: "", mockScenario: "gate-deferred" },
+    reactions: defaultReactionSettings(),
+    showBadges: true,
+    ...normalizeUiPreferences(),
+    profileOverrides: {},
+    pipeline: "staged",
+    settingsRevision: 3,
+    waitForJudgeSeconds: 10,
+    askWhenSwiping: true,
+    reviewNpcRolls: true,
+    modules: { speaker: true, decisions: true, meters: true, secrets: true, lore: true, pacing: true, replyCheck: true },
+    lore: defaultLoreSettings()
+  };
+}
+var Host = class {
+  registerDirectorMacros(getState) {
+    return registerDirectorMacros(this.ctx().macros?.registry, getState);
+  }
+  registerDirectorCommands(actions) {
+    return registerDirectorCommands(this.ctx(), actions);
+  }
+  flags = null;
+  extensionLookup = null;
+  findHostExtension(name) {
+    return this.extensionLookup?.(name) ?? null;
+  }
+  ownedTool = null;
+  composerLock = null;
+  ctx() {
+    const st = globalThis.SillyTavern;
+    if (!st || typeof st.getContext !== "function") throw new Error("SillyTavern.getContext is not available");
+    return st.getContext();
+  }
+  /** Loads live flag getters from host modules; safe to call more than once. */
+  async loadFlags() {
+    if (this.flags) return;
+    try {
+      const extensionsUrl = new URL("../../../extensions.js", import.meta.url).href;
+      const extensions = await import(
+        /* @vite-ignore */
+        extensionsUrl
+      );
+      this.extensionLookup = typeof extensions.findExtension === "function" ? extensions.findExtension : null;
+    } catch (error) {
+      console.warn("[RP Director] extensions.js import failed; Dynamic Response is treated as absent", error);
+    }
+    try {
+      const groupUrl = new URL("../../../group-chats.js", import.meta.url).href;
+      const scriptUrl = new URL("../../../../script.js", import.meta.url).href;
+      const [groupModule, scriptModule] = await Promise.all([import(
+        /* @vite-ignore */
+        groupUrl
+      ), import(
+        /* @vite-ignore */
+        scriptUrl
+      )]);
+      this.flags = {
+        isGroupGenerating: () => Boolean(groupModule.is_group_generating),
+        isAutoMode: () => Boolean(groupModule.is_group_automode_enabled),
+        isSendPress: () => Boolean(scriptModule.is_send_press),
+        sendMessageAsUser: typeof scriptModule.sendMessageAsUser === "function" ? scriptModule.sendMessageAsUser : null,
+        setCharacterId: scriptModule.setCharacterId,
+        setCharacterName: scriptModule.setCharacterName
+      };
+    } catch (error) {
+      console.warn("[RP Director] host flag import failed; using DOM fallback", error);
+      this.flags = {
+        isGroupGenerating: () => document.body.dataset.generating === "true",
+        isAutoMode: () => false,
+        isSendPress: () => document.body.dataset.generating === "true",
+        sendMessageAsUser: null
+      };
+    }
+  }
+  /** Posts the composer text as a user message without any reply, through the host's own path. Returns false if unavailable. */
+  async postUserMessage(text2) {
+    const fn = this.flags?.sendMessageAsUser;
+    if (!fn) return false;
+    await fn(text2, "");
+    const composer = this.composer();
+    if (composer) {
+      composer.value = "";
+      composer.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    await this.ctx().saveChat();
+    return true;
+  }
+  isGenerating() {
+    const f = this.flags;
+    if (f) return f.isGroupGenerating() || f.isSendPress();
+    return document.body.dataset.generating === "true";
+  }
+  isAutoMode() {
+    return this.flags ? this.flags.isAutoMode() : false;
+  }
+  isAutoDirectorEnabled() {
+    const all = this.ctx().extensionSettings;
+    const base = all[SETTINGS_KEY];
+    return !base?.enabled && Boolean(all.rpDirectorAuto?.enabled);
+  }
+  takeOverAuto() {
+    const all = this.ctx().extensionSettings;
+    if (!all[SETTINGS_KEY]?.enabled) return;
+    const sibling = all.rpDirectorAuto;
+    if (sibling) sibling.enabled = false;
+    const auto = globalThis.rpDirectorAuto;
+    if (auto?.controller) {
+      auto.controller.setEnabled(false);
+      auto.controller.destroy();
+    }
+    if (typeof document !== "undefined") {
+      document.getElementById("rpda-bar")?.remove();
+      document.getElementById("rpda-settings")?.remove();
+    }
+    this.saveSettings();
+  }
+  // ---- chat identity -------------------------------------------------------
+  isGroup() {
+    return Boolean(this.ctx().groupId);
+  }
+  /** Stable key for the open chat: group id or character avatar plus chat file name. */
+  chatKey() {
+    const ctx = this.ctx();
+    const chatId = ctx.getCurrentChatId();
+    if (!chatId) return null;
+    if (ctx.groupId) return `group:${ctx.groupId}:${chatId}`;
+    const idx = Number(ctx.characterId);
+    const avatar = Number.isInteger(idx) ? ctx.characters[idx]?.avatar : void 0;
+    if (!avatar) return null;
+    return `char:${avatar}:${chatId}`;
+  }
+  seedId() {
+    const ctx = this.ctx();
+    const integrity = ctx.chatMetadata?.integrity;
+    return `${this.chatKey() ?? "none"}|${typeof integrity === "string" ? integrity : ""}`;
+  }
+  playerName() {
+    return String(this.ctx().name1 ?? "User");
+  }
+  // ---- actors ----------------------------------------------------------------
+  /** Group members in stable group order (or the single character), with current indexes. */
+  actors() {
+    const ctx = this.ctx();
+    if (ctx.groupId) {
+      const group = ctx.groups.find((g) => g.id === ctx.groupId);
+      if (!group) return [];
+      const disabled = new Set(group.disabled_members ?? []);
+      return group.members.map((avatar) => {
+        const index = ctx.characters.findIndex((c) => c.avatar === avatar);
+        const character2 = index >= 0 ? ctx.characters[index] : void 0;
+        return { avatar, name: character2?.name ?? avatar, index, disabled: disabled.has(avatar) };
+      }).filter((a) => a.index >= 0);
+    }
+    const idx = Number(ctx.characterId);
+    const character = Number.isInteger(idx) ? ctx.characters[idx] : void 0;
+    if (!character) return [];
+    return [{ avatar: character.avatar, name: character.name, index: idx, disabled: false }];
+  }
+  /** Re-resolves a durable avatar to its current array index, or -1. */
+  resolveIndex(avatar) {
+    return this.ctx().characters.findIndex((c) => c.avatar === avatar);
+  }
+  /** Called at GROUP_MEMBER_DRAFTED, before the host constructs the speaker's prompt. */
+  enforceGroupSpeaker(avatar) {
+    if (!this.isGroup()) return true;
+    const index = this.resolveIndex(avatar);
+    if (index < 0 || !this.actors().some((actor) => actor.avatar === avatar)) return false;
+    if (Number(this.ctx().characterId) === index) return true;
+    if (!this.flags?.setCharacterId || !this.flags.setCharacterName) return false;
+    this.flags.setCharacterId(index);
+    this.flags.setCharacterName(this.ctx().characters[index].name);
+    return true;
+  }
+  hasSelectedReply() {
+    const message = this.chat().at(-1);
+    return Boolean(message && !message.is_user && !message.is_system);
+  }
+  /** Full authorial card text (description and personality) for rulings whose family admits it. */
+  cardText(avatar) {
+    const c = this.ctx().characters.find((x) => x.avatar === avatar);
+    return [c?.description, c?.personality].map((part) => String(part ?? "").trim()).filter(Boolean).join("\n\n");
+  }
+  /** Bounded public card summary for the decision snapshot. */
+  publicCard(avatar, maxChars = 400) {
+    const c = this.ctx().characters.find((x) => x.avatar === avatar);
+    const description = String(c?.description ?? "").replace(/\s+/g, " ").trim();
+    return description.length > maxChars ? description.slice(0, maxChars) + "\u2026" : description;
+  }
+  // ---- chat -------------------------------------------------------------------
+  chat() {
+    return this.ctx().chat;
+  }
+  /**
+   * Maps host messages to fingerprint inputs. Every message in the array is
+   * part of the transcript identity; `is_system` is deliberately ignored
+   * because the host flips it on existing messages (observed on group
+   * greetings), which would silently move every later cursor.
+   */
+  fingerprintMessages(messages) {
+    const out = [];
+    for (const m of messages) {
+      if (!m) continue;
+      if (m.is_user) out.push({ role: "user", actorKey: "persona", text: m.mes ?? "" });
+      else out.push({ role: "assistant", actorKey: m.original_avatar ?? `name:${m.name}`, text: stripResultFooter(m.mes ?? "") });
+    }
+    return out;
+  }
+  lastAssistantAvatar() {
+    const chat = this.chat();
+    for (let i = chat.length - 1; i >= 0; i--) {
+      const m = chat[i];
+      if (!m.is_user && !m.is_system) return m.original_avatar ?? null;
+    }
+    return null;
+  }
+  composer() {
+    return typeof document === "undefined" ? null : document.getElementById("send_textarea");
+  }
+  composerText() {
+    return String(this.composer()?.value ?? "");
+  }
+  onComposerInput(cancel) {
+    const element = this.composer();
+    element?.addEventListener("input", cancel);
+    return () => element?.removeEventListener("input", cancel);
+  }
+  dynamicResponseEnabled() {
+    const settings = this.ctx().extensionSettings.dynamic_response;
+    return this.findHostExtension("DynamicResponse")?.enabled === true && settings?.enabled === true;
+  }
+  /** Preserve the submitted text while the judge works, without owning ST's generation lock. */
+  setComposerLocked(locked) {
+    if (locked) {
+      const element = this.composer();
+      if (element && !this.composerLock) {
+        this.composerLock = { element, readOnly: element.readOnly };
+        element.readOnly = true;
+      }
+    } else if (this.composerLock) {
+      this.composerLock.element.readOnly = this.composerLock.readOnly;
+      this.composerLock = null;
+    }
+  }
+  /** Any visible assistant prose saved after an attempt bound to the transcript. */
+  assistantProseSince(messageIndex) {
+    return this.chat().slice(Math.max(0, messageIndex)).filter((message) => !message.is_user && !message.is_system).map((message) => stripResultFooter(String(message.mes ?? "")).trim()).filter((text2) => !["", "..."].includes(text2));
+  }
+  /** Mutate all old storage copies together; the caller saves once with the Activity record. */
+  stripLegacyResultFooters() {
+    const ctx = this.ctx();
+    const result = stripChatResultFooters(ctx.chat);
+    for (const id of result.changedMessageIds) ctx.updateMessageBlock?.(id, ctx.chat[id]);
+    return { messages: result.messages, copies: result.copies };
+  }
+  // ---- variant markers --------------------------------------------------------
+  readMarker(mesId) {
+    const m = this.chat()[mesId];
+    const marker2 = m?.extra?.[VARIANT_MARKER_KEY];
+    if (marker2 && typeof marker2.v === "string" && typeof marker2.a === "string") return marker2;
+    return null;
+  }
+  /** Writes the marker to the message and to its current swipe_info entry so swipe selection restores it. */
+  writeMarker(mesId, marker2) {
+    const m = this.chat()[mesId];
+    if (!m) return;
+    m.extra = m.extra && typeof m.extra === "object" ? { ...m.extra } : {};
+    m.extra[VARIANT_MARKER_KEY] = { ...marker2 };
+    if (Array.isArray(m.swipes) && !Array.isArray(m.swipe_info)) m.swipe_info = [];
+    if (typeof m.swipe_id === "number" && Array.isArray(m.swipe_info)) {
+      const info = m.swipe_info[m.swipe_id] ?? (m.swipe_info[m.swipe_id] = {});
+      info.extra = info.extra && typeof info.extra === "object" ? { ...info.extra } : {};
+      info.extra[VARIANT_MARKER_KEY] = { ...marker2 };
+    }
+  }
+  /** Workflow details belong to this swipe, never to the reply's prose. */
+  writeWorkflowBadge(mesId, badge) {
+    const message = this.chat()[mesId];
+    if (!message || message.is_user || message.is_system) return false;
+    const swipeId = message.swipe_id ?? 0;
+    if (!badge) {
+      let changed2 = false;
+      const clear = (extra) => {
+        if (extra && typeof extra === "object" && WORKFLOW_BADGE_KEY in extra) {
+          const next = { ...extra };
+          delete next[WORKFLOW_BADGE_KEY];
+          changed2 = true;
+          return next;
+        }
+        return extra;
+      };
+      message.extra = clear(message.extra);
+      const info = message.swipe_info?.[swipeId];
+      if (info) {
+        info.extra = clear(info.extra);
+      }
+      return changed2;
+    }
+    message.extra = message.extra && typeof message.extra === "object" ? { ...message.extra } : {};
+    let changed = JSON.stringify(message.extra[WORKFLOW_BADGE_KEY]) !== JSON.stringify(badge);
+    message.extra[WORKFLOW_BADGE_KEY] = structuredClone(badge);
+    if (Array.isArray(message.swipes) && !Array.isArray(message.swipe_info)) message.swipe_info = [];
+    if (Array.isArray(message.swipe_info)) {
+      const info = message.swipe_info[swipeId] ?? (message.swipe_info[swipeId] = {});
+      info.extra = info.extra && typeof info.extra === "object" ? { ...info.extra } : {};
+      changed ||= JSON.stringify(info.extra[WORKFLOW_BADGE_KEY]) !== JSON.stringify(badge);
+      info.extra[WORKFLOW_BADGE_KEY] = structuredClone(badge);
+    }
+    return changed;
+  }
+  readWorkflowBadge(mesId) {
+    const message = this.chat()[mesId];
+    if (!message || message.is_user || message.is_system) return null;
+    const swipeId = message.swipe_id ?? 0;
+    if (message.swipes && swipeId >= message.swipes.length) return null;
+    const info = message.swipe_info?.[swipeId];
+    const data = info ? info.extra?.[WORKFLOW_BADGE_KEY] : message.extra?.[WORKFLOW_BADGE_KEY];
+    return isWorkflowBadge(data) ? data : null;
+  }
+  registerWorkspaceCommand(open) {
+    const { SlashCommandParser, SlashCommand } = this.ctx();
+    if (!SlashCommandParser || !SlashCommand) return false;
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+      name: "director",
+      callback: async (_named, tab) => {
+        await open(typeof tab === "string" ? tab : void 0);
+        return "";
+      },
+      returns: "Nothing",
+      helpString: "Open Director: /director [chat|activity|outcomes|lore|settings]."
+    }));
+    return true;
+  }
+  /** Route managed /regenerate and its native aliases through the same wording-swipe path. */
+  interceptRegenerateCommand(shouldIntercept, regenerate) {
+    const { SlashCommandParser: parser, SlashCommand } = this.ctx();
+    const registry = parser?.commands;
+    const original = registry?.regenerate;
+    if (!parser || !SlashCommand || !registry || original?.name !== "regenerate" || typeof original.callback !== "function") return () => {
+    };
+    const aliases = (original.aliases ?? []).filter((alias) => registry[alias] === original);
+    const names = ["regenerate", ...aliases];
+    const previous = new Map(names.map((name) => [name, registry[name]]));
+    let active = true;
+    const callback = (named, unnamed) => {
+      if (!active || !shouldIntercept() || !this.hasSelectedReply() || this.isGenerating() || this.isGroup() || !this.swipesEnabled()) return original.callback.call(original, named, unnamed);
+      const chatKey = this.chatKey();
+      const message = this.chat().at(-1);
+      const swipeId = message?.swipe_id ?? 0;
+      const pending = new Promise((resolve) => setTimeout(() => {
+        if (!active || chatKey !== this.chatKey() || this.chat().at(-1) !== message || (message?.swipe_id ?? 0) !== swipeId || !shouldIntercept() || named._abortController?.signal?.aborted) {
+          resolve("");
+          return;
+        }
+        void Promise.resolve().then(() => this.isGenerating() || this.isGroup() || !this.swipesEnabled() ? original.callback.call(original, named, unnamed) : regenerate()).then(() => resolve("")).catch((error) => {
+          console.error("[RP Director] /regenerate failed", error);
+          resolve("");
+        });
+      }, 1));
+      const wait = typeof named.await === "string" && ["on", "true", "1"].includes(named.await.trim().toLowerCase());
+      return wait ? pending : "";
+    };
+    const wrapped = SlashCommand.fromProps({ ...original, aliases, callback });
+    parser.addCommandObject(wrapped);
+    for (const key of ["isExtension", "isThirdParty", "source"]) {
+      if (Object.prototype.hasOwnProperty.call(original, key)) wrapped[key] = original[key];
+      else delete wrapped[key];
+    }
+    return () => {
+      active = false;
+      for (const name of names) if (registry[name] === wrapped) registry[name] = previous.get(name);
+    };
+  }
+  // ---- metadata ---------------------------------------------------------------
+  readRecord() {
+    const ctx = this.ctx();
+    if (!ctx.extensionSettings[SETTINGS_KEY]?.enabled) return ctx.chatMetadata?.[METADATA_KEY];
+    const migrated = migrateAutoHistory(ctx.chatMetadata, ctx.chat);
+    if (migrated.migrated) {
+      ctx.chatMetadata[METADATA_KEY] = migrated.metadata[METADATA_KEY];
+      for (let i = 0; i < ctx.chat.length; i++) {
+        ctx.chat[i].extra = migrated.messages[i].extra;
+        ctx.chat[i].swipe_info = migrated.messages[i].swipe_info;
+      }
+    }
+    return ctx.chatMetadata?.[METADATA_KEY];
+  }
+  /**
+   * Re-acquires the live metadata reference and verifies the chat before
+   * writing; a stale reference from another chat cannot commit (M1-11).
+   */
+  async writeRecord(record, expectedChatKey) {
+    const ctx = this.ctx();
+    if (this.chatKey() !== expectedChatKey) {
+      console.warn("[RP Director] refusing to save metadata: chat changed");
+      return false;
+    }
+    const previous = ctx.chatMetadata[METADATA_KEY];
+    if (!Object.prototype.hasOwnProperty.call(ctx.chatMetadata, RECORD_BACKUP_KEY) && needsLegacyRecordBackup(previous)) {
+      const backup = structuredClone(previous);
+      delete backup.inspector;
+      ctx.chatMetadata[RECORD_BACKUP_KEY] = backup;
+    }
+    ctx.chatMetadata[METADATA_KEY] = encodeRecordForStorage(record);
+    await ctx.saveMetadata();
+    return true;
+  }
+  hasLegacyRecordBackup() {
+    return Object.prototype.hasOwnProperty.call(this.ctx().chatMetadata, RECORD_BACKUP_KEY);
+  }
+  async removeLegacyRecordBackup(expectedChatKey) {
+    if (this.chatKey() !== expectedChatKey || !this.hasLegacyRecordBackup()) return false;
+    const ctx = this.ctx();
+    delete ctx.chatMetadata[RECORD_BACKUP_KEY];
+    await ctx.saveMetadata();
+    return true;
+  }
+  // ---- settings ---------------------------------------------------------------
+  settings() {
+    const all = this.ctx().extensionSettings;
+    const merged = normalizeBaseSettings(defaultSettings(), all[SETTINGS_KEY]);
+    all[SETTINGS_KEY] = merged;
+    return merged;
+  }
+  saveSettings() {
+    this.ctx().saveSettingsDebounced();
+  }
+  connectionProfiles() {
+    const cm = this.ctx().extensionSettings.connectionManager;
+    return (cm?.profiles ?? []).filter((p) => p && p.mode === "cc").map((p) => ({ id: p.id, name: p.name, api: String(p.api ?? ""), model: String(p.model ?? "") }));
+  }
+  // ---- injection --------------------------------------------------------------
+  liveInjection = "";
+  injectionWrites = 0;
+  setInjection(text2, depth, role) {
+    this.ctx().setExtensionPrompt(INJECTION_KEY, text2, EXTENSION_PROMPT_TYPE_IN_CHAT, depth, false, ROLE_NUMBER[role]);
+    this.liveInjection = text2;
+    this.injectionWrites += 1;
+  }
+  clearInjection() {
+    this.ctx().setExtensionPrompt(INJECTION_KEY, "", EXTENSION_PROMPT_TYPE_IN_CHAT, 0, false, ROLE_NUMBER.system);
+    this.liveInjection = "";
+    this.injectionWrites += 1;
+  }
+  /** The Director block as last written, including any tool-result lines added after binding. */
+  currentInjection() {
+    return this.liveInjection;
+  }
+  /** Changes on every write (set or clear), so a caller can tell whether anyone wrote since. */
+  injectionVersion() {
+    return this.injectionWrites;
+  }
+  // ---- generation -------------------------------------------------------------
+  /** Director Send / Next: forced-character generation through the verified host path. */
+  async generate(forceIndex) {
+    const options = {};
+    if (typeof forceIndex === "number" && forceIndex >= 0 && this.isGroup()) options.force_chid = forceIndex;
+    return this.ctx().generate("normal", options);
+  }
+  /** SillyTavern's swipe state; anything but 'none' means a swipe is still animating, generating or saving. */
+  swipeState() {
+    return String(this.ctx().swipe?.state?.() ?? "none");
+  }
+  async swipeRight(forceIndex = null) {
+    if (this.swipeState() !== "none") throw new Error("another swipe is still running");
+    if (!this.hasSelectedReply()) {
+      await this.generate(forceIndex);
+      return;
+    }
+    if (!this.swipesEnabled()) {
+      const options2 = this.isGroup() && forceIndex !== null && forceIndex >= 0 ? { force_chid: forceIndex } : void 0;
+      await this.ctx().generate("regenerate", options2);
+      return;
+    }
+    const message = this.chat().at(-1);
+    const options = { source: "slash_command", forceMesId: this.chat().length - 1, forceSwipeId: message?.swipes?.length ?? 1 };
+    const swipe = this.ctx().swipe;
+    if (swipe.to) await swipe.to(null, "right", options);
+    else await swipe.right(void 0, options);
+  }
+  /**
+   * After an unfinished automatic rewrite, show the wording the user was
+   * answering again. A fragment slot (our newly appended last swipe) is removed
+   * only when `removeFragment`; with no new slot, SillyTavern's endSwipe()
+   * clamped the selection to the last swipe, so the original is reselected.
+   * Returns true when the message changed.
+   */
+  async discardAutomaticSwipe(message, cancelledSwipe, originalSwipe, removeFragment = true) {
+    const index = this.chat().indexOf(message);
+    if (index < 0 || !message.swipes || originalSwipe < 0 || originalSwipe >= cancelledSwipe) return false;
+    const fragment = cancelledSwipe === message.swipes.length - 1 && message.swipe_id === cancelledSwipe;
+    if (fragment && removeFragment) {
+      message.swipes.splice(cancelledSwipe, 1);
+      message.swipe_info?.splice(cancelledSwipe, 1);
+      message.swipe_id = originalSwipe;
+      message.mes = message.swipes[originalSwipe];
+      message.extra = structuredClone(message.swipe_info?.[originalSwipe]?.extra ?? {});
+      this.ctx().chatMetadata.tainted = true;
+      await this.ctx().eventSource.emit?.(
+        this.ctx().eventTypes.MESSAGE_SWIPE_DELETED ?? "MESSAGE_SWIPE_DELETED",
+        { messageId: index, swipeId: cancelledSwipe, newSwipeId: originalSwipe }
+      );
+    } else if (message.swipes.length > cancelledSwipe || originalSwipe >= message.swipes.length || message.swipe_id === originalSwipe) return false;
+    if (this.ctx().swipe.to) await this.ctx().swipe.to(null, "left", { source: "delete", forceMesId: index, forceSwipeId: originalSwipe });
+    else {
+      message.swipe_id = originalSwipe;
+      message.mes = message.swipes[originalSwipe];
+      message.extra = structuredClone(message.swipe_info?.[originalSwipe]?.extra ?? {});
+      this.ctx().updateMessageBlock?.(index, message);
+    }
+    await this.ctx().saveChat();
+    return true;
+  }
+  /** ST's user preference is reflected by this native settings checkbox. */
+  swipesEnabled() {
+    const checkbox = typeof document === "undefined" ? null : document.getElementById("swipes-checkbox");
+    return checkbox ? checkbox.checked : true;
+  }
+  stopGeneration() {
+    this.ctx().stopGeneration();
+  }
+  // ---- writer function tool --------------------------------------------------
+  registerFunctionTool(tool) {
+    const ctx = this.ctx();
+    if (!ctx.extensionSettings[SETTINGS_KEY]?.enabled) return false;
+    if (typeof ctx.registerFunctionTool !== "function" || typeof ctx.unregisterFunctionTool !== "function") return false;
+    ctx.unregisterFunctionTool(tool.name);
+    ctx.registerFunctionTool(tool);
+    this.ownedTool = tool;
+    globalThis.__rpDirectorToolOwner = tool;
+    return true;
+  }
+  unregisterFunctionTool(name) {
+    if (!this.ownedTool || globalThis.__rpDirectorToolOwner !== this.ownedTool) return;
+    this.ctx().unregisterFunctionTool?.(name);
+    this.ownedTool = null;
+    delete globalThis.__rpDirectorToolOwner;
+  }
+  writerToolCapability(type = "normal") {
+    try {
+      const ctx = this.ctx();
+      if (typeof ctx.isToolCallingSupported !== "function" || typeof ctx.canPerformToolCalls !== "function") return { supported: false, reason: "installed SillyTavern does not expose function-tool capability checks" };
+      if (!ctx.isToolCallingSupported()) return { supported: false, reason: "the selected writer API/model does not support enabled function calling" };
+      if (!ctx.canPerformToolCalls(type)) return { supported: false, reason: `SillyTavern does not permit tools for ${type} generation` };
+      return { supported: true, reason: null };
+    } catch (error) {
+      return { supported: false, reason: `tool capability check failed: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+  // ---- lore -------------------------------------------------------------------
+  lorePlanArmed = null;
+  loreArmSeq = 0;
+  loreHookOff = null;
+  lastActivation = null;
+  /** Called after every real World Info scan (set by the controller to refresh the panel). */
+  onLoreActivation = null;
+  /** What the last real World Info scan activated, per book. */
+  lastLoreActivation() {
+    return this.lastActivation;
+  }
+  /**
+   * Books SillyTavern could load for these cast members, with their entries.
+   * Mirrors world-info.js getGlobalLore/getCharacterLore/getChatLore/
+   * getPersonaLore, except that a group lists every given member's books:
+   * SillyTavern itself loads only the current speaker's (this_chid) books per
+   * scan, which is also all a forced activation can reach.
+   */
+  async loreCatalog(avatars) {
+    const ctx = this.ctx();
+    const wi = await import(
+      /* @vite-ignore */
+      new URL("../../../world-info.js", import.meta.url).href
+    );
+    const books = [];
+    const add = (world, source, owner) => {
+      const name = typeof world === "string" ? world.trim() : "";
+      if (name && !books.some((b) => b.world === name)) books.push({ world: name, source, owner });
+    };
+    for (const world of wi.selected_world_info ?? []) add(world, "global", null);
+    for (const avatar of avatars) {
+      const character = ctx.characters.find((c) => c.avatar === avatar);
+      add(character?.data?.extensions?.world, "character", avatar);
+      const filename = avatar.replace(/\.[^/.]+$/, "");
+      const extra = (wi.world_info?.charLore ?? []).find((item) => item?.name === filename)?.extraBooks ?? [];
+      for (const world of extra) add(world, "character", avatar);
+    }
+    add(ctx.chatMetadata?.world_info, "chat", null);
+    try {
+      const pu = await import(
+        /* @vite-ignore */
+        new URL("../../../power-user.js", import.meta.url).href
+      );
+      add(pu.power_user?.persona_description_lorebook, "persona", null);
+    } catch {
+    }
+    const entries2 = [];
+    for (const book of books) {
+      let data = null;
+      try {
+        data = await wi.loadWorldInfo(book.world);
+      } catch {
+        data = null;
+      }
+      for (const raw of Object.values(data?.entries ?? {})) {
+        const uid = Number(raw.uid);
+        if (!Number.isInteger(uid)) continue;
+        const content = String(raw.content ?? "");
+        const keys = Array.isArray(raw.key) ? raw.key.map(String).filter((k) => k.trim()) : [];
+        entries2.push({
+          world: book.world,
+          uid,
+          keys,
+          content,
+          title: String(raw.comment ?? "").trim() || keys.slice(0, 3).join(", ") || `Entry ${uid}`,
+          constant: raw.constant === true,
+          // An @@dont_activate decorator blocks forced activation too.
+          disabled: raw.disable === true || /^\s*@@dont_activate\b/.test(content)
+        });
+      }
+    }
+    return { books, entries: entries2 };
+  }
+  /** TunnelVision's stored index roots by book, if the extension has built any. */
+  tunnelVisionRoots() {
+    const tv = this.ctx().extensionSettings.tunnelvision;
+    const out = {};
+    for (const [world, tree] of Object.entries(tv?.trees ?? {})) if (tree?.root && typeof tree.root === "object") out[world] = tree.root;
+    return out;
+  }
+  /** True when TunnelVision is on and suppresses this book's keyword scan itself. */
+  tunnelVisionManages(world) {
+    const tv = this.ctx().extensionSettings.tunnelvision;
+    return tv?.globalEnabled === true && tv.enabledLorebooks?.[world] === true;
+  }
+  /**
+   * SillyTavern's processed World Info entries for the current speaker (group
+   * scans load this_chid's books only), exactly as its scan will see them:
+   * decorators parsed out of content, hash set. Forcing anything else would put
+   * decorator lines in the prompt and break sticky/cooldown, which key on hash.
+   */
+  async sortedEntries() {
+    const wi = await import(
+      /* @vite-ignore */
+      new URL("../../../world-info.js", import.meta.url).href
+    );
+    return wi.getSortedEntries();
+  }
+  /**
+   * Arms the plan for every World Info scan until disarmed. null disarms at
+   * once; a plan resolves its forced entries first. A later call supersedes an
+   * earlier one that is still resolving.
+   */
+  async armLore(plan) {
+    const seq = ++this.loreArmSeq;
+    this.lorePlanArmed = null;
+    if (!plan || plan.force.size === 0 && plan.managed.size === 0) return;
+    let forced = [];
+    if (plan.force.size) {
+      try {
+        forced = (await this.sortedEntries()).filter((e) => plan.force.has(`${String(e.world)}.${String(e.uid)}`)).map((entry) => placeLorePick(entry, plan.nearEnd !== false));
+      } catch (error) {
+        console.warn("[RP Director] could not resolve lore picks; keyword lore only", error);
+        forced = [];
+      }
+    }
+    if (seq === this.loreArmSeq) this.lorePlanArmed = { ...plan, forced };
+  }
+  armedLore() {
+    return this.lorePlanArmed;
+  }
+  /** Registers the WORLDINFO_ENTRIES_LOADED hook once; false when the host lacks the event. */
+  installLoreHook() {
+    if (this.loreHookOff) return true;
+    const ctx = this.ctx();
+    const name = ctx.eventTypes.WORLDINFO_ENTRIES_LOADED;
+    const forceName = ctx.eventTypes.WORLDINFO_FORCE_ACTIVATE;
+    if (!name || !forceName || typeof ctx.eventSource.emit !== "function") return false;
+    const handler = async (payload) => {
+      const plan = this.lorePlanArmed;
+      if (!plan || !payload || typeof payload !== "object") return;
+      const lists = payload;
+      applyLorePlan([lists.globalLore, lists.characterLore, lists.chatLore, lists.personaLore], plan);
+      if (plan.forced.length) await ctx.eventSource.emit(forceName, plan.forced);
+    };
+    ctx.eventSource.on(name, handler);
+    const activatedName = ctx.eventTypes.WORLD_INFO_ACTIVATED;
+    const onActivated = (entries2) => {
+      if (!Array.isArray(entries2)) return;
+      this.lastActivation = summarizeActivation(entries2, this.lorePlanArmed?.force ?? null);
+      this.onLoreActivation?.();
+    };
+    if (activatedName) ctx.eventSource.on(activatedName, onActivated);
+    this.loreHookOff = () => {
+      ctx.eventSource.removeListener(name, handler);
+      if (activatedName) ctx.eventSource.removeListener(activatedName, onActivated);
+    };
+    return true;
+  }
+  removeLoreHook() {
+    this.loreHookOff?.();
+    this.loreHookOff = null;
+    this.loreArmSeq += 1;
+    this.lorePlanArmed = null;
+  }
+  // ---- events -----------------------------------------------------------------
+  on(event, handler) {
+    const ctx = this.ctx();
+    const name = ctx.eventTypes[event];
+    if (!name) throw new Error(`unknown host event ${event}`);
+    ctx.eventSource.on(name, handler);
+    return () => ctx.eventSource.removeListener(name, handler);
+  }
+  // ---- transport through SillyTavern's connection manager --------------------
+  /** Structured-output transport that uses a stored connection profile; the extension never sees the key. */
+  stProfileTransport(profileId) {
+    return async (payload, signal) => {
+      const ctx = this.ctx();
+      const override = {
+        json_schema: {
+          name: payload.json_schema.name,
+          description: "RP Director decision batch",
+          value: payload.json_schema.schema,
+          strict: payload.json_schema.strict
+        }
+      };
+      if (payload.model) override.model = payload.model;
+      const result = await ctx.ConnectionManagerRequestService.sendRequest(
+        profileId,
+        payload.messages,
+        1024,
+        { stream: false, signal, extractData: true, includePreset: false, includeInstruct: false },
+        override
+      );
+      return { content: result?.content, model: null, usage: null };
+    };
+  }
+  /**
+   * Structured-output transport that routes through SillyTavern's own server
+   * (`ChatCompletionService.processRequest`, `chat_completion_source: 'openrouter'`),
+   * using the OpenRouter key already saved in SillyTavern's secrets; the
+   * extension never sees or stores it.
+   */
+  openRouterTransport() {
+    return createOpenRouterTransport((payload, signal) => this.ctx().ChatCompletionService.processRequest(payload, {}, false, signal));
+  }
+  /** Jev decision batches through the authenticated companion server plugin. */
+  openRouterDecisionsTransport() {
+    return async (payload, signal) => {
+      let response;
+      try {
+        response = await fetch("/api/plugins/rp-director-openrouter/decide", {
+          method: "POST",
+          headers: this.ctx().getRequestHeaders(),
+          body: JSON.stringify(payload),
+          signal
+        });
+      } catch (error) {
+        if (signal.aborted) throw new ProviderError("aborted", "OpenRouter Decisions request was cancelled");
+        throw new ProviderError("network", `RP Director Decisions plugin request failed: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      const text2 = await response.text();
+      let parsed;
+      try {
+        parsed = text2 ? JSON.parse(text2) : {};
+      } catch {
+        throw new ProviderError("malformed", "RP Director Decisions plugin returned invalid JSON");
+      }
+      if (!response.ok) {
+        const body = parsed && typeof parsed === "object" ? parsed : null;
+        const message = typeof body?.error?.message === "string" ? body.error.message : `HTTP ${response.status}`;
+        const hint = response.status === 404 ? " Restart SillyTavern after installing the rp-director-openrouter server plugin." : "";
+        throw new ProviderError("http", `OpenRouter Decisions plugin: ${message}.${hint}`, response.status);
+      }
+      return parsed;
+    };
+  }
+  // ---- ui helpers -------------------------------------------------------------
+  toast(kind, message) {
+    const t = globalThis.toastr;
+    if (t && typeof t[kind] === "function") t[kind](message, "RP Director");
+    else console.log(`[RP Director] ${kind}: ${message}`);
+  }
+  async confirm(title, html) {
+    const ctx = this.ctx();
+    if (ctx.callGenericPopup && ctx.POPUP_TYPE && ctx.POPUP_RESULT) {
+      const result = await ctx.callGenericPopup(`<h3>${title}</h3>${html}`, ctx.POPUP_TYPE.CONFIRM, "", { okButton: "Confirm", cancelButton: "Cancel" });
+      return result === ctx.POPUP_RESULT.AFFIRMATIVE;
+    }
+    return window.confirm(`${title}
+
+${html.replace(/<[^>]+>/g, "")}`);
+  }
+  /** Capture native Send/Enter before SillyTavern's handlers and route it through Director. */
+  interceptNativeSend(shouldIntercept, send) {
+    const button2 = document.getElementById("send_but");
+    const onClick = (event) => {
+      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith("/") || this.ctx().Popup?.util.isPopupOpen() || (this.ctx().swipe.state?.() ?? "none") !== "none") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void send().catch((error) => console.error("[RP Director] native Send interception failed", error));
+    };
+    const onKeyDown = (event) => {
+      const target = event.target;
+      if (target?.id !== "send_textarea" || event.key !== "Enter" || event.isComposing || event.shiftKey || event.altKey || event.metaKey) return;
+      const shouldSendOnEnter = this.ctx().shouldSendOnEnter;
+      if (shouldSendOnEnter && !shouldSendOnEnter()) return;
+      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith("/") || this.ctx().Popup?.util.isPopupOpen() || (this.ctx().swipe.state?.() ?? "none") !== "none") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      void send().catch((error) => console.error("[RP Director] native Enter interception failed", error));
+    };
+    button2?.addEventListener("click", onClick, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      button2?.removeEventListener("click", onClick, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }
+  nativeSendBlocked() {
+    return this.isGenerating();
+  }
+  async chooseSwipeAction(kind = "ruled", canReroll = true, signal, settings = this.settings(), canCancel = true) {
+    if (kind !== "ruled" || !settings.askWhenSwiping) return "reuse";
+    const ctx = this.ctx();
+    if (!ctx.callGenericPopup || !ctx.POPUP_TYPE || !ctx.POPUP_RESULT) return "reuse";
+    if (signal?.aborted) return "cancel";
+    const content = document.createElement("div");
+    const title = document.createElement("h3");
+    title.textContent = "New wording, same result?";
+    const hint = document.createElement("p");
+    hint.textContent = canReroll ? "Keep the result, or roll again before the new reply." : "Keep the result while the writer gives it new wording.";
+    const label = document.createElement("label");
+    const remember = document.createElement("input");
+    remember.type = "checkbox";
+    label.append(remember, document.createTextNode(" Don't ask again"));
+    content.append(title, hint, label);
+    const REROLL = 1001;
+    let close = null;
+    const abort = () => close?.();
+    signal?.addEventListener("abort", abort, { once: true });
+    try {
+      const result = await ctx.callGenericPopup(content, ctx.POPUP_TYPE.CONFIRM, "", {
+        okButton: "Keep the result",
+        cancelButton: canCancel ? "Cancel" : false,
+        customButtons: canReroll ? [{ text: "Roll again", result: REROLL, icon: "fa-dice" }] : [],
+        onOpen: (popup) => {
+          close = () => {
+            void popup.complete(ctx.POPUP_RESULT.CANCELLED);
+          };
+          if (signal?.aborted) close();
+        }
+      });
+      if (signal?.aborted) return "cancel";
+      const choice2 = result === REROLL && canReroll ? "reroll" : result === ctx.POPUP_RESULT.AFFIRMATIVE || !canCancel ? "reuse" : "cancel";
+      if (remember.checked && choice2 !== "cancel") {
+        settings.askWhenSwiping = false;
+        this.saveSettings();
+      }
+      return choice2;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
+  }
+  async reviewRolls(permit, names, _method, signal) {
+    const ctx = this.ctx();
+    if (signal.aborted) return "cancel";
+    if (!ctx.callGenericPopup || !ctx.POPUP_TYPE || !ctx.POPUP_RESULT) return "keep";
+    const content = document.createElement("div");
+    content.className = "rpd-workflow-popup";
+    const title = document.createElement("h3");
+    title.textContent = "NPC results";
+    content.append(title);
+    const display = (text2) => playerUiText(text2, names.player ?? ctx.name1);
+    for (const action of permit.actions) {
+      const section = document.createElement("section");
+      const heading = document.createElement("strong");
+      heading.textContent = `${uiActorName(action.actingActorId, names[action.actingActorId])}: ${display(action.method)}`;
+      const line = [action.outcome.replaceAll("_", " ")];
+      const odds = action.methodUsed === "sample" ? action.policyBand?.sampleWeights[action.outcome] : void 0;
+      if (typeof odds === "number") line.push(`${Math.round(odds * 100)}%`);
+      if (typeof action.draw === "number") line.push(`rolled ${Math.round(action.draw * 100)}`);
+      const result = document.createElement("p");
+      result.textContent = line.join(" \xB7 ");
+      const instruction = document.createElement("p");
+      instruction.textContent = display(action.instruction);
+      section.append(heading, result, instruction);
+      content.append(section);
+    }
+    const REROLL = 1001;
+    let close = null;
+    const abort = () => close?.();
+    signal.addEventListener("abort", abort, { once: true });
+    try {
+      const result = await ctx.callGenericPopup(content, ctx.POPUP_TYPE.CONFIRM, "", {
+        okButton: "Keep & continue",
+        cancelButton: "Cancel",
+        customButtons: [{ text: "Roll again", result: REROLL, icon: "fa-dice" }],
+        onOpen: (popup) => {
+          close = () => {
+            void popup.complete(ctx.POPUP_RESULT.CANCELLED);
+          };
+          if (signal.aborted) close();
+        }
+      });
+      if (signal.aborted) return "cancel";
+      return result === REROLL ? "reroll" : result === ctx.POPUP_RESULT.AFFIRMATIVE ? "keep" : "cancel";
+    } finally {
+      signal.removeEventListener("abort", abort);
+    }
+  }
+  /** Managed Regenerate keeps the selected reply as a swipe, including its speaker. */
+  interceptNativeRegenerate(shouldIntercept, regenerate) {
+    if (typeof document === "undefined") return () => {
+    };
+    const control = document.getElementById("option_regenerate");
+    const onClick = (event) => {
+      if (!shouldIntercept() || !this.hasSelectedReply() || this.isGroup() || !this.swipesEnabled() || this.isGenerating() || (this.ctx().swipe.state?.() ?? "none") !== "none" || this.ctx().Popup?.util.isPopupOpen()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const menu = document.getElementById("options");
+      if (menu && menu.style.display !== "none") document.getElementById("options_button")?.click();
+      void regenerate().catch((error) => console.error("[RP Director] Regenerate failed", error));
+    };
+    control?.addEventListener("click", onClick, true);
+    return () => control?.removeEventListener("click", onClick, true);
+  }
+  newId() {
+    try {
+      return this.ctx().uuidv4();
+    } catch {
+      return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    }
+  }
+  installedVersion() {
+    const v = globalThis;
+    void v;
+    return "see COMPATIBILITY.md";
+  }
+};
+
+// src/state-cursors.ts
+function marker(extra) {
+  const value = extra?.rpd;
+  return typeof value?.v === "string" ? value.v : null;
+}
+function savedChain(record, current, messages) {
+  if (record.transcriptCursors?.length === current.length) return [...record.transcriptCursors];
+  const saved = [...current];
+  for (const attempt of Object.values(record.attempts)) {
+    const index = attempt.hostMessageRef;
+    if (index === null || !messages[index] || index < 0) continue;
+    const selected = marker(messages[index].extra);
+    if (selected && attempt.variantId !== selected) continue;
+    const variant = attempt.variantId ? record.variants[attempt.variantId] : null;
+    if (attempt.cursorBefore) saved[inputIndex(messages, index, attempt) + (attempt.turnKind === "director_next" ? 0 : 1)] = attempt.cursorBefore;
+    if (variant?.cursorAfter) saved[index + 1] = variant.cursorAfter;
+  }
+  return saved;
+}
+function inputIndex(messages, replyIndex, attempt) {
+  if (attempt.turnKind === "director_next") return replyIndex;
+  let toolSuffix = false;
+  for (let i = replyIndex - 1; i >= 0; i--) {
+    if (messages[i]?.is_system || Array.isArray(messages[i]?.extra?.tool_invocations)) {
+      toolSuffix = true;
+      continue;
+    }
+    if (messages[i]?.is_user && !messages[i]?.is_system) return i;
+    if (attempt.turnKind === void 0 && !toolSuffix) return replyIndex;
+  }
+  return replyIndex;
+}
+function migrateLegacyStory(record, oldChain, messages) {
+  if (!record.legacyStoryLayout) return;
+  const oldStory = structuredClone(record.story);
+  const moves = /* @__PURE__ */ new Map();
+  for (const attempt of Object.values(record.attempts)) {
+    const index = attempt.hostMessageRef;
+    const variant = attempt.variantId ? record.variants[attempt.variantId] : null;
+    if (index === null || !messages[index] || !variant?.cursorAfter || attempt.storyAfter !== void 0) continue;
+    const beforeInput = inputIndex(messages, index, attempt);
+    const key = oldChain[beforeInput];
+    if (!key) continue;
+    const after = oldStory.history[key] ?? oldStory.history[oldStory.historyAliases?.[key] ?? ""];
+    if (!after) continue;
+    attempt.storyBefore = structuredClone(snapshotAt(oldStory, oldChain.slice(0, beforeInput)));
+    attempt.storyAfter = structuredClone(after);
+    moves.set(key, [...moves.get(key) ?? [], variant.cursorAfter]);
+  }
+  const history = {};
+  for (const [key, snapshot] of Object.entries(oldStory.history)) {
+    const targets = moves.get(key);
+    if (targets) for (const target of targets) history[target] = structuredClone(snapshot);
+    else history[key] = snapshot;
+  }
+  record.story.history = history;
+  if (oldStory.historyAliases) {
+    record.story.historyAliases = Object.fromEntries(Object.entries(oldStory.historyAliases).flatMap(([key, target]) => (moves.get(key) ?? [key]).map((next) => [next, moves.get(target)?.[0] ?? target])));
+  }
+  delete record.legacyStoryLayout;
+}
+function rebaseRecordCursors(input, messages, fingerprints, edited = false) {
+  const record = structuredClone(input);
+  const chain = cursorChain(record.seedId, fingerprints);
+  const prior = savedChain(record, chain, messages);
+  migrateLegacyStory(record, prior, messages);
+  const firstChanged = prior.findIndex((cursor2, index) => cursor2 !== chain[index]) - 1;
+  const changedMarker = firstChanged >= 0 ? marker(messages[firstChanged]?.extra) : null;
+  const selectedKnownSwipe = changedMarker && record.variants[changedMarker]?.cursorAfter === chain[firstChanged + 1];
+  const mismatch = firstChanged >= 0 && !selectedKnownSwipe || messages.some((message, index) => {
+    const id = marker(message.extra);
+    const variant = id ? record.variants[id] : null;
+    return variant?.cursorAfter && variant.cursorAfter !== chain[index + 1];
+  });
+  if (!edited && !mismatch) {
+    record.transcriptCursors = chain;
+    return record;
+  }
+  const replacements = /* @__PURE__ */ new Map();
+  for (let i = 0; i < Math.min(prior.length, chain.length); i++) if (prior[i] !== chain[i]) replacements.set(prior[i], chain[i]);
+  for (const attempt of Object.values(record.attempts)) {
+    const index = attempt.hostMessageRef;
+    if (index === null || !messages[index] || !fingerprints[index]) continue;
+    const variant = attempt.variantId ? record.variants[attempt.variantId] : null;
+    const userIndex = inputIndex(messages, index, attempt);
+    const boundIndex = userIndex + (attempt.turnKind === "director_next" || userIndex === index ? 0 : 1);
+    if (attempt.cursorBefore) replacements.set(attempt.cursorBefore, chain[boundIndex]);
+    const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
+    if (resolution?.snapshot.cursorBefore) replacements.set(resolution.snapshot.cursorBefore, chain[userIndex]);
+    if (attempt.loreCursor) replacements.set(attempt.loreCursor, chain[userIndex]);
+    if (!variant?.cursorAfter) continue;
+    const swipe = attempt.hostVariantRef;
+    const text2 = swipe === null ? void 0 : messages[index].swipes?.[swipe];
+    const after = text2 === void 0 ? chain[index + 1] : extendCursor(chain[index], { ...fingerprints[index], text: stripResultFooter(text2) });
+    replacements.set(variant.cursorAfter, after);
+    if (attempt.storyAfter === void 0) {
+      const saved = snapshotAt(record.story, [variant.cursorAfter]);
+      if (saved) attempt.storyAfter = structuredClone(saved);
+    }
+  }
+  const cursor = (value) => value ? replacements.get(value) ?? value : value;
+  for (const attempt of Object.values(record.attempts)) {
+    attempt.cursorBefore = cursor(attempt.cursorBefore) ?? null;
+    if (attempt.loreCursor) attempt.loreCursor = cursor(attempt.loreCursor);
+  }
+  for (const variant of Object.values(record.variants)) {
+    variant.cursorBefore = cursor(variant.cursorBefore) ?? null;
+    variant.cursorAfter = cursor(variant.cursorAfter) ?? null;
+  }
+  for (const resolution of Object.values(record.resolutions)) {
+    resolution.cursorBefore = cursor(resolution.cursorBefore) ?? null;
+    resolution.snapshot.cursorBefore = cursor(resolution.snapshot.cursorBefore) ?? "";
+  }
+  for (const permit of Object.values(record.permits)) {
+    permit.baseCursor = cursor(permit.baseCursor);
+    if (permit.snapshot) permit.snapshot.cursorBefore = cursor(permit.snapshot.cursorBefore) ?? "";
+  }
+  const rekey = (values) => Object.fromEntries(Object.entries(values).map(([key, value]) => [cursor(key), value]));
+  record.story.history = rekey(record.story.history);
+  record.story.lore = rekey(record.story.lore);
+  if (record.story.historyAliases) record.story.historyAliases = Object.fromEntries(Object.entries(record.story.historyAliases).map(([key, target]) => [cursor(key), cursor(target)]));
+  if (record.replyCheckRerolls) record.replyCheckRerolls = [...new Set(record.replyCheckRerolls.map((key) => cursor(key)))];
+  record.transcriptCursors = chain;
+  return record;
 }
 
 // src/resolver.ts
@@ -2040,112 +4463,6 @@ function freeze(input) {
   }
   return record;
 }
-function defOfResolution(resolution) {
-  if (typeof resolution.outcomeInstruction !== "string") return null;
-  return { name: resolution.outcome, instruction: resolution.outcomeInstruction, records: resolution.outcomeRecords ?? "", final: resolution.outcomeFinal === true };
-}
-function effectsFor(resolution) {
-  if (typeof resolution.outcomeRecords === "string") {
-    return resolution.outcomeRecords ? [{ op: "set_enum", variableId: gainVariableId(resolution.action), value: resolution.outcomeRecords }] : [];
-  }
-  return structuredClone(resolution.action.effectsByOutcome?.[tierForResolution(resolution)] ?? []);
-}
-
-// src/result-footer.ts
-function supportOf(answer) {
-  if (!answer) return null;
-  const normalized = normaliseSignal(answer);
-  return normalized.ok ? normalized.signal.x : null;
-}
-function formatResultFooter(record, attemptId) {
-  const attempt = record?.attempts[attemptId];
-  if (!record || !attempt || attempt.attemptId !== attemptId) return "";
-  const results = [];
-  const nameOf = (id) => record.actors[id]?.name || id;
-  if (!attempt.unadjudicated) {
-    const frozen = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
-    if (frozen) results.push({
-      kind: "action",
-      actor: nameOf(frozen.action.actingActorId ?? frozen.action.playerActorId),
-      action: frozen.action.attemptedAction,
-      outcome: frozen.outcome,
-      method: frozen.method,
-      support: supportOf(frozen.assessment),
-      roll: frozen.draw ?? null
-    });
-    const permit = attempt.permitId ? record.permits[attempt.permitId] : null;
-    for (const action of permit?.actions ?? []) results.push({
-      kind: "action",
-      actor: nameOf(action.actingActorId),
-      action: action.method,
-      outcome: action.outcome,
-      method: action.methodUsed ?? null,
-      support: supportOf(action.assessment),
-      roll: action.draw ?? null
-    });
-    if (attempt.reaction) results.push({
-      kind: attempt.reaction.kind,
-      actor: nameOf(attempt.reaction.actorId),
-      action: "NPC reaction",
-      outcome: attempt.reaction.outcome,
-      method: "sample",
-      support: null,
-      roll: attempt.reaction.draw
-    });
-  }
-  const status = attempt.unadjudicated ? "unadjudicated" : results.some((result) => result.kind === "action") ? "ruled" : results.length ? "directed" : "no_ruling";
-  const json = JSON.stringify({ status, results }).replace(
-    /"(?:\\.|[^"\\])*"/g,
-    (value) => value.replace(
-      /[<>&\[\]\u2028\u2029]/g,
-      (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`
-    )
-  );
-  return `[RP_DIRECTOR]
-${json}
-[/RP_DIRECTOR]`;
-}
-function stripResultFooter(text2) {
-  return text2.replace(/(?:\r?\n){0,2}^\[RP_DIRECTOR\]\r?\n\{[^\r\n]*\}\r?\n\[\/RP_DIRECTOR\]/gm, "");
-}
-function withResultFooter(text2, footer) {
-  const prose = stripResultFooter(text2);
-  if (!footer) return prose;
-  const body = prose.trimEnd();
-  return body ? `${body}
-
-${footer}` : footer;
-}
-
-// src/lore/apply.ts
-function applyLorePlan(lists, plan) {
-  let removed = 0;
-  for (const list of lists) {
-    if (!Array.isArray(list)) continue;
-    for (let i = list.length - 1; i >= 0; i--) {
-      const entry = list[i];
-      if (!entry || typeof entry !== "object") continue;
-      if (plan.force.has(`${String(entry.world)}.${String(entry.uid)}`)) continue;
-      if (plan.managed.has(String(entry.world)) && entry.constant !== true) {
-        list.splice(i, 1);
-        removed += 1;
-      }
-    }
-  }
-  return removed;
-}
-function summarizeActivation(entries, forced, at = Date.now()) {
-  const books = {};
-  for (const raw of entries) {
-    const entry = raw;
-    if (!entry || typeof entry !== "object" || typeof entry.world !== "string") continue;
-    const book = books[entry.world] ??= { entries: 0, chars: 0, picked: 0 };
-    book.entries += 1;
-    book.chars += typeof entry.content === "string" ? entry.content.length : 0;
-    if (forced?.has(`${entry.world}.${String(entry.uid)}`)) book.picked += 1;
-  }
-  return { at, books };
-}
 
 // src/templates.ts
 var ACTION_TEMPLATES = [
@@ -2204,13 +4521,6 @@ function templateById(id) {
   const canonical = actionFamily(id);
   return ACTION_TEMPLATES.find((t) => t.id === canonical) ?? null;
 }
-var AUTOMATIC_GAIN = "the first primary uncertain, consequential state change explicitly attempted in the latest user message";
-function attemptLabel(boundedResult, method) {
-  if (boundedResult !== AUTOMATIC_GAIN) return boundedResult;
-  const words = String(method ?? "").replace(/\s+/g, " ").trim();
-  const excerpt2 = words.length > 160 ? `${words.slice(0, 159).trimEnd()}\u2026` : words;
-  return `attempt: ${excerpt2}`;
-}
 function declareAction(input) {
   const template = templateById(input.templateId);
   if (!template) return null;
@@ -2235,1554 +4545,7 @@ function declareAction(input) {
   };
 }
 
-// src/host.ts
-var INJECTION_KEY = "rp_director_binding";
-var SETTINGS_KEY = "rpDirector";
-var METADATA_KEY = "rpDirector";
-var VARIANT_MARKER_KEY = "rpd";
-var EXTENSION_PROMPT_TYPE_IN_CHAT = 1;
-var ROLE_NUMBER = { system: 0, user: 1, assistant: 2 };
-function defaultSettings() {
-  return {
-    enabled: true,
-    profileId: DEFAULT_PROFILE_ID,
-    bindingConfirmedAt: null,
-    connection: { kind: "mock", baseUrl: "", model: "", stProfileId: "", mockScenario: "gate-deferred" },
-    observerConnection: { stProfileId: "" },
-    reactions: defaultReactionSettings(),
-    showBar: true,
-    inspectorOpen: false,
-    profileOverrides: {},
-    pipeline: "staged",
-    settingsRevision: 2,
-    modules: { speaker: true, decisions: true, meters: true, secrets: true, lore: true },
-    lore: defaultLoreSettings()
-  };
-}
-var Host = class {
-  flags = null;
-  ownedTool = null;
-  ctx() {
-    const st = globalThis.SillyTavern;
-    if (!st || typeof st.getContext !== "function") throw new Error("SillyTavern.getContext is not available");
-    return st.getContext();
-  }
-  /** Loads live flag getters from host modules; safe to call more than once. */
-  async loadFlags() {
-    if (this.flags) return;
-    try {
-      const groupUrl = new URL("../../../group-chats.js", import.meta.url).href;
-      const scriptUrl = new URL("../../../../script.js", import.meta.url).href;
-      const [groupModule, scriptModule] = await Promise.all([import(
-        /* @vite-ignore */
-        groupUrl
-      ), import(
-        /* @vite-ignore */
-        scriptUrl
-      )]);
-      this.flags = {
-        isGroupGenerating: () => Boolean(groupModule.is_group_generating),
-        isAutoMode: () => Boolean(groupModule.is_group_automode_enabled),
-        isSendPress: () => Boolean(scriptModule.is_send_press),
-        sendMessageAsUser: typeof scriptModule.sendMessageAsUser === "function" ? scriptModule.sendMessageAsUser : null
-      };
-    } catch (error) {
-      console.warn("[RP Director] host flag import failed; using DOM fallback", error);
-      this.flags = {
-        isGroupGenerating: () => document.body.dataset.generating === "true",
-        isAutoMode: () => false,
-        isSendPress: () => document.body.dataset.generating === "true",
-        sendMessageAsUser: null
-      };
-    }
-  }
-  /** Posts the composer text as a user message without any reply, through the host's own path. Returns false if unavailable. */
-  async postUserMessage(text2) {
-    const fn = this.flags?.sendMessageAsUser;
-    if (!fn) return false;
-    await fn(text2, "");
-    const composer = this.composer();
-    if (composer) {
-      composer.value = "";
-      composer.dispatchEvent(new Event("input", { bubbles: true }));
-    }
-    await this.ctx().saveChat();
-    return true;
-  }
-  isGenerating() {
-    const f = this.flags;
-    if (f) return f.isGroupGenerating() || f.isSendPress();
-    return document.body.dataset.generating === "true";
-  }
-  isAutoMode() {
-    return this.flags ? this.flags.isAutoMode() : false;
-  }
-  isAutoDirectorEnabled() {
-    const all = this.ctx().extensionSettings;
-    const base = all[SETTINGS_KEY];
-    return !base?.enabled && Boolean(all.rpDirectorAuto?.enabled);
-  }
-  takeOverAuto() {
-    const all = this.ctx().extensionSettings;
-    if (!all[SETTINGS_KEY]?.enabled) return;
-    const sibling = all.rpDirectorAuto;
-    if (sibling) sibling.enabled = false;
-    const auto = globalThis.rpDirectorAuto;
-    if (auto?.controller) {
-      auto.controller.setEnabled(false);
-      auto.controller.destroy();
-    }
-    if (typeof document !== "undefined") {
-      document.getElementById("rpda-bar")?.remove();
-      document.getElementById("rpda-settings")?.remove();
-    }
-    this.saveSettings();
-  }
-  // ---- chat identity -------------------------------------------------------
-  isGroup() {
-    return Boolean(this.ctx().groupId);
-  }
-  /** Stable key for the open chat: group id or character avatar plus chat file name. */
-  chatKey() {
-    const ctx = this.ctx();
-    const chatId = ctx.getCurrentChatId();
-    if (!chatId) return null;
-    if (ctx.groupId) return `group:${ctx.groupId}:${chatId}`;
-    const idx = Number(ctx.characterId);
-    const avatar = Number.isInteger(idx) ? ctx.characters[idx]?.avatar : void 0;
-    if (!avatar) return null;
-    return `char:${avatar}:${chatId}`;
-  }
-  seedId() {
-    const ctx = this.ctx();
-    const integrity = ctx.chatMetadata?.integrity;
-    return `${this.chatKey() ?? "none"}|${typeof integrity === "string" ? integrity : ""}`;
-  }
-  playerName() {
-    return String(this.ctx().name1 ?? "User");
-  }
-  // ---- actors ----------------------------------------------------------------
-  /** Group members in stable group order (or the single character), with current indexes. */
-  actors() {
-    const ctx = this.ctx();
-    if (ctx.groupId) {
-      const group = ctx.groups.find((g) => g.id === ctx.groupId);
-      if (!group) return [];
-      const disabled = new Set(group.disabled_members ?? []);
-      return group.members.map((avatar) => {
-        const index = ctx.characters.findIndex((c) => c.avatar === avatar);
-        const character2 = index >= 0 ? ctx.characters[index] : void 0;
-        return { avatar, name: character2?.name ?? avatar, index, disabled: disabled.has(avatar) };
-      }).filter((a) => a.index >= 0);
-    }
-    const idx = Number(ctx.characterId);
-    const character = Number.isInteger(idx) ? ctx.characters[idx] : void 0;
-    if (!character) return [];
-    return [{ avatar: character.avatar, name: character.name, index: idx, disabled: false }];
-  }
-  /** Re-resolves a durable avatar to its current array index, or -1. */
-  resolveIndex(avatar) {
-    return this.ctx().characters.findIndex((c) => c.avatar === avatar);
-  }
-  /** Full authorial card text (description and personality) for rulings whose family admits it. */
-  cardText(avatar) {
-    const c = this.ctx().characters.find((x) => x.avatar === avatar);
-    return [c?.description, c?.personality].map((part) => String(part ?? "").trim()).filter(Boolean).join("\n\n");
-  }
-  /** Bounded public card summary for the decision snapshot. */
-  publicCard(avatar, maxChars = 400) {
-    const c = this.ctx().characters.find((x) => x.avatar === avatar);
-    const description = String(c?.description ?? "").replace(/\s+/g, " ").trim();
-    return description.length > maxChars ? description.slice(0, maxChars) + "\u2026" : description;
-  }
-  // ---- chat -------------------------------------------------------------------
-  chat() {
-    return this.ctx().chat;
-  }
-  /**
-   * Maps host messages to fingerprint inputs. Every message in the array is
-   * part of the transcript identity; `is_system` is deliberately ignored
-   * because the host flips it on existing messages (observed on group
-   * greetings), which would silently move every later cursor.
-   */
-  fingerprintMessages(messages) {
-    const out = [];
-    for (const m of messages) {
-      if (!m) continue;
-      if (m.is_user) out.push({ role: "user", actorKey: "persona", text: m.mes ?? "" });
-      else out.push({ role: "assistant", actorKey: m.original_avatar ?? `name:${m.name}`, text: stripResultFooter(m.mes ?? "") });
-    }
-    return out;
-  }
-  lastAssistantAvatar() {
-    const chat = this.chat();
-    for (let i = chat.length - 1; i >= 0; i--) {
-      const m = chat[i];
-      if (!m.is_user && !m.is_system) return m.original_avatar ?? null;
-    }
-    return null;
-  }
-  composer() {
-    return document.getElementById("send_textarea");
-  }
-  composerText() {
-    return String(this.composer()?.value ?? "");
-  }
-  /** Any visible assistant prose saved after an attempt bound to the transcript. */
-  assistantProseSince(messageIndex) {
-    return this.chat().slice(Math.max(0, messageIndex)).filter((message) => !message.is_user && !message.is_system).map((message) => stripResultFooter(String(message.mes ?? "")).trim()).filter((text2) => !["", "..."].includes(text2));
-  }
-  /** Update the selected swipe only; saveMetadata persists the chat text too. */
-  writeResultFooter(mesId, footer) {
-    const ctx = this.ctx();
-    const message = ctx.chat[mesId];
-    if (!message || message.is_user || message.is_system) return false;
-    const next = withResultFooter(message.mes, footer);
-    let changed = next !== message.mes;
-    message.mes = next;
-    const swipe = message.swipe_id ?? 0;
-    if (message.swipes && swipe >= 0 && swipe < message.swipes.length && message.swipes[swipe] !== next) {
-      message.swipes[swipe] = next;
-      changed = true;
-    }
-    if (typeof message.extra?.display_text === "string") {
-      const display = withResultFooter(message.extra.display_text, footer);
-      changed ||= display !== message.extra.display_text;
-      message.extra.display_text = display;
-      const extra = message.swipe_info?.[swipe]?.extra;
-      if (extra && extra.display_text !== display) {
-        extra.display_text = display;
-        changed = true;
-      }
-    }
-    if (changed) ctx.updateMessageBlock?.(mesId, message);
-    return changed;
-  }
-  // ---- variant markers --------------------------------------------------------
-  readMarker(mesId) {
-    const m = this.chat()[mesId];
-    const marker = m?.extra?.[VARIANT_MARKER_KEY];
-    if (marker && typeof marker.v === "string" && typeof marker.a === "string") return marker;
-    return null;
-  }
-  /** Writes the marker to the message and to its current swipe_info entry so swipe selection restores it. */
-  writeMarker(mesId, marker) {
-    const m = this.chat()[mesId];
-    if (!m) return;
-    m.extra = m.extra && typeof m.extra === "object" ? m.extra : {};
-    m.extra[VARIANT_MARKER_KEY] = { ...marker };
-    if (typeof m.swipe_id === "number" && Array.isArray(m.swipe_info)) {
-      const info = m.swipe_info[m.swipe_id] ?? (m.swipe_info[m.swipe_id] = {});
-      info.extra = info.extra && typeof info.extra === "object" ? info.extra : {};
-      info.extra[VARIANT_MARKER_KEY] = { ...marker };
-    }
-  }
-  // ---- metadata ---------------------------------------------------------------
-  readRecord() {
-    const ctx = this.ctx();
-    if (!ctx.extensionSettings[SETTINGS_KEY]?.enabled) return ctx.chatMetadata?.[METADATA_KEY];
-    const migrated = migrateAutoHistory(ctx.chatMetadata, ctx.chat);
-    if (migrated.migrated) {
-      ctx.chatMetadata[METADATA_KEY] = migrated.metadata[METADATA_KEY];
-      for (let i = 0; i < ctx.chat.length; i++) {
-        ctx.chat[i].extra = migrated.messages[i].extra;
-        ctx.chat[i].swipe_info = migrated.messages[i].swipe_info;
-      }
-    }
-    return ctx.chatMetadata?.[METADATA_KEY];
-  }
-  /**
-   * Re-acquires the live metadata reference and verifies the chat before
-   * writing; a stale reference from another chat cannot commit (M1-11).
-   */
-  async writeRecord(record, expectedChatKey) {
-    const ctx = this.ctx();
-    if (this.chatKey() !== expectedChatKey) {
-      console.warn("[RP Director] refusing to save metadata: chat changed");
-      return false;
-    }
-    ctx.chatMetadata[METADATA_KEY] = record;
-    await ctx.saveMetadata();
-    return true;
-  }
-  // ---- settings ---------------------------------------------------------------
-  settings() {
-    const all = this.ctx().extensionSettings;
-    const merged = normalizeBaseSettings(defaultSettings(), all[SETTINGS_KEY]);
-    all[SETTINGS_KEY] = merged;
-    return merged;
-  }
-  saveSettings() {
-    this.ctx().saveSettingsDebounced();
-  }
-  connectionProfiles() {
-    const cm = this.ctx().extensionSettings.connectionManager;
-    return (cm?.profiles ?? []).filter((p) => p && p.mode === "cc").map((p) => ({ id: p.id, name: p.name, api: String(p.api ?? ""), model: String(p.model ?? "") }));
-  }
-  // ---- injection --------------------------------------------------------------
-  setInjection(text2, depth, role) {
-    this.ctx().setExtensionPrompt(INJECTION_KEY, text2, EXTENSION_PROMPT_TYPE_IN_CHAT, depth, false, ROLE_NUMBER[role]);
-  }
-  clearInjection() {
-    this.ctx().setExtensionPrompt(INJECTION_KEY, "", EXTENSION_PROMPT_TYPE_IN_CHAT, 0, false, ROLE_NUMBER.system);
-  }
-  // ---- generation -------------------------------------------------------------
-  /** Director Send / Next: forced-character generation through the verified host path. */
-  async generate(forceIndex) {
-    const options = {};
-    if (typeof forceIndex === "number" && forceIndex >= 0 && this.isGroup()) options.force_chid = forceIndex;
-    return this.ctx().generate("normal", options);
-  }
-  async swipeRight() {
-    const message = this.chat().at(-1);
-    const options = { forceMesId: this.chat().length - 1, forceSwipeId: message?.swipes?.length ?? 1 };
-    const swipe = this.ctx().swipe;
-    if (swipe.to) await swipe.to(null, "right", options);
-    else await swipe.right(void 0, options);
-  }
-  stopGeneration() {
-    this.ctx().stopGeneration();
-  }
-  // ---- writer function tool --------------------------------------------------
-  registerFunctionTool(tool) {
-    const ctx = this.ctx();
-    if (!ctx.extensionSettings[SETTINGS_KEY]?.enabled) return false;
-    if (typeof ctx.registerFunctionTool !== "function" || typeof ctx.unregisterFunctionTool !== "function") return false;
-    ctx.unregisterFunctionTool(tool.name);
-    ctx.registerFunctionTool(tool);
-    this.ownedTool = tool;
-    globalThis.__rpDirectorToolOwner = tool;
-    return true;
-  }
-  unregisterFunctionTool(name) {
-    if (!this.ownedTool || globalThis.__rpDirectorToolOwner !== this.ownedTool) return;
-    this.ctx().unregisterFunctionTool?.(name);
-    this.ownedTool = null;
-    delete globalThis.__rpDirectorToolOwner;
-  }
-  writerToolCapability(type = "normal") {
-    try {
-      const ctx = this.ctx();
-      if (typeof ctx.isToolCallingSupported !== "function" || typeof ctx.canPerformToolCalls !== "function") return { supported: false, reason: "installed SillyTavern does not expose function-tool capability checks" };
-      if (!ctx.isToolCallingSupported()) return { supported: false, reason: "the selected writer API/model does not support enabled function calling" };
-      if (!ctx.canPerformToolCalls(type)) return { supported: false, reason: `SillyTavern does not permit tools for ${type} generation` };
-      return { supported: true, reason: null };
-    } catch (error) {
-      return { supported: false, reason: `tool capability check failed: ${error instanceof Error ? error.message : String(error)}` };
-    }
-  }
-  // ---- lore -------------------------------------------------------------------
-  lorePlanArmed = null;
-  loreArmSeq = 0;
-  loreHookOff = null;
-  lastActivation = null;
-  /** Called after every real World Info scan (set by the controller to refresh the panel). */
-  onLoreActivation = null;
-  /** What the last real World Info scan activated, per book. */
-  lastLoreActivation() {
-    return this.lastActivation;
-  }
-  /**
-   * Books SillyTavern could load for these cast members, with their entries.
-   * Mirrors world-info.js getGlobalLore/getCharacterLore/getChatLore/
-   * getPersonaLore, except that a group lists every given member's books:
-   * SillyTavern itself loads only the current speaker's (this_chid) books per
-   * scan, which is also all a forced activation can reach.
-   */
-  async loreCatalog(avatars) {
-    const ctx = this.ctx();
-    const wi = await import(
-      /* @vite-ignore */
-      new URL("../../../world-info.js", import.meta.url).href
-    );
-    const books = [];
-    const add = (world, source, owner) => {
-      const name = typeof world === "string" ? world.trim() : "";
-      if (name && !books.some((b) => b.world === name)) books.push({ world: name, source, owner });
-    };
-    for (const world of wi.selected_world_info ?? []) add(world, "global", null);
-    for (const avatar of avatars) {
-      const character = ctx.characters.find((c) => c.avatar === avatar);
-      add(character?.data?.extensions?.world, "character", avatar);
-      const filename = avatar.replace(/\.[^/.]+$/, "");
-      const extra = (wi.world_info?.charLore ?? []).find((item) => item?.name === filename)?.extraBooks ?? [];
-      for (const world of extra) add(world, "character", avatar);
-    }
-    add(ctx.chatMetadata?.world_info, "chat", null);
-    try {
-      const pu = await import(
-        /* @vite-ignore */
-        new URL("../../../power-user.js", import.meta.url).href
-      );
-      add(pu.power_user?.persona_description_lorebook, "persona", null);
-    } catch {
-    }
-    const entries = [];
-    for (const book of books) {
-      let data = null;
-      try {
-        data = await wi.loadWorldInfo(book.world);
-      } catch {
-        data = null;
-      }
-      for (const raw of Object.values(data?.entries ?? {})) {
-        const uid = Number(raw.uid);
-        if (!Number.isInteger(uid)) continue;
-        const content = String(raw.content ?? "");
-        const keys = Array.isArray(raw.key) ? raw.key.map(String).filter((k) => k.trim()) : [];
-        entries.push({
-          world: book.world,
-          uid,
-          keys,
-          content,
-          title: String(raw.comment ?? "").trim() || keys.slice(0, 3).join(", ") || `Entry ${uid}`,
-          constant: raw.constant === true,
-          // An @@dont_activate decorator blocks forced activation too.
-          disabled: raw.disable === true || /^\s*@@dont_activate\b/.test(content)
-        });
-      }
-    }
-    return { books, entries };
-  }
-  /** TunnelVision's stored index roots by book, if the extension has built any. */
-  tunnelVisionRoots() {
-    const tv = this.ctx().extensionSettings.tunnelvision;
-    const out = {};
-    for (const [world, tree] of Object.entries(tv?.trees ?? {})) if (tree?.root && typeof tree.root === "object") out[world] = tree.root;
-    return out;
-  }
-  /** True when TunnelVision is on and suppresses this book's keyword scan itself. */
-  tunnelVisionManages(world) {
-    const tv = this.ctx().extensionSettings.tunnelvision;
-    return tv?.globalEnabled === true && tv.enabledLorebooks?.[world] === true;
-  }
-  /**
-   * SillyTavern's processed World Info entries for the current speaker (group
-   * scans load this_chid's books only), exactly as its scan will see them:
-   * decorators parsed out of content, hash set. Forcing anything else would put
-   * decorator lines in the prompt and break sticky/cooldown, which key on hash.
-   */
-  async sortedEntries() {
-    const wi = await import(
-      /* @vite-ignore */
-      new URL("../../../world-info.js", import.meta.url).href
-    );
-    return wi.getSortedEntries();
-  }
-  /**
-   * Arms the plan for every World Info scan until disarmed. null disarms at
-   * once; a plan resolves its forced entries first. A later call supersedes an
-   * earlier one that is still resolving.
-   */
-  async armLore(plan) {
-    const seq = ++this.loreArmSeq;
-    this.lorePlanArmed = null;
-    if (!plan || plan.force.size === 0 && plan.managed.size === 0) return;
-    let forced = [];
-    if (plan.force.size) {
-      try {
-        forced = (await this.sortedEntries()).filter((e) => plan.force.has(`${String(e.world)}.${String(e.uid)}`));
-      } catch (error) {
-        console.warn("[RP Director] could not resolve lore picks; keyword lore only", error);
-        forced = [];
-      }
-    }
-    if (seq === this.loreArmSeq) this.lorePlanArmed = { ...plan, forced };
-  }
-  armedLore() {
-    return this.lorePlanArmed;
-  }
-  /** Registers the WORLDINFO_ENTRIES_LOADED hook once; false when the host lacks the event. */
-  installLoreHook() {
-    if (this.loreHookOff) return true;
-    const ctx = this.ctx();
-    const name = ctx.eventTypes.WORLDINFO_ENTRIES_LOADED;
-    const forceName = ctx.eventTypes.WORLDINFO_FORCE_ACTIVATE;
-    if (!name || !forceName || typeof ctx.eventSource.emit !== "function") return false;
-    const handler = async (payload) => {
-      const plan = this.lorePlanArmed;
-      if (!plan || !payload || typeof payload !== "object") return;
-      const lists = payload;
-      applyLorePlan([lists.globalLore, lists.characterLore, lists.chatLore, lists.personaLore], plan);
-      if (plan.forced.length) await ctx.eventSource.emit(forceName, plan.forced);
-    };
-    ctx.eventSource.on(name, handler);
-    const activatedName = ctx.eventTypes.WORLD_INFO_ACTIVATED;
-    const onActivated = (entries) => {
-      if (!Array.isArray(entries)) return;
-      this.lastActivation = summarizeActivation(entries, this.lorePlanArmed?.force ?? null);
-      this.onLoreActivation?.();
-    };
-    if (activatedName) ctx.eventSource.on(activatedName, onActivated);
-    this.loreHookOff = () => {
-      ctx.eventSource.removeListener(name, handler);
-      if (activatedName) ctx.eventSource.removeListener(activatedName, onActivated);
-    };
-    return true;
-  }
-  removeLoreHook() {
-    this.loreHookOff?.();
-    this.loreHookOff = null;
-    this.loreArmSeq += 1;
-    this.lorePlanArmed = null;
-  }
-  // ---- events -----------------------------------------------------------------
-  on(event, handler) {
-    const ctx = this.ctx();
-    const name = ctx.eventTypes[event];
-    if (!name) throw new Error(`unknown host event ${event}`);
-    ctx.eventSource.on(name, handler);
-    return () => ctx.eventSource.removeListener(name, handler);
-  }
-  // ---- transport through SillyTavern's connection manager --------------------
-  /** Structured-output transport that uses a stored connection profile; the extension never sees the key. */
-  stProfileTransport(profileId) {
-    return async (payload, signal) => {
-      const ctx = this.ctx();
-      const override = {
-        json_schema: {
-          name: payload.json_schema.name,
-          description: "RP Director decision batch",
-          value: payload.json_schema.schema,
-          strict: payload.json_schema.strict
-        }
-      };
-      if (payload.model) override.model = payload.model;
-      const result = await ctx.ConnectionManagerRequestService.sendRequest(
-        profileId,
-        payload.messages,
-        1024,
-        { stream: false, signal, extractData: true, includePreset: false, includeInstruct: false },
-        override
-      );
-      return { content: result?.content, model: null, usage: null };
-    };
-  }
-  /**
-   * Structured-output transport that routes through SillyTavern's own server
-   * (`ChatCompletionService.processRequest`, `chat_completion_source: 'openrouter'`),
-   * using the OpenRouter key already saved in SillyTavern's secrets; the
-   * extension never sees or stores it.
-   */
-  openRouterTransport() {
-    return createOpenRouterTransport((payload, signal) => this.ctx().ChatCompletionService.processRequest(payload, {}, false, signal));
-  }
-  /** Jev decision batches through the authenticated companion server plugin. */
-  openRouterDecisionsTransport() {
-    return async (payload, signal) => {
-      let response;
-      try {
-        response = await fetch("/api/plugins/rp-director-openrouter/decide", {
-          method: "POST",
-          headers: this.ctx().getRequestHeaders(),
-          body: JSON.stringify(payload),
-          signal
-        });
-      } catch (error) {
-        if (signal.aborted) throw new ProviderError("aborted", "OpenRouter Decisions request was cancelled");
-        throw new ProviderError("network", `RP Director Decisions plugin request failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      const text2 = await response.text();
-      let parsed;
-      try {
-        parsed = text2 ? JSON.parse(text2) : {};
-      } catch {
-        throw new ProviderError("malformed", "RP Director Decisions plugin returned invalid JSON");
-      }
-      if (!response.ok) {
-        const body = parsed && typeof parsed === "object" ? parsed : null;
-        const message = typeof body?.error?.message === "string" ? body.error.message : `HTTP ${response.status}`;
-        const hint = response.status === 404 ? " Restart SillyTavern after installing the rp-director-openrouter server plugin." : "";
-        throw new ProviderError("http", `OpenRouter Decisions plugin: ${message}.${hint}`, response.status);
-      }
-      return parsed;
-    };
-  }
-  // ---- ui helpers -------------------------------------------------------------
-  toast(kind, message) {
-    const t = globalThis.toastr;
-    if (t && typeof t[kind] === "function") t[kind](message, "RP Director");
-    else console.log(`[RP Director] ${kind}: ${message}`);
-  }
-  async confirm(title, html) {
-    const ctx = this.ctx();
-    if (ctx.callGenericPopup && ctx.POPUP_TYPE && ctx.POPUP_RESULT) {
-      const result = await ctx.callGenericPopup(`<h3>${title}</h3>${html}`, ctx.POPUP_TYPE.CONFIRM, "", { okButton: "Confirm", cancelButton: "Cancel" });
-      return result === ctx.POPUP_RESULT.AFFIRMATIVE;
-    }
-    return window.confirm(`${title}
-
-${html.replace(/<[^>]+>/g, "")}`);
-  }
-  async chooseSwipeAction(kind, canReroll = true) {
-    const ctx = this.ctx();
-    if (ctx.callGenericPopup && ctx.POPUP_TYPE && ctx.POPUP_RESULT) {
-      if (kind === "ruled") {
-        const reroll = 1001;
-        const result2 = await ctx.callGenericPopup(
-          "<h3>Generate a new swipe</h3><p>This reply has a frozen Director ruling. Choose whether the new wording must keep it or receive a new ruling.</p>",
-          ctx.POPUP_TYPE.CONFIRM,
-          "",
-          { okButton: "Keep values & swipe", cancelButton: "Cancel", customButtons: canReroll ? [{ text: "Review new values & swipe", result: reroll, icon: "fa-dice" }] : [] }
-        );
-        return result2 === reroll ? "reroll" : result2 === ctx.POPUP_RESULT.AFFIRMATIVE ? "reuse" : "cancel";
-      }
-      const bypass = 1002;
-      const result = await ctx.callGenericPopup(
-        "<h3>Generate a new swipe</h3><p>The selected reply predates Director adjudication. Director can adopt this branch and manage the new swipe, or you can explicitly bypass it once.</p>",
-        ctx.POPUP_TYPE.CONFIRM,
-        "",
-        { okButton: "Director-managed", cancelButton: "Cancel", customButtons: [{ text: "Native bypass", result: bypass, icon: "fa-forward" }] }
-      );
-      return result === bypass ? "bypass" : result === ctx.POPUP_RESULT.AFFIRMATIVE ? "manage" : "cancel";
-    }
-    return "cancel";
-  }
-  async reviewRolls(permit, names, method, signal) {
-    const ctx = this.ctx();
-    if (signal.aborted || !ctx.callGenericPopup || !ctx.POPUP_TYPE || !ctx.POPUP_RESULT) return "cancel";
-    const content = document.createElement("div");
-    content.className = "rpd-roll-review";
-    const title = document.createElement("h3");
-    title.textContent = "Director results";
-    content.append(title);
-    const hint = document.createElement("p");
-    hint.textContent = "The writer is waiting. Keep these values to continue, or review new results before the reply is written.";
-    content.append(hint);
-    for (const action of permit.actions) {
-      const section = document.createElement("section");
-      const heading = document.createElement("strong");
-      heading.textContent = `${uiActorName(action.actingActorId, names[action.actingActorId])}: ${attemptLabel(action.boundedResult, action.method)}`;
-      const result = document.createElement("p");
-      result.textContent = `${action.outcome}${typeof action.draw === "number" ? ` \xB7 draw ${action.draw.toFixed(4)}` : " \xB7 threshold assessment (no dice)"}${action.assessment?.type === "noul" ? ` \xB7 support ${action.assessment.noul.toFixed(3)}` : ""}`;
-      const instruction = document.createElement("p");
-      instruction.textContent = action.instruction;
-      section.append(heading, result, instruction);
-      content.append(section);
-    }
-    const REROLL = 1001;
-    let closePopup = null;
-    const abort = () => closePopup?.();
-    signal.addEventListener("abort", abort, { once: true });
-    try {
-      const result = await ctx.callGenericPopup(content, ctx.POPUP_TYPE.CONFIRM, "", {
-        okButton: "Keep & continue",
-        cancelButton: "Cancel generation",
-        customButtons: [{ text: method === "sample" ? "Reroll" : "Reassess", result: REROLL, icon: "fa-dice" }],
-        onOpen: (popup) => {
-          closePopup = () => {
-            void popup.complete(ctx.POPUP_RESULT.CANCELLED);
-          };
-          if (signal.aborted) closePopup();
-        }
-      });
-      if (signal.aborted) return "cancel";
-      return result === REROLL ? "reroll" : result === ctx.POPUP_RESULT.AFFIRMATIVE ? "keep" : "cancel";
-    } finally {
-      signal.removeEventListener("abort", abort);
-    }
-  }
-  /** Capture native Send/Enter before SillyTavern's handlers and route it through Director. */
-  interceptNativeSend(shouldIntercept, send) {
-    const button2 = document.getElementById("send_but");
-    const onClick = (event) => {
-      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith("/") || this.ctx().Popup?.util.isPopupOpen()) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      void send().catch((error) => console.error("[RP Director] native Send interception failed", error));
-    };
-    const onKeyDown = (event) => {
-      const target = event.target;
-      if (target?.id !== "send_textarea" || event.key !== "Enter" || event.isComposing || event.shiftKey || event.altKey || event.metaKey) return;
-      const shouldSendOnEnter = this.ctx().shouldSendOnEnter;
-      if (shouldSendOnEnter && !shouldSendOnEnter()) return;
-      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith("/") || this.ctx().Popup?.util.isPopupOpen()) return;
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      void send().catch((error) => console.error("[RP Director] native Enter interception failed", error));
-    };
-    button2?.addEventListener("click", onClick, true);
-    document.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      button2?.removeEventListener("click", onClick, true);
-      document.removeEventListener("keydown", onKeyDown, true);
-    };
-  }
-  nativeSendBlocked() {
-    return this.isGenerating() || (this.ctx().swipe.state?.() ?? "none") !== "none";
-  }
-  newId() {
-    try {
-      return this.ctx().uuidv4();
-    } catch {
-      return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    }
-  }
-  installedVersion() {
-    const v = globalThis;
-    void v;
-    return "see COMPATIBILITY.md";
-  }
-};
-function jsonSafe(value) {
-  try {
-    return JSON.parse(JSON.stringify(value ?? null));
-  } catch {
-    return null;
-  }
-}
-
-// src/story.ts
-var HISTORY_LIMIT = 400;
-function emptyStory() {
-  return { packId: "auto", packSource: "auto", secrets: [], history: {}, lore: {} };
-}
-var isStrings = (value) => Array.isArray(value) && value.every((x) => typeof x === "string");
-function normalizeSecret(raw) {
-  const s = raw;
-  if (!s || typeof s !== "object" || typeof s.id !== "string" || !s.id || typeof s.text !== "string" || !isStrings(s.holders)) return null;
-  return { id: s.id, text: s.text, holders: [...s.holders] };
-}
-function normalizeSnapshot(raw) {
-  const s = raw;
-  if (!s || typeof s !== "object" || typeof s.at !== "number") return null;
-  const meters = {};
-  for (const [npc, values] of Object.entries(s.meters && typeof s.meters === "object" ? s.meters : {})) {
-    if (!values || typeof values !== "object") continue;
-    meters[npc] = Object.fromEntries(Object.entries(values).filter(([, v]) => Number.isInteger(v) && v >= 0));
-  }
-  const knownBy = {};
-  for (const [id, who] of Object.entries(s.knownBy && typeof s.knownBy === "object" ? s.knownBy : {})) if (isStrings(who)) knownBy[id] = [...who];
-  return { at: s.at, meters, knownBy };
-}
-function normalizeStory(raw) {
-  const base = emptyStory();
-  const r = raw;
-  if (!r || typeof r !== "object") return base;
-  const history = {};
-  if (r.history && typeof r.history === "object" && !Array.isArray(r.history)) {
-    for (const [cursor, snap] of Object.entries(r.history)) {
-      const normalized = normalizeSnapshot(snap);
-      if (normalized) history[cursor] = normalized;
-    }
-  }
-  return {
-    packId: typeof r.packId === "string" && r.packId ? r.packId : base.packId,
-    packSource: r.packSource === "judge" || r.packSource === "user" || r.packSource === "auto" ? r.packSource : base.packSource,
-    secrets: Array.isArray(r.secrets) ? r.secrets.map(normalizeSecret).filter((s) => s !== null) : [],
-    history,
-    lore: normalizeLoreHistory(r.lore)
-  };
-}
-function normalizeLoreHistory(raw) {
-  const out = {};
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
-  for (const [cursor, value] of Object.entries(raw)) {
-    const r = value;
-    if (!r || typeof r !== "object" || typeof r.at !== "number" || !Array.isArray(r.refs)) continue;
-    const refs = r.refs.filter((ref) => ref && typeof ref.world === "string" && Number.isInteger(ref.uid)).map((ref) => ({ world: ref.world, uid: ref.uid, title: typeof ref.title === "string" ? ref.title : "", score: typeof ref.score === "number" ? ref.score : 0 }));
-    const books = Array.isArray(r.books) ? r.books.filter((b) => typeof b === "string") : [...new Set(refs.map((ref) => ref.world))];
-    const failed = Array.isArray(r.failed) ? r.failed.filter((b) => typeof b === "string") : [];
-    out[cursor] = { at: r.at, refs, requests: typeof r.requests === "number" ? r.requests : 0, books, failed };
-  }
-  return out;
-}
-function loreAt(story, chain, lookback = 3) {
-  for (let i = chain.length - 1; i >= Math.max(0, chain.length - lookback); i--) {
-    const found = story.lore[chain[i]];
-    if (found) return found;
-  }
-  return null;
-}
-function withLore(story, cursor, record) {
-  const lore = { ...story.lore, [cursor]: record };
-  const keys = Object.keys(lore);
-  if (keys.length > HISTORY_LIMIT) {
-    for (const key of keys.sort((a, b) => lore[a].at - lore[b].at).slice(0, keys.length - HISTORY_LIMIT)) delete lore[key];
-  }
-  return { ...story, lore };
-}
-function snapshotAt(story, chain) {
-  for (let i = chain.length - 1; i >= 0; i--) {
-    const snap = story.history[chain[i]];
-    if (snap) return snap;
-  }
-  return null;
-}
-function levelsAt(story, chain, pack, npcIds) {
-  const snap = snapshotAt(story, chain);
-  const levels = {};
-  const assessed = {};
-  for (const npc of npcIds) {
-    const saved = snap?.meters[npc];
-    assessed[npc] = Boolean(saved && pack.meters.every((m) => Number.isInteger(saved[m.key])));
-    levels[npc] = {};
-    for (const meter of pack.meters) {
-      const value = saved?.[meter.key];
-      levels[npc][meter.key] = Number.isInteger(value) && value < meter.levels.length ? value : meter.initial;
-    }
-  }
-  return { levels, assessed };
-}
-function knownByAt(story, chain) {
-  const snap = snapshotAt(story, chain);
-  const known = {};
-  for (const secret of story.secrets) known[secret.id] = [.../* @__PURE__ */ new Set([...secret.holders, ...snap?.knownBy[secret.id] ?? []])];
-  return known;
-}
-function withSnapshot(story, cursor, snapshot) {
-  const history = { ...story.history, [cursor]: snapshot };
-  const keys = Object.keys(history);
-  if (keys.length > HISTORY_LIMIT) {
-    for (const key of keys.sort((a, b) => history[a].at - history[b].at).slice(0, keys.length - HISTORY_LIMIT)) delete history[key];
-  }
-  return { ...story, history };
-}
-
-// src/state.ts
-var INSPECTOR_LIMIT = 200;
-function emptyState() {
-  return {
-    revision: 0,
-    variables: {},
-    settledGains: {},
-    unresolvedVariableIds: [],
-    elapsedSeconds: 0,
-    timeQuality: "unresolved",
-    sceneId: 1,
-    sceneReplyCount: 0,
-    positions: {},
-    notifiedDeadlineIds: [],
-    acceptedResolutionIds: [],
-    acceptedPermitIds: [],
-    itemOwners: {},
-    conditions: {},
-    knownFacts: {},
-    revealedSecrets: {},
-    lastObservedCursor: "",
-    trackingStatus: "current"
-  };
-}
-function newRecord(seedId, profileRevision) {
-  return {
-    schemaVersion: 1,
-    seedId,
-    actors: {},
-    actions: {},
-    resolutions: {},
-    permits: {},
-    attempts: {},
-    variants: {},
-    checkpoints: {},
-    appliedOperationIds: [],
-    pending: null,
-    projection: { cursor: null, state: emptyState(), status: "unknown", reason: "no checkpoint yet" },
-    inspector: [],
-    profileRevision,
-    story: emptyStory()
-  };
-}
-function normalizeRecord(raw, seedId, profileRevision) {
-  const base = newRecord(seedId, profileRevision);
-  if (!raw || typeof raw !== "object") return base;
-  const r = raw;
-  if (r.schemaVersion !== 1) return base;
-  const obj = (v, fallback) => v && typeof v === "object" && !Array.isArray(v) ? v : fallback;
-  const normalized = {
-    schemaVersion: 1,
-    seedId: typeof r.seedId === "string" && r.seedId ? r.seedId : seedId,
-    actors: obj(r.actors, {}),
-    actions: obj(r.actions, {}),
-    resolutions: obj(r.resolutions, {}),
-    permits: obj(r.permits, {}),
-    attempts: obj(r.attempts, {}),
-    variants: obj(r.variants, {}),
-    checkpoints: obj(r.checkpoints, {}),
-    appliedOperationIds: Array.isArray(r.appliedOperationIds) ? r.appliedOperationIds.filter((x) => typeof x === "string") : [],
-    pending: obj(r.pending, null),
-    projection: r.projection && typeof r.projection === "object" ? { ...base.projection, ...r.projection, state: { ...emptyState(), ...obj(r.projection.state, {}), settledGains: obj(r.projection.state?.settledGains, {}), itemOwners: obj(r.projection.state?.itemOwners, {}), conditions: obj(r.projection.state?.conditions, {}), knownFacts: obj(r.projection.state?.knownFacts, {}), revealedSecrets: obj(r.projection.state?.revealedSecrets, {}) } } : base.projection,
-    inspector: Array.isArray(r.inspector) ? r.inspector.slice(-INSPECTOR_LIMIT) : [],
-    profileRevision: typeof r.profileRevision === "string" ? r.profileRevision : profileRevision,
-    story: normalizeStory(r.story)
-  };
-  for (const checkpoint of Object.values(normalized.checkpoints)) {
-    checkpoint.stateAfter = { ...emptyState(), ...checkpoint.stateAfter, settledGains: obj(checkpoint.stateAfter?.settledGains, {}), itemOwners: obj(checkpoint.stateAfter?.itemOwners, {}), conditions: obj(checkpoint.stateAfter?.conditions, {}), knownFacts: obj(checkpoint.stateAfter?.knownFacts, {}), revealedSecrets: obj(checkpoint.stateAfter?.revealedSecrets, {}) };
-    hydrateFrozenSettlements(checkpoint.stateAfter, normalized.resolutions);
-  }
-  hydrateFrozenSettlements(normalized.projection.state, normalized.resolutions);
-  return normalized;
-}
-function hydrateFrozenSettlements(state, resolutions) {
-  state.settledGains = state.settledGains && typeof state.settledGains === "object" ? state.settledGains : {};
-  for (const resolutionId of state.acceptedResolutionIds ?? []) {
-    const resolution = resolutions[resolutionId];
-    if (!resolution || resolution.status !== "accepted") continue;
-    const legacyTier = tierForResolution(resolution);
-    const legacyFinal = resolution.outcomeFinal === void 0 && resolution.outcomeInstruction === void 0 && legacyTier === "achieved";
-    if (resolution.outcomeFinal !== true && !legacyFinal) continue;
-    const def = defOfResolution(resolution) ?? (legacyFinal ? { name: resolution.outcome, instruction: instructionForResolution(resolution), records: "achieved", final: true } : null);
-    if (!def) continue;
-    const scope = resolution.action.identityVersion === 2 ? resolution.action.resolutionScope ?? "attempt" : "persistent";
-    if (scope === "attempt") continue;
-    const variableId = gainVariableId(resolution.action);
-    if (!state.settledGains[variableId]) {
-      state.settledGains[variableId] = {
-        variableId,
-        resolutionId,
-        outcome: def,
-        scope,
-        sceneId: scope === "scene" ? resolution.action.sceneId ?? null : null
-      };
-    }
-  }
-}
-function clone(x) {
-  return structuredClone(x);
-}
-function predecessorState(record, cursorBefore) {
-  if (cursorBefore) {
-    const cp = record.checkpoints[cursorBefore];
-    if (cp) return { state: clone(cp.stateAfter), known: true };
-    if (record.projection.cursor === cursorBefore && record.projection.status !== "unknown") return { state: clone(record.projection.state), known: true };
-  }
-  return { state: clone(record.projection.state), known: false };
-}
-function applyEffects(state, effects) {
-  const next = clone(state);
-  const refused = [];
-  for (const effect of effects) {
-    switch (effect.op) {
-      case "set_enum":
-        next.variables[effect.variableId] = effect.value;
-        break;
-      case "set_bounded_value":
-        if (Number.isFinite(effect.value)) next.variables[effect.variableId] = effect.value;
-        else refused.push(`set_bounded_value ${effect.variableId}: nonfinite`);
-        break;
-      case "apply_named_delta":
-      case "advance_time":
-      case "set_known_location":
-        refused.push(`${effect.op}: not enabled before milestone 4`);
-        break;
-      default:
-        refused.push(`unknown effect ${effect.op}`);
-    }
-  }
-  return { state: next, refused };
-}
-function applyObservationOperations(state, operations) {
-  const next = clone(state);
-  for (const operation of operations) {
-    switch (operation.op) {
-      case "advance_time":
-        next.elapsedSeconds += operation.seconds;
-        next.timeQuality = operation.quality;
-        break;
-      case "set_known_location": {
-        const previous = next.positions[operation.actorId];
-        next.positions[operation.actorId] = {
-          status: operation.status,
-          placeId: operation.placeId,
-          lastKnownPlaceId: operation.status === "known" ? operation.placeId : previous?.placeId ?? previous?.lastKnownPlaceId ?? null,
-          offstage: previous?.offstage ?? false
-        };
-        break;
-      }
-      case "transfer_item":
-        next.itemOwners[operation.itemId] = operation.toActorId;
-        break;
-      case "set_condition":
-        next.conditions[operation.actorId] = { ...next.conditions[operation.actorId] ?? {}, [operation.conditionId]: operation.active };
-        break;
-      case "mark_fact_known":
-        next.knownFacts[operation.actorId] = [.../* @__PURE__ */ new Set([...next.knownFacts[operation.actorId] ?? [], operation.factId])].sort();
-        break;
-      case "mark_secret_revealed":
-        next.revealedSecrets[operation.secretId] = [.../* @__PURE__ */ new Set([...next.revealedSecrets[operation.secretId] ?? [], ...operation.actorIds])].sort();
-        break;
-    }
-  }
-  return next;
-}
-function applyEvent(input, event) {
-  const record = clone(input);
-  const notices = [];
-  const done = (changed = true) => ({ record, notices, changed });
-  const ignore = (why) => {
-    notices.push(why);
-    return { record: input, notices, changed: false };
-  };
-  switch (event.type) {
-    case "bind_actor": {
-      record.actors[event.binding.actorId] = { ...event.binding };
-      return done();
-    }
-    case "prepare": {
-      if (record.pending) {
-        const prev = record.attempts[record.pending.attemptId];
-        if (prev && (prev.status === "prepared" || prev.status === "writing")) prev.status = "cancelled";
-        notices.push(`replaced pending preparation ${record.pending.attemptId}`);
-      }
-      if (event.action) record.actions[event.action.actionId] = clone(event.action);
-      if (event.resolution) record.resolutions[event.resolution.resolutionId] = clone(event.resolution);
-      const attempt = {
-        attemptId: event.attemptId,
-        resolutionId: event.resolution?.resolutionId ?? null,
-        permitId: null,
-        reaction: event.reaction ? clone(event.reaction) : null,
-        actorId: event.actorId,
-        cursorBefore: null,
-        status: "prepared",
-        generationType: "normal",
-        hostMessageRef: null,
-        hostVariantRef: null,
-        variantId: null,
-        injectedText: "",
-        epoch: event.epoch,
-        unadjudicated: false,
-        toolStatus: "not_offered",
-        toolError: null,
-        createdAt: event.now
-      };
-      record.attempts[attempt.attemptId] = attempt;
-      record.pending = { attemptId: attempt.attemptId, resolutionId: attempt.resolutionId, actorId: event.actorId, epoch: event.epoch, composerText: event.composerText, createdAt: event.now };
-      return done();
-    }
-    case "bind": {
-      const pending = record.pending;
-      if (!pending || pending.attemptId !== event.attemptId) return ignore(`bind ignored: no pending attempt ${event.attemptId}`);
-      if (pending.epoch !== event.epoch) return ignore(`bind ignored: epoch ${event.epoch} does not match pending epoch ${pending.epoch}`);
-      const attempt = record.attempts[event.attemptId];
-      if (!attempt) return ignore("bind ignored: attempt record missing");
-      attempt.cursorBefore = event.cursorBefore;
-      attempt.status = "writing";
-      attempt.injectedText = event.injectedText;
-      attempt.toolStatus = event.toolOffered ? "offered" : "not_offered";
-      if (attempt.resolutionId) {
-        const res = record.resolutions[attempt.resolutionId];
-        if (res) {
-          if (res.cursorBefore === null) res.cursorBefore = event.cursorBefore;
-          else if (res.cursorBefore !== event.cursorBefore) {
-            res.status = "invalidated";
-            attempt.resolutionId = null;
-            attempt.unadjudicated = true;
-            notices.push(`resolution ${res.resolutionId} was frozen for a different prefix and is invalidated`);
-          }
-        }
-      }
-      record.pending = null;
-      return done();
-    }
-    case "store_permit": {
-      record.permits[event.permit.permitId] = clone(event.permit);
-      return done();
-    }
-    case "store_resolution": {
-      record.actions[event.resolution.actionId] = clone(event.resolution.action);
-      record.resolutions[event.resolution.resolutionId] = clone(event.resolution);
-      return done();
-    }
-    case "tool_result": {
-      const attempt = record.attempts[event.attemptId];
-      if (!attempt || attempt.status !== "writing") return ignore(`tool result for inactive attempt ${event.attemptId} ignored`);
-      attempt.toolStatus = event.status;
-      attempt.toolError = event.error;
-      if (event.permit) {
-        if (event.permit.attemptId !== attempt.attemptId || event.permit.baseCursor !== attempt.cursorBefore) return ignore("tool permit identity did not match the active attempt");
-        record.permits[event.permit.permitId] = clone(event.permit);
-        attempt.permitId = event.permit.permitId;
-        attempt.reaction = null;
-      }
-      return done();
-    }
-    case "regeneration_attempt": {
-      if (record.attempts[event.attemptId]) return ignore(`attempt ${event.attemptId} already exists`);
-      record.attempts[event.attemptId] = {
-        attemptId: event.attemptId,
-        resolutionId: event.resolutionId,
-        permitId: event.permitId ?? null,
-        reaction: event.reaction ? clone(event.reaction) : null,
-        actorId: event.actorId,
-        cursorBefore: event.cursorBefore,
-        status: "writing",
-        generationType: event.generationType,
-        hostMessageRef: null,
-        hostVariantRef: null,
-        variantId: null,
-        injectedText: event.injectedText,
-        epoch: event.epoch,
-        unadjudicated: event.unadjudicated,
-        toolStatus: event.permitId ? "reused" : "not_offered",
-        toolError: null,
-        createdAt: event.now
-      };
-      return done();
-    }
-    case "completed": {
-      if (record.appliedOperationIds.includes(event.operationId)) return ignore(`duplicate completion ${event.operationId} ignored`);
-      const attempt = record.attempts[event.attemptId];
-      if (!attempt) return ignore(`completion for unknown attempt ${event.attemptId} ignored`);
-      if (attempt.epoch !== event.epoch) return ignore(`stale completion for attempt ${event.attemptId} from epoch ${attempt.epoch} rejected`);
-      if (attempt.status !== "writing") return ignore(`completion for attempt ${event.attemptId} in status ${attempt.status} ignored`);
-      record.appliedOperationIds.push(event.operationId);
-      attempt.hostMessageRef = event.hostMessageRef;
-      attempt.hostVariantRef = event.hostVariantRef;
-      attempt.variantId = event.variantId;
-      if (attempt.actorId === null && event.actorId) attempt.actorId = event.actorId;
-      const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] ?? null : null;
-      const needsAcceptance = Boolean(resolution);
-      const variant = {
-        variantId: event.variantId,
-        attemptId: attempt.attemptId,
-        resolutionId: resolution?.resolutionId ?? null,
-        permitId: attempt.permitId ?? null,
-        actorId: attempt.actorId,
-        cursorBefore: attempt.cursorBefore,
-        cursorAfter: event.cursorAfter,
-        acceptance: needsAcceptance || event.observerRequired ? "pending" : "auto",
-        observerStatus: event.observerRequired ? "pending" : "not_required",
-        observation: null,
-        observerError: null
-      };
-      record.variants[variant.variantId] = variant;
-      if (event.observerRequired) {
-        attempt.status = "observing";
-        const pred2 = predecessorState(record, attempt.cursorBefore);
-        record.projection = { cursor: event.cursorAfter, state: pred2.state, status: "provisional", reason: `observing ${attempt.attemptId}` };
-        return done();
-      }
-      if (needsAcceptance) {
-        attempt.status = "provisional";
-        const pred2 = predecessorState(record, attempt.cursorBefore);
-        record.projection = { cursor: event.cursorAfter, state: pred2.state, status: "provisional", reason: `awaiting acceptance of ${attempt.attemptId}` };
-        return done();
-      }
-      attempt.status = "accepted";
-      const pred = predecessorState(record, attempt.cursorBefore);
-      const state = pred.state;
-      state.sceneReplyCount += 1;
-      state.revision += 1;
-      record.checkpoints[event.cursorAfter] = {
-        cursor: event.cursorAfter,
-        parentCursor: attempt.cursorBefore,
-        stateAfter: clone(state),
-        variantId: variant.variantId,
-        acceptedResolutionId: null,
-        observationOperationIds: []
-      };
-      record.projection = { cursor: event.cursorAfter, state, status: pred.known ? "current" : "stale", reason: pred.known ? null : "predecessor state was not known; set a baseline to continue tracking" };
-      if (attempt.unadjudicated) notices.push(`attempt ${attempt.attemptId} was generated without the Director pipeline (unadjudicated)`);
-      return done();
-    }
-    case "observation_ready": {
-      const attempt = record.attempts[event.attemptId];
-      const variant = record.variants[event.variantId];
-      if (!attempt || !variant || attempt.variantId !== event.variantId) return ignore("observation does not match the active attempt variant");
-      if (attempt.status !== "observing") return ignore(`observation for attempt ${event.attemptId} in status ${attempt.status} ignored`);
-      if (event.observation.attemptId !== attempt.attemptId || event.observation.variantId !== variant.variantId || event.observation.baseCursor !== attempt.cursorBefore || event.observation.cursorAfter !== variant.cursorAfter) return ignore("observation identity mismatch");
-      const pred = predecessorState(record, attempt.cursorBefore);
-      if (event.observation.stateRevision !== pred.state.revision) return ignore("observation state revision is stale");
-      variant.observation = clone(event.observation);
-      variant.observerStatus = "ready";
-      variant.observerError = null;
-      attempt.status = "provisional";
-      record.projection = { cursor: variant.cursorAfter, state: pred.state, status: "provisional", reason: `variant ${variant.variantId} is observed and awaits implicit acceptance` };
-      return done();
-    }
-    case "observation_failed": {
-      const attempt = record.attempts[event.attemptId];
-      const variant = record.variants[event.variantId];
-      if (!attempt || !variant || attempt.variantId !== event.variantId) return ignore("observation failure does not match the active attempt variant");
-      if (attempt.status !== "observing" && attempt.status !== "provisional") return ignore(`observation failure for attempt ${event.attemptId} in status ${attempt.status} ignored`);
-      attempt.status = "stale";
-      variant.observerStatus = "failed";
-      variant.observerError = event.error;
-      const pred = predecessorState(record, attempt.cursorBefore);
-      record.projection = { cursor: variant.cursorAfter, state: pred.state, status: "stale", reason: `observer failed: ${event.error}` };
-      return done();
-    }
-    case "retry_observation": {
-      const attempt = record.attempts[event.attemptId];
-      const variant = record.variants[event.variantId];
-      if (!attempt || !variant || attempt.variantId !== variant.variantId || variant.observerStatus !== "failed") return ignore("no failed observation matches the retry request");
-      attempt.status = "observing";
-      variant.acceptance = "pending";
-      variant.observerStatus = "pending";
-      variant.observerError = null;
-      variant.observation = null;
-      const pred = predecessorState(record, attempt.cursorBefore);
-      record.projection = { cursor: variant.cursorAfter, state: pred.state, status: "provisional", reason: `retrying observer for ${variant.variantId}` };
-      return done();
-    }
-    case "commit_observation": {
-      if (record.appliedOperationIds.includes(event.operationId)) return ignore(`duplicate observation commit ${event.operationId} ignored`);
-      const variant = record.variants[event.variantId];
-      if (!variant || variant.acceptance !== "pending" || variant.observerStatus !== "ready" || !variant.observation || !variant.cursorAfter) return ignore(`variant ${event.variantId} has no ready observation to commit`);
-      const attempt = record.attempts[variant.attemptId];
-      if (!attempt || attempt.status !== "provisional") return ignore(`attempt ${variant.attemptId} is not provisional`);
-      const pred = predecessorState(record, variant.cursorBefore);
-      if (!pred.known || pred.state.revision !== variant.observation.stateRevision) return ignore("observation commit predecessor is unknown or changed");
-      record.appliedOperationIds.push(event.operationId);
-      for (const operation of variant.observation.operations) {
-        if (!record.appliedOperationIds.includes(operation.operationId)) record.appliedOperationIds.push(operation.operationId);
-      }
-      let state = applyObservationOperations(pred.state, variant.observation.operations);
-      const realized = new Set(variant.observation.realizedResolutionIds);
-      const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
-      if (resolution && realized.has(resolution.resolutionId)) {
-        if (resolution.status === "prepared") resolution.status = "accepted";
-        const applied = applyEffects(state, effectsFor(resolution));
-        state = applied.state;
-        for (const refused of applied.refused) notices.push(`effect refused: ${refused}`);
-        if (!state.acceptedResolutionIds.includes(resolution.resolutionId)) state.acceptedResolutionIds.push(resolution.resolutionId);
-        const legacyTier = tierForResolution(resolution);
-        const legacyFinal = resolution.outcomeFinal === void 0 && resolution.outcomeInstruction === void 0 && legacyTier === "achieved";
-        if (resolution.outcomeFinal === true || legacyFinal) {
-          const scope = resolution.action.identityVersion === 2 ? resolution.action.resolutionScope ?? "attempt" : "persistent";
-          const def = defOfResolution(resolution) ?? (legacyFinal ? { name: resolution.outcome, instruction: instructionForResolution(resolution), records: "achieved", final: true } : null);
-          if (scope !== "attempt" && def) {
-            const variableId = gainVariableId(resolution.action);
-            state.settledGains[variableId] = { variableId, resolutionId: resolution.resolutionId, outcome: def, scope, sceneId: scope === "scene" ? resolution.action.sceneId ?? state.sceneId : null };
-          }
-        }
-      }
-      const permit = attempt.permitId ? record.permits[attempt.permitId] : null;
-      if (permit) {
-        const permitRealized = permit.actions.some((action) => realized.has(action.resolutionId));
-        if (permitRealized && !state.acceptedPermitIds.includes(permit.permitId)) state.acceptedPermitIds.push(permit.permitId);
-        for (const action of permit.actions) {
-          if (!realized.has(action.resolutionId)) continue;
-          if (!state.acceptedResolutionIds.includes(action.resolutionId)) state.acceptedResolutionIds.push(action.resolutionId);
-          if (action.recordedValue) state.variables[`permit:${action.resolutionId}`] = action.recordedValue;
-        }
-      }
-      attempt.status = "accepted";
-      variant.acceptance = "accepted";
-      state.sceneReplyCount += 1;
-      state.revision += 1;
-      state.lastObservedCursor = variant.cursorAfter;
-      state.trackingStatus = "current";
-      record.checkpoints[variant.cursorAfter] = {
-        cursor: variant.cursorAfter,
-        parentCursor: attempt.cursorBefore,
-        stateAfter: clone(state),
-        variantId: variant.variantId,
-        acceptedResolutionId: resolution && realized.has(resolution.resolutionId) ? resolution.resolutionId : null,
-        observationOperationIds: variant.observation.operations.map((operation) => operation.operationId)
-      };
-      record.projection = { cursor: variant.cursorAfter, state, status: "current", reason: null };
-      return done();
-    }
-    case "accept": {
-      if (record.appliedOperationIds.includes(event.operationId)) return ignore(`duplicate acceptance ${event.operationId} ignored`);
-      const attempt = record.attempts[event.attemptId];
-      if (!attempt) return ignore(`acceptance for unknown attempt ${event.attemptId} ignored`);
-      if (attempt.status !== "provisional") return ignore(`acceptance for attempt ${event.attemptId} in status ${attempt.status} ignored`);
-      const variant = attempt.variantId ? record.variants[attempt.variantId] : null;
-      if (!variant || !variant.cursorAfter) return ignore(`acceptance for attempt ${event.attemptId} has no variant`);
-      const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
-      record.appliedOperationIds.push(event.operationId);
-      attempt.status = "accepted";
-      variant.acceptance = "accepted";
-      const pred = predecessorState(record, attempt.cursorBefore);
-      let state = pred.state;
-      if (resolution) {
-        if (resolution.status === "prepared") resolution.status = "accepted";
-        const applied = applyEffects(state, effectsFor(resolution));
-        state = applied.state;
-        for (const r of applied.refused) notices.push(`effect refused: ${r}`);
-        if (!state.acceptedResolutionIds.includes(resolution.resolutionId)) state.acceptedResolutionIds.push(resolution.resolutionId);
-        const legacyTier = tierForResolution(resolution);
-        const legacyFinal = resolution.outcomeFinal === void 0 && resolution.outcomeInstruction === void 0 && legacyTier === "achieved";
-        if (resolution.outcomeFinal === true || legacyFinal) {
-          const scope = resolution.action.identityVersion === 2 ? resolution.action.resolutionScope ?? "attempt" : "persistent";
-          const def = defOfResolution(resolution) ?? (legacyFinal ? { name: resolution.outcome, instruction: instructionForResolution(resolution), records: "achieved", final: true } : null);
-          if (scope !== "attempt" && def) {
-            const variableId = gainVariableId(resolution.action);
-            state.settledGains[variableId] = {
-              variableId,
-              resolutionId: resolution.resolutionId,
-              outcome: def,
-              scope,
-              sceneId: scope === "scene" ? resolution.action.sceneId ?? state.sceneId : null
-            };
-          }
-        }
-      }
-      state.sceneReplyCount += 1;
-      state.revision += 1;
-      record.checkpoints[variant.cursorAfter] = {
-        cursor: variant.cursorAfter,
-        parentCursor: attempt.cursorBefore,
-        stateAfter: clone(state),
-        variantId: variant.variantId,
-        acceptedResolutionId: resolution?.resolutionId ?? null,
-        observationOperationIds: []
-      };
-      record.projection = { cursor: variant.cursorAfter, state, status: pred.known ? "current" : "stale", reason: pred.known ? null : "predecessor state was not known; set a baseline to continue tracking" };
-      return done();
-    }
-    case "reject": {
-      const attempt = record.attempts[event.attemptId];
-      if (!attempt) return ignore(`rejection for unknown attempt ${event.attemptId} ignored`);
-      if (attempt.status !== "provisional" && attempt.status !== "observing") return ignore(`rejection for attempt ${event.attemptId} in status ${attempt.status} ignored`);
-      attempt.status = "rejected";
-      const variant = attempt.variantId ? record.variants[attempt.variantId] : null;
-      if (variant) variant.acceptance = "rejected";
-      if (record.projection.status === "provisional") {
-        const pred = predecessorState(record, attempt.cursorBefore);
-        record.projection = { cursor: attempt.cursorBefore, state: pred.state, status: pred.known ? "current" : "unknown", reason: pred.known ? null : "predecessor unknown" };
-      }
-      return done();
-    }
-    case "cancel": {
-      let changed = false;
-      const ids = event.attemptId ? [event.attemptId] : Object.keys(record.attempts);
-      for (const id of ids) {
-        const attempt = record.attempts[id];
-        if (!attempt) continue;
-        if (attempt.epoch !== event.epoch && event.attemptId === null) continue;
-        if (attempt.status === "prepared" || attempt.status === "writing" || attempt.status === "observing") {
-          attempt.status = "cancelled";
-          changed = true;
-        }
-      }
-      if (record.pending && (event.attemptId === null || record.pending.attemptId === event.attemptId)) {
-        record.pending = null;
-        changed = true;
-      }
-      if (record.projection.status === "provisional" && event.attemptId) {
-      }
-      if (!changed) return ignore(`cancel (${event.reason}): nothing to cancel`);
-      notices.push(`cancelled: ${event.reason}`);
-      return done();
-    }
-    case "abort_epoch": {
-      let changed = false;
-      for (const attempt of Object.values(record.attempts)) {
-        if (attempt.epoch === event.epoch && (attempt.status === "prepared" || attempt.status === "writing" || attempt.status === "observing")) {
-          attempt.status = "cancelled";
-          changed = true;
-        }
-      }
-      if (record.pending) {
-        record.pending = null;
-        changed = true;
-      }
-      if (!changed) return ignore(`abort (${event.reason}): nothing in flight`);
-      notices.push(`aborted in-flight work: ${event.reason}`);
-      return done();
-    }
-    case "select_variant": {
-      let variant = event.variantId ? record.variants[event.variantId] ?? null : null;
-      if (variant && variant.cursorAfter && variant.cursorAfter !== event.cursorAfter) {
-        notices.push(`variant ${variant.variantId} marker does not match the message text; treated as unknown`);
-        variant = null;
-      }
-      const cursor = variant?.cursorAfter ?? event.cursorAfter;
-      const cp = record.checkpoints[cursor];
-      if (cp) {
-        record.projection = { cursor, state: clone(cp.stateAfter), status: "current", reason: null };
-        return done();
-      }
-      if (variant && variant.acceptance === "pending") {
-        const pred = predecessorState(record, variant.cursorBefore);
-        if (variant.observerStatus === "failed") {
-          record.projection = { cursor, state: pred.state, status: "stale", reason: variant.observerError ?? `observer failed for ${variant.variantId}` };
-          return done();
-        }
-        record.projection = { cursor, state: pred.state, status: "provisional", reason: `variant ${variant.variantId} awaits acceptance` };
-        return done();
-      }
-      if (variant && variant.acceptance === "rejected") {
-        const pred = predecessorState(record, variant.cursorBefore);
-        if (variant.observerStatus === "ready" && variant.observation) {
-          variant.acceptance = "pending";
-          const attempt = record.attempts[variant.attemptId];
-          if (attempt) attempt.status = "provisional";
-          record.projection = { cursor, state: pred.state, status: "provisional", reason: `restored observed variant ${variant.variantId}; awaits implicit acceptance` };
-          return done();
-        }
-        record.projection = { cursor, state: pred.state, status: "stale", reason: `variant ${variant.variantId} was rejected; regenerate wording, reroll, or accept it` };
-        return done();
-      }
-      record.projection = { cursor, state: record.projection.state, status: "unknown", reason: "no checkpoint for this variant" };
-      return done();
-    }
-    case "head_changed": {
-      const chainSet = new Set(event.chain);
-      for (const res of Object.values(record.resolutions)) {
-        if (res.status === "prepared" && res.cursorBefore && !chainSet.has(res.cursorBefore)) {
-          res.status = "invalidated";
-          notices.push(`prepared resolution ${res.resolutionId} no longer matches the transcript and was invalidated`);
-        }
-      }
-      for (const attempt of Object.values(record.attempts)) {
-        if ((attempt.status === "provisional" || attempt.status === "observing") && attempt.cursorBefore && !chainSet.has(attempt.cursorBefore)) {
-          attempt.status = "stale";
-          notices.push(`provisional attempt ${attempt.attemptId} no longer matches the transcript`);
-        }
-      }
-      const cp = record.checkpoints[event.cursor];
-      if (cp) {
-        record.projection = { cursor: event.cursor, state: clone(cp.stateAfter), status: "current", reason: null };
-        return done();
-      }
-      const provisional = Object.values(record.variants).find((v) => v.cursorAfter === event.cursor && v.acceptance === "pending");
-      if (provisional) {
-        const pred = predecessorState(record, provisional.cursorBefore);
-        if (provisional.observerStatus === "failed") {
-          record.projection = { cursor: event.cursor, state: pred.state, status: "stale", reason: provisional.observerError ?? `observer failed for ${provisional.variantId}` };
-          return done();
-        }
-        record.projection = { cursor: event.cursor, state: pred.state, status: "provisional", reason: `variant ${provisional.variantId} awaits acceptance` };
-        return done();
-      }
-      if (event.reason === "edit") {
-        record.projection = { cursor: event.cursor, state: record.projection.state, status: "stale", reason: "an earlier message was edited; rebuild from a checkpoint or set a baseline" };
-        return done();
-      }
-      record.projection = { cursor: event.cursor, state: record.projection.state, status: "unknown", reason: `no checkpoint matches the current transcript (${event.reason})` };
-      return done();
-    }
-    case "reroll": {
-      const previous = record.resolutions[event.previousResolutionId];
-      if (!previous) return ignore(`reroll of unknown resolution ${event.previousResolutionId} ignored`);
-      if (previous.status === "prepared") previous.status = "superseded";
-      const next = clone(event.resolution);
-      next.previousResolutionId = previous.resolutionId;
-      next.cursorBefore = previous.cursorBefore;
-      next.generation = previous.generation + 1;
-      next.status = "prepared";
-      record.resolutions[next.resolutionId] = next;
-      return done();
-    }
-    case "invalidate_prepared": {
-      let changed = false;
-      for (const res of Object.values(record.resolutions)) {
-        if (res.status !== "prepared") continue;
-        if (event.onlyUnbound && res.cursorBefore !== null) continue;
-        if (event.profileRevision && res.policyRevision === event.profileRevision) continue;
-        res.status = "invalidated";
-        changed = true;
-      }
-      if (record.pending) {
-        const attempt = record.attempts[record.pending.attemptId];
-        if (attempt && attempt.status === "prepared") attempt.status = "cancelled";
-        record.pending = null;
-        changed = true;
-      }
-      if (event.profileRevision) record.profileRevision = event.profileRevision;
-      if (!changed) return ignore(`nothing to invalidate (${event.reason})`);
-      notices.push(`invalidated unused preparation: ${event.reason}`);
-      return done();
-    }
-    case "set_baseline": {
-      const state = clone(event.state);
-      record.checkpoints[event.cursor] = { cursor: event.cursor, parentCursor: null, stateAfter: clone(state), variantId: null, acceptedResolutionId: null, observationOperationIds: [] };
-      record.projection = { cursor: event.cursor, state, status: "current", reason: null };
-      notices.push(`baseline set (${event.reason}); earlier state was not reconstructed`);
-      return done();
-    }
-    case "start_scene": {
-      if (record.projection.status !== "current") return ignore(`cannot start scene while projection is ${record.projection.status}`);
-      const state = clone(record.projection.state);
-      state.sceneId += 1;
-      state.sceneReplyCount = 0;
-      state.revision += 1;
-      record.checkpoints[event.cursor] = {
-        cursor: event.cursor,
-        parentCursor: record.checkpoints[event.cursor]?.parentCursor ?? null,
-        stateAfter: clone(state),
-        variantId: record.checkpoints[event.cursor]?.variantId ?? null,
-        acceptedResolutionId: record.checkpoints[event.cursor]?.acceptedResolutionId ?? null,
-        observationOperationIds: [...record.checkpoints[event.cursor]?.observationOperationIds ?? []]
-      };
-      record.projection = { cursor: event.cursor, state, status: "current", reason: null };
-      notices.push(`scene advanced to ${state.sceneId} (${event.reason})`);
-      return done();
-    }
-    case "extend_checkpoint": {
-      if (record.checkpoints[event.cursor]) return ignore("checkpoint already exists");
-      const parent = record.checkpoints[event.parentCursor];
-      if (!parent) return ignore(`cannot extend: no checkpoint at ${event.parentCursor}`);
-      record.checkpoints[event.cursor] = { cursor: event.cursor, parentCursor: event.parentCursor, stateAfter: clone(parent.stateAfter), variantId: null, acceptedResolutionId: null, observationOperationIds: [] };
-      if (record.projection.cursor === event.parentCursor || record.projection.status === "unknown") {
-        record.projection = { cursor: event.cursor, state: clone(parent.stateAfter), status: "current", reason: null };
-      }
-      return done();
-    }
-    case "inspect": {
-      record.inspector.push(clone(event.entry));
-      if (record.inspector.length > INSPECTOR_LIMIT) record.inspector.splice(0, record.inspector.length - INSPECTOR_LIMIT);
-      return done();
-    }
-    default:
-      return ignore("unknown event");
-  }
-}
-function activeResolutionForCursor(record, cursor) {
-  let best = null;
-  for (const res of Object.values(record.resolutions)) {
-    if (res.cursorBefore !== cursor) continue;
-    if (res.status !== "prepared" && res.status !== "accepted") continue;
-    if (!best || res.generation > best.generation || res.generation === best.generation && res.createdAt > best.createdAt) best = res;
-  }
-  return best;
-}
-function provisionalAttempts(record) {
-  return Object.values(record.attempts).filter((a) => a.status === "provisional" || a.status === "observing");
-}
-
 // src/questions.ts
-function buildState(input) {
-  const exclusions = [];
-  const detection = input.action && actionFamily(input.action.templateId) === "detect_discover";
-  let recent = input.recentMessages.slice(-input.maxRecentMessages);
-  if (recent.length < input.recentMessages.length) exclusions.push(`${input.recentMessages.length - recent.length} older messages beyond maxRecentMessages`);
-  const actors = {};
-  for (const [id, binding] of Object.entries(input.actors)) {
-    const entry = { control: binding.control, name: binding.name };
-    const card = input.publicCards[id];
-    if (card && !detection) entry.authorialCharacterContext = card;
-    actors[id] = entry;
-  }
-  const build = (messages) => ({
-    scopeId: input.scopeId,
-    eligibleActorIds: [...input.eligibleActorIds],
-    actors,
-    facts: structuredClone(input.facts),
-    action: input.action ? {
-      actionId: input.action.actionId,
-      family: actionFamily(input.action.templateId),
-      actingActorId: input.action.actingActorId ?? input.action.playerActorId,
-      targetActorIds: [...input.action.targetActorIds],
-      attemptedAction: input.action.attemptedAction,
-      requestedGain: input.action.requestedGain,
-      applicability: input.action.applicability,
-      uncertainConsequential: input.action.uncertainConsequential !== false,
-      opposed: input.action.opposed === true,
-      resolutionScope: input.action.resolutionScope ?? "persistent",
-      failureStake: input.action.failureStake ? { kind: input.action.failureStake.kind, detail: input.action.failureStake.detail } : null,
-      availableEvidence: input.action.availableEvidence ?? "",
-      additionalAttemptsPolicy: input.action.additionalAttemptsPolicy ?? null,
-      preconditions: input.action.preconditions.map((p) => ({ factId: p.factId, expected: p.expected, actual: p.actual, known: p.known }))
-    } : null,
-    latestInput: input.latestInput,
-    scene: { id: input.sceneId, acceptedReplyCount: input.acceptedReplyCount },
-    recentAcceptedMessages: messages.map((m) => ({ actorId: m.actorId, role: m.role, text: m.text }))
-  });
-  let state = build(recent);
-  if (detection) exclusions.push("authorial card descriptions omitted: detection may use only observer-visible cues supplied with the attempt");
-  let size = JSON.stringify(state).length;
-  while (size > input.maxSerializedCharacters && recent.length > 0) {
-    recent = recent.slice(1);
-    exclusions.push("dropped oldest recent message to fit maxSerializedCharacters");
-    state = build(recent);
-    size = JSON.stringify(state).length;
-  }
-  return { state, exclusions, serializedCharacters: size, overBudget: size > input.maxSerializedCharacters };
-}
 function speakerQuestion(eligible, names, includeYield, latestAddressHint) {
   const criteria = {};
   for (const id of eligible) criteria[id] = `${names[id] ?? id}: eligible to speak next.`;
@@ -3801,44 +4564,6 @@ function gainNoulQuestion() {
     criteria: {
       true: "Concrete supplied evidence supports the specified favorable gain now.",
       false: "The supplied evidence does not support that favorable gain now."
-    }
-  };
-}
-function autoAttemptGateQuestion() {
-  return {
-    type: "choice",
-    instructions: "Using state.latestInput and the accepted scene only, how many uncertain, consequential state-changing attempts does the player make? A check is warranted only when failure is possible and would materially change what happens. Speech, feelings, wants, decisions, trivial activity, and already-established outcomes are not checks.",
-    criteria: {
-      none: "No attempted state change; ordinary dialogue, observation, OOC, or reaction only.",
-      trivial_or_certain: "An action occurs, but established facts make it routine/certain or failure has no meaningful consequence.",
-      one_consequential: "Exactly one primary uncertain and consequential attempt needs a ruling.",
-      multiple_consequential: "Two or more separate uncertain and consequential attempts are bundled together."
-    }
-  };
-}
-function autoAttemptFamilyQuestion() {
-  return {
-    type: "choice",
-    instructions: "Classify the first primary uncertain, consequential attempt in state.latestInput. If there is no such attempt, choose none. Choose the closest functional family; do not classify feelings, desires, consent, or relationship meaning as an attempt.",
-    criteria: {
-      none: "No uncertain consequential attempt.",
-      overcome_operate: "Overcome an obstacle or operate, repair, treat, craft, break, or create something.",
-      contest_impose: "Actively overcome opposition: attack, grapple, restrain, seize, interrupt, force, or outmaneuver.",
-      evade_resist: "Escape, dodge, withstand, retain control, or avoid an imposed consequence.",
-      conceal_deceive: "Lie, hide, sneak, steal unnoticed, disguise, misdirect, or maintain an alibi.",
-      detect_discover: "Notice, search, investigate, recognize a tell, catch a lie, or establish a hidden fact from visible cues.",
-      influence_negotiate: "Seek one specific immediate conduct through a request, bargain, argument, threat, or pressure.",
-      acquire_secure: "Secure bounded access, information, possession, permission, or commitment."
-    }
-  };
-}
-function autoAttemptNoulQuestion() {
-  return {
-    type: "noul",
-    instructions: "If state.latestInput contains an uncertain consequential attempt, do the established pre-action facts support the FIRST primary intended state change succeeding now? Judge the concrete method against capabilities, opposition, leverage, tools, injuries, positioning, and observer-visible evidence. The attempt itself is not evidence of success. For detection, private card truth or hidden thoughts are not observer knowledge. Judge immediate conduct only; never manufacture feelings, attraction, affection, consent, trust, or permanent attitude change. If there is no qualifying attempt, answer false; code will ignore this answer.",
-    criteria: {
-      true: "Established pre-action evidence supports the first primary bounded result now.",
-      false: "Established evidence does not support that bounded result now, or no qualifying attempt exists."
     }
   };
 }
@@ -3978,7 +4703,7 @@ function transportFailure(code, message, durationMs) {
 function evaluateTableTest(table, method, request, result) {
   const v = validateTable(table);
   if (!v.ok) return localFailure(v.errors);
-  const lines = [];
+  const lines2 = [];
   const problems = [];
   const probe = pickProbe(table);
   for (const id of Object.keys(request.questions)) {
@@ -3995,15 +4720,15 @@ function evaluateTableTest(table, method, request, result) {
       else {
         const raw = signal.type === "noul" ? `Noul ${signal.noul}` : signal.type === "score" ? `Score ${signal.score}` : "signal";
         const roll = method === "sample" ? ` with a sample roll of ${TABLE_TEST_DRAW}` : "";
-        lines.push(`Signal: ${raw} \u2192 x = ${normalised.signal.x.toFixed(4)} \u2192 band ${resolved.value.band.id} \u2192 ${resolved.value.outcome}${roll}.`);
+        lines2.push(`Signal: ${raw} \u2192 x = ${normalised.signal.x.toFixed(4)} \u2192 band ${resolved.value.band.id} \u2192 ${resolved.value.outcome}${roll}.`);
       }
     }
   }
   const outcomeAnswer = result.answers[TABLE_TEST_OUTCOME];
   if (outcomeAnswer && outcomeAnswer.type === "choice") {
     const matches = outcomeAnswer.choice === probe.expectedOutcome;
-    lines.push(`Outcome names: accepted as option names; the model returned "${outcomeAnswer.choice}".`);
-    if (!matches) lines.push(`Note: reading band ${probe.bandId} from the table, the expected name was "${probe.expectedOutcome}". Play does not depend on this, because the table is applied in code.`);
+    lines2.push(`Outcome names: accepted as option names; the model returned "${outcomeAnswer.choice}".`);
+    if (!matches) lines2.push(`Note: reading band ${probe.bandId} from the table, the expected name was "${probe.expectedOutcome}". Play does not depend on this, because the table is applied in code.`);
   } else if (outcomeAnswer) {
     problems.push(`${TABLE_TEST_OUTCOME}: expected a choice answer`);
   }
@@ -4011,21 +4736,21 @@ function evaluateTableTest(table, method, request, result) {
   if (request.questions[TABLE_TEST_BAND]) {
     if (bandAnswer && bandAnswer.type === "choice") {
       const matches = bandAnswer.choice === probe.bandId;
-      lines.push(`Band ids: accepted as option names; the model returned "${bandAnswer.choice}" for x = ${probe.x}.`);
-      if (!matches) lines.push(`Note: the band containing ${probe.x} is ${probe.bandId}. Play does not depend on this.`);
+      lines2.push(`Band ids: accepted as option names; the model returned "${bandAnswer.choice}" for x = ${probe.x}.`);
+      if (!matches) lines2.push(`Note: the band containing ${probe.x} is ${probe.bandId}. Play does not depend on this.`);
     } else if (bandAnswer) {
       problems.push(`${TABLE_TEST_BAND}: expected a choice answer`);
     }
   } else {
-    lines.push("Band ids: a single band needs no option test.");
+    lines2.push("Band ids: a single band needs no option test.");
   }
   const model = result.returnedModel ?? result.requestedModel;
   const tokens = result.inputTokens !== null || result.outputTokens !== null ? `, tokens ${result.inputTokens ?? "\u2014"} in / ${result.outputTokens ?? "\u2014"} out` : "";
   const timing = `One judge call, ${Math.round(result.durationMs)} ms${model ? `, model ${model}` : ""}${tokens}.`;
   if (problems.length) {
-    return { status: "fail", headline: "The judge replied, but not in the expected format.", lines: [...problems, ...lines, timing], networkCalls: 1, durationMs: result.durationMs, model };
+    return { status: "fail", headline: "The judge replied, but not in the expected format.", lines: [...problems, ...lines2, timing], networkCalls: 1, durationMs: result.durationMs, model };
   }
-  return { status: "pass", headline: "Valid. The table and the judge work together.", lines: [...lines, timing], networkCalls: 1, durationMs: result.durationMs, model };
+  return { status: "pass", headline: "Valid. The table and the judge work together.", lines: [...lines2, timing], networkCalls: 1, durationMs: result.durationMs, model };
 }
 
 // src/speaker.ts
@@ -4122,928 +4847,33 @@ function placeholderValues(action, targetNames, speakerName, playerName) {
 function bindingBlock(input) {
   const { action, outcome } = input;
   const instruction = fillPlaceholders(input.instruction, placeholderValues(action, input.targetNames, input.speakerName, input.playerName)).trim();
-  const lines = [];
-  lines.push("[Director ruling \u2014 binding for this reply]");
-  lines.push("This declared exchange is already adjudicated. Do not roll dice or run another check for it; other dice systems apply only to separate, undeclared actions.");
-  lines.push(`Acting character: ${input.actorName ?? input.playerName}.`);
-  lines.push(`Attempt (${action.templateId.replace(/_/g, " ")}): ${action.attemptedAction}`);
-  lines.push(`Bounded intended result: ${action.requestedGain}`);
+  const lines2 = [];
+  lines2.push("[Director ruling \u2014 binding for this reply]");
+  lines2.push("This declared exchange is already adjudicated. Do not roll dice or run another check for it.");
+  lines2.push(`Acting character: ${input.actorName ?? input.playerName}.`);
+  lines2.push(`Attempt (${action.templateId.replace(/_/g, " ")}): ${action.attemptedAction}`);
+  lines2.push(`Bounded intended result: ${action.requestedGain}`);
   if (action.failureStake) {
     const detail = action.failureStake.detail.trim().replace(/[.!?]+$/, "");
-    lines.push(`Failure-stakes boundary: ${action.failureStake.kind.replace(/_/g, " ")}${detail ? ` \u2014 ${detail}` : ""}. Do not invent a larger consequence than this boundary permits.`);
+    lines2.push(`Failure-stakes boundary: ${action.failureStake.kind.replace(/_/g, " ")}${detail ? ` \u2014 ${detail}` : ""}. Do not invent a larger consequence than this boundary permits.`);
   }
-  lines.push(`Resolution scope: ${action.resolutionScope ?? "legacy persistent"}.`);
-  lines.push(`Ruling: ${outcome}.`);
-  if (action.additionalAttemptsPolicy === "defer_after_first") lines.push("The user bundled multiple consequential attempts. Apply this ruling only to the first primary attempt. Do not complete the later attempts in this reply; leave them pending in the fiction.");
-  if (instruction) lines.push(instruction);
-  if ((input.npcActionPolicy ?? "defer") === "defer") lines.push("Do not invent and resolve a new uncertain consequential NPC skill action in this same reply. NPCs may react, apply already-established capabilities, create pressure, or set up a later contest, but a new uncertain NPC attempt must remain unresolved for a future turn.");
-  if (input.npcActionPolicy === "checkpoint") lines.push("A separate Director checkpoint below governs any newly planned uncertain consequential NPC action. Follow it before prose; do not decide that action yourself.");
-  if (input.npcActionPolicy === "permitted") lines.push("Apply only the separate attempt-scoped turn permit below. Do not add another consequential NPC action.");
-  if (input.speakerName) lines.push(`Reply as ${input.speakerName}. Do not write voluntary actions, speech, thoughts, feelings, consent, or decisions for ${input.playerName}; when an NPC acts against the player, describe only what reaches or is imposed on the player's body and leave the player's reaction open.`);
-  return lines.join("\n");
+  lines2.push(`Ruling: ${outcome}.`);
+  if (action.additionalAttemptsPolicy === "defer_after_first") lines2.push("The user bundled multiple consequential attempts. Apply this ruling only to the first primary attempt. Do not complete the later attempts in this reply; leave them pending in the fiction.");
+  if (instruction) lines2.push(instruction);
+  if ((input.npcActionPolicy ?? "defer") === "defer") lines2.push("Do not invent and resolve a new uncertain consequential NPC skill action in this same reply. NPCs may react, apply already-established capabilities, create pressure, or set up a later contest, but a new uncertain NPC attempt must remain unresolved for a future turn.");
+  if (input.npcActionPolicy === "checkpoint") lines2.push("A separate Director checkpoint below governs any newly planned uncertain consequential NPC action. Follow it before prose; do not decide that action yourself.");
+  if (input.npcActionPolicy === "permitted") lines2.push("Apply only the separate attempt-scoped turn permit below. Do not add another consequential NPC action.");
+  if (input.speakerName) lines2.push(`Reply as ${input.speakerName}. Do not write voluntary actions, speech, thoughts, feelings, consent, or decisions for ${input.playerName}; when an NPC acts against the player, describe only what reaches or is imposed on the player's body and leave the player's reaction open.`);
+  return lines2.join("\n");
 }
 function advisoryBlock(input) {
   if (!(input.influence > 0) || input.notes.length === 0) return "";
-  const lines = ["[Director guidance \u2014 advisory]"];
-  for (const note of input.notes) lines.push("- " + note);
-  return lines.join("\n");
+  const lines2 = ["[Director guidance \u2014 advisory]"];
+  for (const note of input.notes) lines2.push("- " + note);
+  return lines2.join("\n");
 }
 function combinedBlock(binding, advisory) {
   return [binding, advisory].filter((s) => s && s.trim()).join("\n\n");
-}
-
-// src/auto.ts
-var FAMILIES = [
-  "overcome_operate",
-  "contest_impose",
-  "evade_resist",
-  "conceal_deceive",
-  "detect_discover",
-  "influence_negotiate",
-  "acquire_secure"
-];
-function interpretAutomaticAttempt(candidate, answers, errors = {}) {
-  const gate = answers.attempt_gate;
-  if (!gate || gate.type !== "choice") return { ok: false, error: `automatic check gate unresolved: ${errors.attempt_gate ?? "missing"}` };
-  if (gate.choice === "none" || gate.choice === "trivial_or_certain") return { ok: true, action: null, reason: gate.choice };
-  if (gate.choice !== "one_consequential" && gate.choice !== "multiple_consequential") return { ok: false, error: `automatic check gate returned unsupported option ${gate.choice}` };
-  const family = answers.attempt_family;
-  if (!family || family.type !== "choice" || !FAMILIES.includes(family.choice)) {
-    return { ok: false, error: `automatic attempt family unresolved: ${errors.attempt_family ?? (family?.type === "choice" ? family.choice : "missing")}` };
-  }
-  const action = structuredClone(candidate);
-  action.templateId = family.choice;
-  if (gate.choice === "multiple_consequential") action.additionalAttemptsPolicy = "defer_after_first";
-  return { ok: true, action, reason: gate.choice };
-}
-
-// src/director-tool.ts
-var DIRECTOR_TOOL_NAME = "RPDirector_AdjudicateTurn";
-var MAX_PLANNED_ACTIONS = 3;
-var DIRECTOR_TOOL_DESCRIPTION = [
-  "Adjudicate newly planned uncertain, consequential NPC actions before narrating their results.",
-  "WHEN: your selected character plans an action that can fail and changes the scene: forcing a door, evading an attack, concealing an item, detecting a clue, persuading someone to perform a bounded act, or taking possession.",
-  "SKIP: ordinary dialogue, reactions, trivial or established actions, and the player attempt already resolved by the Director pre-pass.",
-  "Use the frozen actor IDs and evidence references in the Director context. Supply a concrete method, one objective result and bounded failure stakes per action; at most three independent actions in one call.",
-  "You may use the model's normal reasoning before calling, but never put reasoning, a thinking trace, drafted prose, invented rolls or predicted outcomes in the arguments. Do not narrate a result before the tool returns.",
-  "The tool pauses for the user to keep or reroll the values. Its final returned permit is authoritative for this attempt. Then write the final reply, obeying the permit; no further Director call, extra consequential action or state block.",
-  "Feelings, attraction, consent, trust and permanent attitudes are not mechanical rewards. Leave the player's voluntary response open."
-].join("\n");
-var FAMILIES2 = [
-  "overcome_operate",
-  "contest_impose",
-  "evade_resist",
-  "conceal_deceive",
-  "detect_discover",
-  "influence_negotiate",
-  "acquire_secure"
-];
-var STAKES = [
-  "delay",
-  "exposure",
-  "injury",
-  "lost_position",
-  "resource_cost",
-  "relationship_friction",
-  "closed_opportunity",
-  "other"
-];
-var PSYCHOLOGICAL_RESULT = /\b(feel(?:s|ing)?|love|loves|attract(?:ed|ion)?|affection|consent(?:s|ed)?|trust(?:s|ed)?|loyal(?:ty)?|permanent(?:ly)?\s+(?:likes?|hates?|attitude)|fall(?:s|ing)?\s+in\s+love)\b/i;
-function object3(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
-}
-function exactKeys(value, allowed) {
-  const set = new Set(allowed);
-  return Object.keys(value).find((key) => !set.has(key)) ?? null;
-}
-function boundedText(value, label, max) {
-  if (typeof value !== "string") return { ok: false, message: `${label} must be a string` };
-  const text2 = value.replace(/\s+/g, " ").trim();
-  if (!text2) return { ok: false, message: `${label} must not be empty` };
-  if (text2.length > max) return { ok: false, message: `${label} exceeds ${max} characters` };
-  return { ok: true, value: text2 };
-}
-function validateTurnProposal(raw, ctx) {
-  const root = object3(raw);
-  if (!root || root.schemaVersion !== 1 || !Array.isArray(root.actions)) {
-    return { ok: false, code: "malformed", message: "Expected schemaVersion 1 and an actions array." };
-  }
-  const rootUnknown = exactKeys(root, ["schemaVersion", "requestId", "attemptId", "speakerActorId", "actions"]);
-  if (rootUnknown) return { ok: false, code: "unknown_field", message: `Unknown proposal field ${rootUnknown}. Draft prose is not accepted.` };
-  if (root.requestId !== ctx.requestId) return { ok: false, code: "wrong_request", message: "The tool request does not match the active writer request." };
-  if (root.attemptId !== ctx.attemptId) return { ok: false, code: "wrong_attempt", message: "The proposal does not match the active generation attempt." };
-  if (root.speakerActorId !== ctx.speakerActorId) return { ok: false, code: "speaker_mismatch", message: "The writer may not change the frozen reply speaker." };
-  if (root.actions.length === 0) return { ok: false, code: "no_actions", message: "Do not call the tool when no new consequential NPC action is planned." };
-  if (root.actions.length > MAX_PLANNED_ACTIONS) return { ok: false, code: "too_many_actions", message: `At most ${MAX_PLANNED_ACTIONS} planned NPC actions may be adjudicated in one turn.` };
-  const actorIds = new Set(ctx.knownActorIds);
-  const evidence = new Set(ctx.allowedEvidenceRefs);
-  const proposalIds = /* @__PURE__ */ new Set();
-  const actions = [];
-  for (let index = 0; index < root.actions.length; index++) {
-    const item = object3(root.actions[index]);
-    if (!item) return { ok: false, code: "invalid_action", message: `Action ${index + 1} must be an object.` };
-    const unknown = exactKeys(item, ["proposalId", "actingActorId", "targetActorIds", "family", "method", "boundedResult", "failureStake", "opposed", "evidenceRefs"]);
-    if (unknown) return { ok: false, code: "unknown_field", message: `Unknown action field ${unknown}. Full draft text is not accepted.` };
-    const proposalId = boundedText(item.proposalId, `actions[${index}].proposalId`, 80);
-    const method = boundedText(item.method, `actions[${index}].method`, 280);
-    const result = boundedText(item.boundedResult, `actions[${index}].boundedResult`, 240);
-    if (!proposalId.ok || !method.ok || !result.ok) {
-      return { ok: false, code: "invalid_action", message: !proposalId.ok ? proposalId.message : !method.ok ? method.message : result.message };
-    }
-    if (proposalIds.has(proposalId.value)) return { ok: false, code: "duplicate_proposal", message: `Duplicate proposalId ${proposalId.value}.` };
-    proposalIds.add(proposalId.value);
-    if (typeof item.actingActorId !== "string" || !actorIds.has(item.actingActorId)) return { ok: false, code: "unknown_actor", message: `Action ${proposalId.value} has an unknown acting actor.` };
-    if (item.actingActorId !== ctx.speakerActorId) return { ok: false, code: "speaker_mismatch", message: "Newly planned actions must be performed by the frozen reply speaker." };
-    if (!Array.isArray(item.targetActorIds) || item.targetActorIds.some((id) => typeof id !== "string" || !actorIds.has(id))) {
-      return { ok: false, code: "unknown_actor", message: `Action ${proposalId.value} contains an unknown target actor.` };
-    }
-    const targets = [...item.targetActorIds].sort();
-    if (new Set(targets).size !== targets.length) return { ok: false, code: "duplicate_target", message: `Action ${proposalId.value} repeats a target actor.` };
-    if (typeof item.family !== "string" || !FAMILIES2.includes(item.family)) return { ok: false, code: "invalid_action", message: `Action ${proposalId.value} has an unknown family.` };
-    if (typeof item.opposed !== "boolean") return { ok: false, code: "invalid_action", message: `Action ${proposalId.value} must declare whether it is opposed.` };
-    if (!Array.isArray(item.evidenceRefs) || item.evidenceRefs.length > 8 || item.evidenceRefs.some((ref) => typeof ref !== "string" || !evidence.has(ref))) {
-      return { ok: false, code: "unknown_evidence", message: `Action ${proposalId.value} references evidence outside the frozen snapshot.` };
-    }
-    if (new Set(item.evidenceRefs).size !== item.evidenceRefs.length) return { ok: false, code: "unknown_evidence", message: `Action ${proposalId.value} repeats an evidence reference.` };
-    const stake = object3(item.failureStake);
-    if (!stake || exactKeys(stake, ["kind", "detail"])) return { ok: false, code: "invalid_action", message: `Action ${proposalId.value} has an invalid failureStake.` };
-    if (typeof stake.kind !== "string" || !STAKES.includes(stake.kind)) return { ok: false, code: "invalid_action", message: `Action ${proposalId.value} has an unknown failure stake.` };
-    const detail = boundedText(stake.detail, `actions[${index}].failureStake.detail`, 240);
-    if (!detail.ok) return { ok: false, code: "invalid_action", message: detail.message };
-    if (PSYCHOLOGICAL_RESULT.test(result.value)) return { ok: false, code: "forbidden_result", message: `Action ${proposalId.value} tries to author feelings, consent, trust, or permanent attitude.` };
-    if (/\n|;|\band\s+then\b/i.test(String(item.boundedResult))) return { ok: false, code: "unbounded_result", message: `Action ${proposalId.value} must name one bounded state change.` };
-    actions.push({
-      proposalId: proposalId.value,
-      actingActorId: item.actingActorId,
-      targetActorIds: targets,
-      family: item.family,
-      method: method.value,
-      boundedResult: result.value,
-      failureStake: { kind: stake.kind, detail: detail.value },
-      opposed: item.opposed,
-      evidenceRefs: [...item.evidenceRefs]
-    });
-  }
-  return {
-    ok: true,
-    proposal: {
-      schemaVersion: 1,
-      requestId: ctx.requestId,
-      attemptId: ctx.attemptId,
-      speakerActorId: ctx.speakerActorId,
-      actions
-    }
-  };
-}
-var TURN_PROPOSAL_SCHEMA = {
-  $schema: "http://json-schema.org/draft-04/schema#",
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    schemaVersion: { type: "integer", enum: [1] },
-    requestId: { type: "string" },
-    attemptId: { type: "string" },
-    speakerActorId: { type: "string" },
-    actions: {
-      type: "array",
-      maxItems: 8,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          proposalId: { type: "string", description: "Short unique id for this proposed action." },
-          actingActorId: { type: "string" },
-          targetActorIds: { type: "array", items: { type: "string" } },
-          family: { type: "string", enum: [...FAMILIES2] },
-          method: { type: "string", description: "Concrete method, not draft prose." },
-          boundedResult: { type: "string", description: "One objective immediate state change; never feelings, consent, trust, or permanent attitude." },
-          failureStake: {
-            type: "object",
-            additionalProperties: false,
-            properties: { kind: { type: "string", enum: [...STAKES] }, detail: { type: "string" } },
-            required: ["kind", "detail"]
-          },
-          opposed: { type: "boolean" },
-          evidenceRefs: { type: "array", items: { type: "string" } }
-        },
-        required: ["proposalId", "actingActorId", "targetActorIds", "family", "method", "boundedResult", "failureStake", "opposed", "evidenceRefs"]
-      }
-    }
-  },
-  required: ["schemaVersion", "requestId", "attemptId", "speakerActorId", "actions"]
-};
-function plannedQuestion(action, path, score) {
-  const common = `Assess only ${path}. Use its method, boundedResult, failureStake, opposed flag, and evidenceRefs against the frozen pre-action scene. The proposal is not evidence of success. Never manufacture feelings, attraction, consent, trust, love, or permanent attitude change.`;
-  if (score) {
-    return {
-      type: "score",
-      instructions: common,
-      criteria: [
-        "Established evidence strongly opposes the bounded result.",
-        "Support is weak; an important capability, cue, condition, or leverage is missing.",
-        "Mixed or incomplete support; only limited progress is justified.",
-        "Strong concrete support for the bounded result now.",
-        "Established facts make the bounded result clearly justified now."
-      ]
-    };
-  }
-  return {
-    type: "noul",
-    instructions: `${common} Does ${action.actingActorId} achieve the one bounded result now through the stated method?`,
-    criteria: { true: "Established evidence supports the bounded result now.", false: "Established evidence does not support the bounded result now." }
-  };
-}
-async function adjudicateTurnProposal(input) {
-  const plannedActions = {};
-  const questions = {};
-  for (const [index, action] of input.proposal.actions.entries()) {
-    plannedActions[action.proposalId] = action;
-    questions[`planned_${index + 1}`] = plannedQuestion(action, `state.plannedActions.${action.proposalId}`, input.profile.drivingQuestionId === "gain_score");
-  }
-  if (Object.keys(questions).length > input.profile.budgets.maxQuestions) throw new Error("planned action batch exceeds the profile question budget");
-  const base = input.snapshot.state && typeof input.snapshot.state === "object" && !Array.isArray(input.snapshot.state) ? input.snapshot.state : {};
-  const snapshot = { ...input.snapshot, state: { ...base, plannedActions } };
-  const contextCharacters = JSON.stringify(snapshot.state).length;
-  if (contextCharacters > input.profile.budgets.maxSerializedCharacters) {
-    throw new Error(`Planned action context exceeds the limit (${contextCharacters}/${input.profile.budgets.maxSerializedCharacters} characters). No decision was requested.`);
-  }
-  const evaluation = await input.provider.evaluate({ requestId: newId("req"), phase: "guide", snapshot, questions }, input.signal);
-  const actions = [];
-  for (const [index, proposal] of input.proposal.actions.entries()) {
-    const questionId = `planned_${index + 1}`;
-    const answer = evaluation.answers[questionId];
-    if (!answer) throw new Error(`No valid assessment for ${proposal.proposalId}: ${evaluation.errors[questionId] ?? "missing"}`);
-    const signal = normaliseSignal(answer);
-    if (!signal.ok) throw new Error(`Invalid assessment for ${proposal.proposalId}: ${signal.error}`);
-    const draw = input.profile.resolutionMethod === "sample" ? randomDraw().u : null;
-    const resolved = resolveOutcome({ bands: input.profile.bands, outcomes: input.profile.outcomes, method: input.profile.resolutionMethod, signal: signal.signal, draw });
-    if (!resolved.ok) throw new Error(`Could not resolve ${proposal.proposalId}: ${resolved.error}`);
-    const target = proposal.targetActorIds.map((id) => input.actorNames[id] ?? id).join(" and ") || "the immediate obstacle";
-    const instruction = fillPlaceholders(resolved.value.def.instruction, {
-      gain: proposal.boundedResult,
-      action: proposal.method,
-      target,
-      player: input.playerName,
-      speaker: input.actorNames[input.proposal.speakerActorId] ?? input.proposal.speakerActorId
-    }).trim();
-    actions.push({
-      proposalId: proposal.proposalId,
-      resolutionId: newId("res"),
-      actingActorId: proposal.actingActorId,
-      targetActorIds: proposal.targetActorIds,
-      family: proposal.family,
-      method: proposal.method,
-      boundedResult: proposal.boundedResult,
-      failureStake: proposal.failureStake,
-      opposed: proposal.opposed,
-      outcome: resolved.value.outcome,
-      instruction,
-      recordedValue: resolved.value.def.records,
-      finalForScope: resolved.value.def.final,
-      scope: "attempt",
-      assessment: structuredClone(answer),
-      draw: resolved.value.draw,
-      methodUsed: input.profile.resolutionMethod,
-      policyBand: structuredClone(resolved.value.band),
-      outcomeDefinition: structuredClone(resolved.value.def)
-    });
-  }
-  const permit = {
-    schemaVersion: 1,
-    permitId: newId("permit"),
-    attemptId: input.proposal.attemptId,
-    speakerActorId: input.proposal.speakerActorId,
-    baseCursor: input.snapshot.cursorBefore,
-    stateRevision: input.snapshot.stateRevision,
-    actions,
-    compactState: {
-      sceneId: typeof base.sceneId === "number" ? base.sceneId : 0,
-      revision: input.snapshot.stateRevision
-    },
-    constraints: [
-      "Write the final reply directly; do not call RPDirector_AdjudicateTurn again.",
-      "Apply only these attempt-scoped rulings. Do not invent another unresolved consequential action.",
-      "Do not output state blocks or claim that the permit itself is canonical state.",
-      `Do not author ${input.playerName}'s voluntary actions, speech, thoughts, feelings, consent, or decisions.`
-    ],
-    createdAt: input.now ?? Date.now(),
-    proposal: structuredClone(input.proposal),
-    snapshot: structuredClone(input.snapshot),
-    profile: structuredClone(input.profile)
-  };
-  return { permit, evaluation, snapshot, questions };
-}
-function toolPlanningBlock(input) {
-  if (!input.toolAvailable) {
-    return "[Director NPC-action boundary]\nFunction tools are unavailable on this writer backend. Write the final prose directly. You may react, apply established capabilities, or set up pressure, but leave any newly invented uncertain consequential NPC action unresolved.";
-  }
-  return [
-    "[Director NPC-action checkpoint]",
-    "Write the final prose directly unless you newly plan an uncertain consequential NPC action whose result would change fictional state.",
-    `Before any prose for such an action, call ${DIRECTOR_TOOL_NAME} once with schemaVersion 1, requestId ${input.requestId}, attemptId ${input.attemptId}, and speakerActorId ${input.speakerActorId}.`,
-    `Allowed evidenceRefs: ${JSON.stringify(input.evidenceRefs)}.`,
-    `Submit at most ${MAX_PLANNED_ACTIONS} actions. Give only actor IDs, targets, family, concrete method, one bounded objective result, bounded failure stake, opposition, and evidence refs. Never include draft prose.`,
-    "If no newly invented uncertain consequential NPC action is needed, do not call the tool. Do not roll dice before a permit is returned.",
-    "Normal model reasoning may precede the tool call. Send only the bounded proposal, never your thinking trace or draft. The tool pauses for the user to keep or reroll its values before your final response can begin."
-  ].join("\n");
-}
-function permitFollowupBlock(permit, failure = null) {
-  if (!permit) {
-    return `[Director tool result]
-The proposal was not permitted${failure ? `: ${failure}` : "."} Write the final reply without resolving any newly invented uncertain consequential NPC action. Do not call the tool again.`;
-  }
-  return [
-    "[Director turn permit \u2014 binding for this reply]",
-    JSON.stringify(writerPermit(permit)),
-    "Now write the final reply. Obey every permitted outcome and constraint. Do not call the tool again, add another consequential action, or emit state/metadata blocks."
-  ].join("\n");
-}
-function writerPermit(permit) {
-  const { proposal: _proposal, snapshot: _snapshot, profile: _profile, reviewHistory: _history, ...result } = permit;
-  return result;
-}
-
-// src/observer.ts
-var OP_NAMES = ["advance_time", "set_known_location", "transfer_item", "set_condition", "mark_fact_known", "mark_secret_revealed"];
-function asObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
-}
-function stableOperationId(variantId, index, operation) {
-  return `obsop_${hash53(`${variantId}|${index}|${JSON.stringify(operation)}`)}`;
-}
-function dedupeSorted(values) {
-  return [...new Set(values)].sort();
-}
-function buildObservationRegistry(input) {
-  const placeIds = Object.values(input.state.positions).flatMap((position) => [position.placeId, position.lastKnownPlaceId]).filter((x) => typeof x === "string" && x.length > 0);
-  const conditionIds = Object.values(input.state.conditions).flatMap((conditions) => Object.keys(conditions));
-  conditionIds.push("injured", "restrained", "unconscious", "hidden", "exposed");
-  const factIds = [...input.expectedResolutionIds];
-  for (const permitAction of input.permit?.actions ?? []) factIds.push(`fact:${permitAction.resolutionId}`);
-  return {
-    actorIds: dedupeSorted(input.actorIds),
-    placeIds: dedupeSorted(placeIds),
-    itemIds: dedupeSorted(Object.keys(input.state.itemOwners)),
-    conditionIds: dedupeSorted(conditionIds),
-    factIds: dedupeSorted(factIds),
-    secretIds: dedupeSorted(Object.keys(input.state.revealedSecrets))
-  };
-}
-function validateObservationPayload(raw, request, meta) {
-  const root = asObject(raw);
-  if (!root || root.schemaVersion !== 1 || !Array.isArray(root.realizedResolutionIds) || !Array.isArray(root.operations) || !Array.isArray(root.unresolved)) {
-    throw new Error("observer returned a malformed payload");
-  }
-  if (root.requestId !== request.requestId || root.attemptId !== request.attemptId || root.variantId !== request.variantId || root.baseCursor !== request.baseCursor || root.cursorAfter !== request.cursorAfter || root.stateRevision !== request.stateRevision) {
-    throw new Error("observer payload identity does not match the active variant and state revision");
-  }
-  if (root.realizedResolutionIds.some((id) => typeof id !== "string") || root.unresolved.some((item) => typeof item !== "string")) throw new Error("observer payload contains non-string ids");
-  const expected = new Set(request.expectedResolutionIds);
-  const realized = dedupeSorted(root.realizedResolutionIds);
-  for (const id of realized) if (!expected.has(id)) throw new Error(`observer claimed unregistered resolution ${id}`);
-  const actors = new Set(request.registry.actorIds);
-  const places = new Set(request.registry.placeIds);
-  const items = new Set(request.registry.itemIds);
-  const conditions = new Set(request.registry.conditionIds);
-  const facts = new Set(request.registry.factIds);
-  const secrets = new Set(request.registry.secretIds);
-  const operations = [];
-  const unresolved = [...root.unresolved];
-  const targets = /* @__PURE__ */ new Set();
-  for (let index = 0; index < root.operations.length; index++) {
-    const operation = asObject(root.operations[index]);
-    if (!operation || typeof operation.op !== "string" || !OP_NAMES.includes(operation.op)) {
-      unresolved.push(`operation ${index + 1}: unknown operation`);
-      continue;
-    }
-    let clean = null;
-    let key = "";
-    switch (operation.op) {
-      case "advance_time": {
-        if (!Number.isInteger(operation.seconds) || Number(operation.seconds) < 1 || Number(operation.seconds) > 86400 || !["exact", "estimated"].includes(String(operation.quality))) {
-          unresolved.push(`operation ${index + 1}: invalid time delta`);
-          break;
-        }
-        clean = { op: "advance_time", seconds: Number(operation.seconds), quality: operation.quality };
-        key = "time";
-        break;
-      }
-      case "set_known_location": {
-        if (typeof operation.actorId !== "string" || !actors.has(operation.actorId) || operation.placeId !== null && (typeof operation.placeId !== "string" || !places.has(operation.placeId)) || !["known", "unknown", "in_transit"].includes(String(operation.status))) {
-          unresolved.push(`operation ${index + 1}: unregistered actor or place`);
-          break;
-        }
-        clean = { op: "set_known_location", actorId: operation.actorId, placeId: operation.placeId, status: operation.status };
-        key = `location:${operation.actorId}`;
-        break;
-      }
-      case "transfer_item": {
-        if (typeof operation.itemId !== "string" || !items.has(operation.itemId) || operation.fromActorId !== null && (typeof operation.fromActorId !== "string" || !actors.has(operation.fromActorId)) || operation.toActorId !== null && (typeof operation.toActorId !== "string" || !actors.has(operation.toActorId))) {
-          unresolved.push(`operation ${index + 1}: unregistered item or actor`);
-          break;
-        }
-        if ((request.priorState.itemOwners[operation.itemId] ?? null) !== operation.fromActorId) {
-          unresolved.push(`operation ${index + 1}: item owner precondition did not match`);
-          break;
-        }
-        clean = { op: "transfer_item", itemId: operation.itemId, fromActorId: operation.fromActorId, toActorId: operation.toActorId };
-        key = `item:${operation.itemId}`;
-        break;
-      }
-      case "set_condition": {
-        if (typeof operation.actorId !== "string" || !actors.has(operation.actorId) || typeof operation.conditionId !== "string" || !conditions.has(operation.conditionId) || typeof operation.active !== "boolean") {
-          unresolved.push(`operation ${index + 1}: unregistered condition or actor`);
-          break;
-        }
-        clean = { op: "set_condition", actorId: operation.actorId, conditionId: operation.conditionId, active: operation.active };
-        key = `condition:${operation.actorId}:${operation.conditionId}`;
-        break;
-      }
-      case "mark_fact_known": {
-        if (typeof operation.actorId !== "string" || !actors.has(operation.actorId) || typeof operation.factId !== "string" || !facts.has(operation.factId)) {
-          unresolved.push(`operation ${index + 1}: unregistered fact or actor`);
-          break;
-        }
-        clean = { op: "mark_fact_known", actorId: operation.actorId, factId: operation.factId };
-        key = `fact:${operation.actorId}:${operation.factId}`;
-        break;
-      }
-      case "mark_secret_revealed": {
-        if (typeof operation.secretId !== "string" || !secrets.has(operation.secretId) || !Array.isArray(operation.actorIds) || operation.actorIds.some((id) => typeof id !== "string" || !actors.has(id))) {
-          unresolved.push(`operation ${index + 1}: unregistered secret or actor`);
-          break;
-        }
-        const actorIds = dedupeSorted(operation.actorIds);
-        clean = { op: "mark_secret_revealed", secretId: operation.secretId, actorIds };
-        key = `secret:${operation.secretId}`;
-        break;
-      }
-    }
-    if (!clean) continue;
-    if (targets.has(key)) throw new Error(`observer returned conflicting operations for ${key}`);
-    targets.add(key);
-    operations.push({ ...clean, operationId: stableOperationId(request.variantId, index, clean) });
-  }
-  return {
-    schemaVersion: 1,
-    requestId: request.requestId,
-    attemptId: request.attemptId,
-    variantId: request.variantId,
-    baseCursor: request.baseCursor,
-    cursorAfter: request.cursorAfter,
-    stateRevision: request.stateRevision,
-    realizedResolutionIds: realized,
-    operations,
-    unresolved: dedupeSorted(unresolved),
-    ...meta
-  };
-}
-function barePayload(request, realizedResolutionIds, unresolved = []) {
-  return {
-    schemaVersion: 1,
-    requestId: request.requestId,
-    attemptId: request.attemptId,
-    variantId: request.variantId,
-    baseCursor: request.baseCursor,
-    cursorAfter: request.cursorAfter,
-    stateRevision: request.stateRevision,
-    realizedResolutionIds,
-    operations: [],
-    unresolved
-  };
-}
-function createLocalObservationProvider() {
-  return {
-    kind: "local",
-    async observe(request) {
-      const realized = request.acceptedSpan.text.trim() ? request.expectedResolutionIds : [];
-      return validateObservationPayload(barePayload(request, realized), request, {
-        providerKind: "local",
-        requestedModel: null,
-        returnedModel: null,
-        durationMs: 0,
-        inputTokens: null,
-        outputTokens: null
-      });
-    }
-  };
-}
-function observerQuestion(id) {
-  return {
-    type: "choice",
-    instructions: `Using only state.acceptedSpan, decide whether the final prose actually realizes the frozen ruling identified by ${id}. A permit or ruling is not proof. Hypothetical, attempted, negated, interrupted, merely planned, or ambiguous events are not realized.`,
-    criteria: {
-      realized: "The accepted prose explicitly and presently realizes the bounded ruling.",
-      not_realized: "The accepted prose explicitly shows that the bounded ruling is not realized.",
-      unclear: "The prose does not establish the result clearly enough."
-    }
-  };
-}
-function createDecisionObservationProvider(provider) {
-  return {
-    kind: provider.kind,
-    async observe(request, signal) {
-      if (request.expectedResolutionIds.length === 0) return createLocalObservationProvider().observe(request, signal);
-      const questions = {};
-      for (let i = 0; i < request.expectedResolutionIds.length; i++) questions[`realized_${i + 1}`] = observerQuestion(request.expectedResolutionIds[i]);
-      const snapshotState = {
-        priorState: request.priorState,
-        acceptedSpan: request.acceptedSpan,
-        expectedRulings: request.expectedRulings
-      };
-      const result = await provider.evaluate({
-        requestId: request.requestId,
-        phase: "observe",
-        snapshot: {
-          chatId: "",
-          cursorBefore: request.cursorAfter,
-          stateRevision: request.stateRevision,
-          scopeId: "shared-public",
-          profileRevision: "",
-          catalogRevision: "",
-          actorBindingRevision: request.registry.actorIds.join(","),
-          state: snapshotState
-        },
-        questions
-      }, signal);
-      const realized = [];
-      const unresolved = [];
-      for (let i = 0; i < request.expectedResolutionIds.length; i++) {
-        const id = request.expectedResolutionIds[i];
-        const answer = result.answers[`realized_${i + 1}`];
-        if (answer?.type === "choice" && answer.choice === "realized") realized.push(id);
-        else if (!answer || answer.type !== "choice" || answer.choice === "unclear") unresolved.push(`resolution ${id}: ${result.errors[`realized_${i + 1}`] ?? "observer was unclear"}`);
-      }
-      return validateObservationPayload(barePayload(request, realized, unresolved), request, {
-        providerKind: result.provider,
-        requestedModel: result.requestedModel,
-        returnedModel: result.returnedModel,
-        durationMs: result.durationMs,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens
-      });
-    }
-  };
-}
-function observerSchema() {
-  const nullableString = { type: ["string", "null"] };
-  return {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      schemaVersion: { type: "integer", enum: [1] },
-      requestId: { type: "string" },
-      attemptId: { type: "string" },
-      variantId: { type: "string" },
-      baseCursor: { type: "string" },
-      cursorAfter: { type: "string" },
-      stateRevision: { type: "integer" },
-      realizedResolutionIds: { type: "array", items: { type: "string" } },
-      operations: {
-        type: "array",
-        maxItems: 12,
-        items: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            op: { type: "string", enum: [...OP_NAMES] },
-            seconds: { type: ["integer", "null"] },
-            quality: { type: ["string", "null"], enum: ["exact", "estimated", null] },
-            actorId: nullableString,
-            actorIds: { type: ["array", "null"], items: { type: "string" } },
-            placeId: nullableString,
-            status: { type: ["string", "null"], enum: ["known", "unknown", "in_transit", null] },
-            itemId: nullableString,
-            fromActorId: nullableString,
-            toActorId: nullableString,
-            conditionId: nullableString,
-            active: { type: ["boolean", "null"] },
-            factId: nullableString,
-            secretId: nullableString
-          },
-          required: ["op", "seconds", "quality", "actorId", "actorIds", "placeId", "status", "itemId", "fromActorId", "toActorId", "conditionId", "active", "factId", "secretId"]
-        }
-      },
-      unresolved: { type: "array", items: { type: "string" } }
-    },
-    required: ["schemaVersion", "requestId", "attemptId", "variantId", "baseCursor", "cursorAfter", "stateRevision", "realizedResolutionIds", "operations", "unresolved"]
-  };
-}
-function createStructuredObservationProvider(input) {
-  return {
-    kind: "structured",
-    async observe(request, signal) {
-      const started = performance.now();
-      const combined = AbortSignal.any([signal, AbortSignal.timeout(input.timeoutMs)]);
-      const system = "Observe only the accepted final assistant span. Return factual deltas from the supplied registry. A ruling or permit is not proof. Do not record plans, attempts, hypotheticals, negated events, inner feelings, inferred consent, trust, love, permanent attitude, or facts outside the registry. Unknown or ambiguous facts go in unresolved. Copy every identity field exactly.";
-      let transported;
-      try {
-        transported = await input.transport({
-          model: input.model,
-          messages: [
-            { role: "system", content: system },
-            { role: "user", content: JSON.stringify(request) }
-          ],
-          json_schema: { name: "rp_director_observation", strict: true, schema: observerSchema() }
-        }, combined);
-      } catch (error) {
-        if (combined.aborted) throw new ProviderError(signal.aborted ? "aborted" : "timeout", signal.aborted ? "observation was cancelled" : "observation exceeded its deadline");
-        throw error;
-      }
-      let raw = transported.content;
-      if (typeof raw === "string") {
-        try {
-          raw = JSON.parse(raw);
-        } catch {
-          throw new ProviderError("malformed", "observer returned invalid JSON");
-        }
-      }
-      return validateObservationPayload(raw, request, {
-        providerKind: "structured",
-        requestedModel: input.model,
-        returnedModel: transported.model,
-        durationMs: performance.now() - started,
-        inputTokens: transported.usage?.input ?? null,
-        outputTokens: transported.usage?.output ?? null
-      });
-    }
-  };
-}
-
-// src/roll-review.ts
-function rerollPermit(previous, profile, names, playerName, draw = () => randomDraw().u) {
-  if (profile.resolutionMethod !== "sample") throw new Error("Threshold outcomes require reassessment, not a random reroll.");
-  const permit = structuredClone(previous);
-  permit.previousPermitId = previous.permitId;
-  permit.permitId = newId("permit");
-  permit.createdAt = Date.now();
-  delete permit.reviewedAt;
-  permit.actions = previous.actions.map((action) => {
-    if (!action.assessment) throw new Error("This legacy permit has no stored assessment for a reroll.");
-    const signal = normaliseSignal(action.assessment);
-    if (!signal.ok) throw new Error(signal.error);
-    const result = resolveOutcome({ bands: profile.bands, outcomes: profile.outcomes, method: "sample", signal: signal.signal, draw: draw() });
-    if (!result.ok) throw new Error(result.error);
-    return {
-      ...structuredClone(action),
-      resolutionId: newId("res"),
-      outcome: result.value.outcome,
-      instruction: fillPlaceholders(result.value.def.instruction, {
-        gain: action.boundedResult,
-        action: action.method,
-        target: action.targetActorIds.map((id) => names[id] ?? id).join(" and ") || "the immediate obstacle",
-        player: playerName,
-        speaker: names[previous.speakerActorId] ?? previous.speakerActorId
-      }),
-      recordedValue: result.value.def.records,
-      finalForScope: result.value.def.final,
-      draw: result.value.draw,
-      policyBand: structuredClone(result.value.band),
-      outcomeDefinition: structuredClone(result.value.def)
-    };
-  });
-  return permit;
-}
-async function reviewPermit(input) {
-  let permit = structuredClone(input.initial);
-  const history = [...permit.reviewHistory ?? []];
-  const valid = () => !input.signal.aborted && input.isCurrent();
-  while (valid()) {
-    const choice = await input.choose(structuredClone(permit));
-    if (!valid() || choice === "cancel") return null;
-    if (choice === "keep") return { ...permit, reviewHistory: history, reviewedAt: Date.now() };
-    const next = await input.reroll(permit);
-    if (!valid()) return null;
-    history.push({ permitId: permit.permitId, actions: structuredClone(permit.actions), choice: input.method === "sample" ? "reroll" : "reassess", at: Date.now() });
-    permit = { ...next, previousPermitId: permit.permitId };
-  }
-  return null;
-}
-
-// src/pack/pack.ts
-var EVIDENCE_SOURCES = ["transcript", "owner_card", "target_card", "meters", "state", "lore"];
-var PRIVATE_SOURCES = ["owner_card", "target_card", "meters"];
-var CORE_PROTECTED = Object.freeze([
-  "The player's voluntary speech, actions, feelings, consent and decisions are the player's own; never decide them.",
-  "Do not assume feelings, attraction, trust or willingness beyond what the supplied evidence shows."
-]);
-var RESERVED_KEYS = /* @__PURE__ */ new Set(["NONE", "UNSUPPORTED", "UNRESOLVED", "ROUTINE"]);
-var KEY = /^[a-z][a-z0-9_]{0,39}$/;
-function deepFreeze(value) {
-  if (value && typeof value === "object") {
-    for (const child of Object.values(value)) deepFreeze(child);
-    Object.freeze(value);
-  }
-  return value;
-}
-var HANDOFF_LINE = "An explicit hand-off: the player invites, orders or dares a character to act, or gives them the initiative.";
-var ROUTINE_LINE = "Actions that are routine or effectively certain for whoever performs them, such as a ruler's everyday command to their own servants or a practised task done in calm conditions.";
-var SMALL_TALK_LINE = "Ordinary conversation, the player's own feelings, wants or decisions, observation, out-of-character remarks, trivial activity, and anything the scene has already settled.";
-var DEFAULT_PACK = deepFreeze({
-  id: "default",
-  version: 3,
-  label: "General",
-  description: "Works for most roleplay. Rules physical, social and stealth attempts with seven broad kinds of move; tracks how each character regards the player.",
-  actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
-  gate: {
-    include: [
-      "An attempt to change the situation where failure is genuinely possible and would materially change what happens: overcoming an obstacle, contesting opposition, evading, concealing or deceiving, discovering a hidden fact, pressing someone for specific conduct, or securing access, information, possession or a commitment.",
-      HANDOFF_LINE
-    ],
-    exclude: [SMALL_TALK_LINE, ROUTINE_LINE]
-  },
-  protected: [],
-  families: [
-    {
-      key: "overcome_operate",
-      label: "Overcome / operate",
-      kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "state"],
-      definition: "Overcome an obstacle, or operate, repair, treat, craft, break or create something.",
-      successSemantics: "The concrete method, given the actor's established competence, tools and conditions, produces the specified result now."
-    },
-    {
-      key: "contest_impose",
-      label: "Contest / impose",
-      kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
-      definition: "Actively overcome opposition: attack, grapple, restrain, seize, interrupt, force or outmanoeuvre.",
-      successSemantics: "The acting side overcomes the active opposition in this one exchange; the same contest is not resolved twice."
-    },
-    {
-      key: "evade_resist",
-      label: "Evade / resist",
-      kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
-      definition: "Escape, dodge, withstand, keep control, or avoid an imposed consequence.",
-      successSemantics: "The actor avoids or withstands the specified consequence in this exchange."
-    },
-    {
-      key: "conceal_deceive",
-      label: "Conceal / deceive",
-      kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
-      definition: "Lie, hide, sneak, take something unnoticed, disguise, misdirect or keep up an alibi.",
-      successSemantics: "The concealment or deception holds now against the named observers, judged by what they could perceive or verify."
-    },
-    {
-      key: "detect_discover",
-      label: "Detect / discover",
-      kind: "discovery",
-      evidence: ["transcript", "lore", "state"],
-      definition: "Notice, search, investigate, read a tell, catch a lie, or establish a hidden fact from visible cues.",
-      successSemantics: "The observer establishes the specified fact now from cues visible in the scene and their own public capabilities; hidden truth that nothing in the scene has shown is not evidence."
-    },
-    {
-      key: "influence_negotiate",
-      label: "Influence / negotiate",
-      kind: "change",
-      evidence: ["transcript", "lore", "target_card", "meters", "state"],
-      definition: "Seek one specific, immediate conduct from someone through a request, bargain, argument, threat or pressure.",
-      successSemantics: "The target chooses the specified conduct now, given their established interests, boundaries and leverage; what the player says or offers is evidence about how the target may respond."
-    },
-    {
-      key: "acquire_secure",
-      label: "Acquire / secure",
-      kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
-      definition: "Secure bounded access, information, possession, permission or a commitment.",
-      successSemantics: "The specified access, information, possession or commitment is secured now."
-    }
-  ],
-  meters: [
-    { key: "regard", label: "regard for {{player}}", about: "How the character feels about the player right now: warmth, respect and trust together.", levels: ["hostile", "cold", "neutral", "warm", "devoted"], initial: 2 }
-  ]
-});
-function protectedLines(pack) {
-  return [...CORE_PROTECTED, ...pack.protected.filter((line) => typeof line === "string" && line.trim())];
-}
-function familyByKey(pack, key) {
-  return pack.families.find((f) => f.key === key) ?? null;
-}
-function meterLabel(meter, playerName) {
-  return meter.label.replace(/\{\{\s*player\s*\}\}/gi, playerName);
-}
-var text = (value, max) => typeof value === "string" && value.trim().length > 0 && value.length <= max;
-function validatePack(pack) {
-  const errors = [];
-  if (!pack || typeof pack !== "object") return { ok: false, errors: ["pack must be an object"] };
-  if (!KEY.test(String(pack.id ?? ""))) errors.push("id must be lowercase letters, digits and underscores");
-  if (!Number.isInteger(pack.version) || pack.version < 1) errors.push("version must be a positive integer");
-  if (!text(pack.label, 80)) errors.push("label is required (up to 80 characters)");
-  if (!text(pack.description, 300)) errors.push("description is required (up to 300 characters)");
-  const kinds = pack.actors?.kinds ?? [];
-  const owners = pack.actors?.rulableOwners ?? [];
-  if (!kinds.includes("player")) errors.push("actors.kinds must include player");
-  if (!owners.includes("player")) errors.push("actors.rulableOwners must include player");
-  for (const owner of owners) if (!kinds.includes(owner)) errors.push(`actors.rulableOwners has ${owner}, which is not in actors.kinds`);
-  if (!Array.isArray(pack.gate?.include) || pack.gate.include.length === 0 || !pack.gate.include.every((line) => text(line, 600))) errors.push("gate.include needs at least one criterion (up to 600 characters each)");
-  if (!Array.isArray(pack.gate?.exclude) || !pack.gate.exclude.every((line) => text(line, 600))) errors.push("gate.exclude must be a list of criteria");
-  if (!Array.isArray(pack.protected) || !pack.protected.every((line) => text(line, 600))) errors.push("protected must be a list of sentences");
-  const families = Array.isArray(pack.families) ? pack.families : [];
-  if (families.length === 0 || families.length > 250) errors.push("families: between 1 and 250 are required");
-  const seen = /* @__PURE__ */ new Set();
-  for (const family of families) {
-    const key = String(family?.key ?? "");
-    if (RESERVED_KEYS.has(key)) {
-      errors.push(`family key ${key} is reserved`);
-      continue;
-    }
-    if (!KEY.test(key)) {
-      errors.push(`family key "${key}" must be lowercase letters, digits and underscores`);
-      continue;
-    }
-    if (seen.has(key)) errors.push(`duplicate family ${key}`);
-    seen.add(key);
-    if (!text(family.label, 80)) errors.push(`${key}: label is required`);
-    if (!text(family.definition, 600)) errors.push(`${key}: definition is required (up to 600 characters)`);
-    if (!text(family.successSemantics, 600)) errors.push(`${key}: successSemantics is required (up to 600 characters)`);
-    if (family.kind !== "change" && family.kind !== "discovery") errors.push(`${key}: kind must be change or discovery`);
-    const evidence = Array.isArray(family.evidence) ? family.evidence : [];
-    for (const source of evidence) if (!EVIDENCE_SOURCES.includes(source)) errors.push(`${key}: unknown evidence source ${String(source)}`);
-    if (!evidence.includes("transcript")) errors.push(`${key}: evidence must include transcript`);
-    if (family.kind === "discovery") {
-      for (const source of evidence) if (PRIVATE_SOURCES.includes(source)) errors.push(`${key}: a discovery family may not read ${source}`);
-    }
-  }
-  const meters = Array.isArray(pack.meters) ? pack.meters : null;
-  if (!meters) errors.push("meters must be a list (it may be empty)");
-  else {
-    if (meters.length > 4) errors.push("at most 4 meters");
-    const meterKeys = /* @__PURE__ */ new Set();
-    for (const meter of meters) {
-      const key = String(meter?.key ?? "");
-      if (!KEY.test(key)) {
-        errors.push(`meter key "${key}" must be lowercase letters, digits and underscores`);
-        continue;
-      }
-      if (meterKeys.has(key)) errors.push(`duplicate meter ${key}`);
-      meterKeys.add(key);
-      if (!text(meter.label, 80)) errors.push(`meter ${key}: label is required`);
-      if (!text(meter.about, 300)) errors.push(`meter ${key}: about is required (up to 300 characters)`);
-      const levels = Array.isArray(meter.levels) ? meter.levels : [];
-      if (levels.length < 3 || levels.length > 7) errors.push(`meter ${key}: needs 3 to 7 levels`);
-      if (!levels.every((level) => text(level, 40))) errors.push(`meter ${key}: every level needs a short name`);
-      if (new Set(levels).size !== levels.length) errors.push(`meter ${key}: level names must be unique`);
-      if (!Number.isInteger(meter.initial) || meter.initial < 0 || meter.initial >= levels.length) errors.push(`meter ${key}: initial must be a level index`);
-    }
-  }
-  return { ok: errors.length === 0, errors };
-}
-
-// src/pipeline/spans.ts
-var MAX_SPAN_OPTIONS = 253;
-var BOUNDARY2 = /[.!?…]+["'”’)\]]*(?=\s)|\n+/g;
-function trimmed(source, start, end) {
-  while (start < end && /\s/.test(source[start])) start++;
-  while (end > start && /\s/.test(source[end - 1])) end--;
-  return end > start ? { start, end } : null;
-}
-function sentenceSpans(source) {
-  const text2 = String(source ?? "");
-  const spans = [];
-  let from = 0;
-  const push = (to) => {
-    const range = trimmed(text2, from, to);
-    if (range) spans.push({ id: `s${spans.length + 1}`, kind: "sentence", ...range, text: text2.slice(range.start, range.end) });
-    from = to;
-  };
-  for (const match of text2.matchAll(BOUNDARY2)) push(match.index + match[0].length);
-  push(text2.length);
-  return spans;
-}
-function candidateSpans(source, maxOptions = MAX_SPAN_OPTIONS) {
-  const text2 = String(source ?? "");
-  let sentences = sentenceSpans(text2);
-  if (sentences.length === 0) return [];
-  const whole = () => {
-    if (sentences.length < 2) return null;
-    const range = trimmed(text2, 0, text2.length);
-    return { id: "all", kind: "whole", ...range, text: text2.slice(range.start, range.end) };
-  };
-  const pairs = sentences.slice(1).map((next, i) => {
-    const first = sentences[i];
-    return { id: `p${i + 1}`, kind: "pair", start: first.start, end: next.end, text: text2.slice(first.start, next.end) };
-  });
-  const all = whole();
-  const full = [...sentences, ...pairs, ...all ? [all] : []];
-  if (full.length <= maxOptions) return full;
-  const withoutPairs = [...sentences, ...all ? [all] : []];
-  if (withoutPairs.length <= maxOptions) return withoutPairs;
-  sentences = sentences.slice(0, maxOptions - 1);
-  return [...sentences, ...all ? [all] : []];
-}
-var ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'", apos: "'", nbsp: " " };
-function visibleText(html) {
-  let text2 = String(html ?? "").replace(/<!--[\s\S]*?-->/g, " ").replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, " ");
-  for (let guard = 0; guard < 50 && /<details\b/i.test(text2); guard++) {
-    const next = text2.replace(/<details\b[^>]*>(?:(?!<details\b)[\s\S])*?<\/details>/gi, " ");
-    if (next === text2) break;
-    text2 = next;
-  }
-  text2 = text2.replace(/<br\s*\/?>/gi, "\n").replace(/<\/(p|div|li|h[1-6])>/gi, "\n").replace(/<[^>]+>/g, " ");
-  text2 = text2.replace(/&(amp|lt|gt|quot|#39|apos|nbsp);/g, (_, key) => ENTITIES[key] ?? "");
-  return text2.split("\n").map((line) => line.replace(/[ \t]+/g, " ").trim()).filter(Boolean).join("\n");
 }
 
 // src/pipeline/questions.ts
@@ -5052,7 +4882,7 @@ function moveQuestion(spans, pack) {
   const criteria = {};
   for (const span of spans) criteria[span.id] = span.text;
   criteria.ROUTINE = "The message does act, but everything in it is routine or effectively certain for whoever performs it; nothing needs a ruling.";
-  criteria.NONE = "No passage of the latest message contains a move to rule on.";
+  criteria.NONE = "No passage of the latest message contains a move to rule on, including out-of-character discussion or requests to pause roleplay.";
   return {
     type: "choice",
     instructions: `Using state.latestInput and the public exchange in state.recentAcceptedMessages, select the passage of the player's latest message that states the FIRST move to rule on. ${criteriaText(pack)} Prefer the shortest passage that states the whole move; choose a longer one only when the move runs across it. Choose ROUTINE when the message only contains actions that are routine or effectively certain for whoever performs them, and NONE when it contains no attempt at all. Do not invent a goal the passage does not state.`,
@@ -5176,15 +5006,22 @@ function admissibleLore(lore, discovery, maxChars) {
       withheld += 1;
       continue;
     }
-    const text2 = item.text.length > MAX_LORE_ENTRY_CHARS ? `${item.text.slice(0, MAX_LORE_ENTRY_CHARS - 1)}\u2026` : item.text;
+    const visible = visibleText(item.text);
+    const text2 = visible.length > MAX_LORE_ENTRY_CHARS ? `${visible.slice(0, MAX_LORE_ENTRY_CHARS - 1)}\u2026` : visible;
     if (used + text2.length > maxChars) {
       dropped += 1;
       continue;
     }
     used += text2.length;
-    items.push({ book: item.book, title: item.title, text: text2 });
+    items.push({ book: visibleText(item.book), title: visibleText(item.title), text: text2 });
   }
   return { items, withheld, dropped };
+}
+function visibleValues(value) {
+  if (typeof value === "string") return visibleText(value);
+  if (Array.isArray(value)) return value.map(visibleValues);
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visibleValues(item)]));
+  return value;
 }
 function judgeProjection(input) {
   const exclusions = [];
@@ -5202,9 +5039,9 @@ function judgeProjection(input) {
   const metersFor = new Set(!discovery && allows("meters") ? involved.filter((id) => input.meters?.[id]) : []);
   const actors = {};
   for (const [id, actor] of Object.entries(input.actors)) {
-    const entry = { name: actor.name, control: actor.control };
-    if (cardFor.has(id)) entry.authorialCharacterContext = actor.card;
-    if (metersFor.has(id)) entry.judgedState = input.meters[id];
+    const entry = { name: visibleText(actor.name), control: actor.control };
+    if (cardFor.has(id)) entry.authorialCharacterContext = visibleText(actor.card);
+    if (metersFor.has(id)) entry.judgedState = visibleValues(input.meters[id]);
     actors[id] = entry;
   }
   const lore = allows("lore") && input.lore?.length ? admissibleLore(input.lore, discovery, Math.min(input.maxLoreChars ?? DEFAULT_MAX_LORE_CHARS, Math.floor(input.maxChars * 0.4))) : { items: [], withheld: 0, dropped: 0 };
@@ -5213,7 +5050,7 @@ function judgeProjection(input) {
   const actorRef = (id) => {
     if (!id) return null;
     if (id === "SELF" || id === "SEVERAL" || id === "SCENE") return { id };
-    return { id, name: input.actors[id]?.name ?? id };
+    return { id, name: visibleText(input.actors[id]?.name ?? id) };
   };
   const build = (messages2) => ({
     actors,
@@ -5222,11 +5059,10 @@ function judgeProjection(input) {
       owner: actorRef(input.ownerId),
       target: actorRef(input.targetId),
       family: { key: input.family.key, label: input.family.label },
-      passage: input.move.passage,
-      antecedent: input.move.antecedent
+      passage: visibleText(input.move.passage),
+      antecedent: input.move.antecedent === null ? null : visibleText(input.move.antecedent)
     },
-    latestInput: input.latestInput,
-    ...allows("state") ? { facts: input.facts } : {},
+    latestInput: visibleText(input.latestInput),
     ...lore.items.length ? { lore: lore.items } : {},
     recentAcceptedMessages: messages2.map((m) => ({ actorId: m.actorId, role: m.role, text: visibleText(m.text) }))
   });
@@ -5243,18 +5079,133 @@ function judgeProjection(input) {
   return { state, exclusions, chars, overBudget: chars > input.maxChars };
 }
 
+// src/pacing.ts
+var SCENE_TYPES = ["combat", "conversation", "travel", "intimate", "downtime"];
+var PACING_QUESTION_IDS = ["scene", "hand_back"];
+var DYNAMIC_RESPONSE_INSTRUCTION = "Put <dynamic_response>a brief in-fiction cue</dynamic_response> on its own line at the very end of the reply. Replace the tag contents with a brief cue from the scene.";
+function pacingQuestions(handBack) {
+  const questions = {
+    scene: {
+      type: "choice",
+      instructions: "From state.latestInput and the public scene in state.recentAcceptedMessages, choose the current scene type. Describe the scene now, not a later event or an imagined transition.",
+      criteria: {
+        combat: "An immediate fight or physical clash is underway.",
+        conversation: "The scene is driven by dialogue or a social exchange.",
+        travel: "The characters are travelling or making their way somewhere.",
+        intimate: "An intimate encounter is underway.",
+        downtime: "A quiet or routine moment without an active exchange of the other kinds."
+      }
+    }
+  };
+  if (handBack) questions.hand_back = {
+    type: "choice",
+    instructions: "From state.latestInput and the public scene in state.recentAcceptedMessages, should this reply stop at the first beat where the player (state.playerActorId) must respond or act? Judge the need for the player to choose now; do not predict their response or advance time to create a choice.",
+    criteria: {
+      HAND_BACK: "The reply reaches a question, decision, offered action or immediate reaction that belongs to the player; stop at that first beat.",
+      CONTINUE: "The reply can finish its current short beat without needing the player to answer or act first."
+    }
+  };
+  return questions;
+}
+var choice = (answer) => answer?.type === "choice" ? answer.choice : null;
+function freezePacing(answers, options) {
+  const selected = choice(answers.scene);
+  const scene = SCENE_TYPES.find((value) => value === selected) ?? null;
+  const selectedHandBack = options.handBack ? choice(answers.hand_back) : null;
+  const handBack = selectedHandBack === "HAND_BACK" || selectedHandBack === "CONTINUE" ? selectedHandBack : null;
+  if (!scene && !handBack) return null;
+  const player = options.playerName || "the player";
+  const text2 = scene ? options.texts[scene].replaceAll("{{user}}", player).trim() : "";
+  const instruction = text2 ? `[Director pacing \u2014 preserve on wording swipes]
+Scene: ${scene}.
+${text2}
+Do not skip time.` : "";
+  const handBackInstruction = handBack === "HAND_BACK" ? `[Director hand-back \u2014 preserve on wording swipes]
+End this reply at the first beat where ${player} must respond or act. Leave their response and choice to them. Do not skip time.` : "";
+  return { scene, handBack, dynamicResponse: options.dynamicResponse, instruction, handBackInstruction };
+}
+function pacingBlock(pacing, handBackEnabled = true, dynamicResponseEnabled = false) {
+  if (!pacing) return "";
+  const handBack = handBackEnabled && pacing.handBack === "HAND_BACK" ? pacing.handBackInstruction.replace(`
+${DYNAMIC_RESPONSE_INSTRUCTION}`, "") : "";
+  const instruction = handBack && dynamicResponseEnabled ? `${handBack}
+${DYNAMIC_RESPONSE_INSTRUCTION}` : handBack;
+  return [pacing.instruction, instruction].filter(Boolean).join("\n\n");
+}
+
 // src/pipeline/staged.ts
 var StagedError = class extends Error {
   stage;
-  constructor(stage, message) {
+  type;
+  constructor(stage, message, type = "invalid_answers") {
     super(message);
     this.stage = stage;
+    this.type = type;
   }
 };
+function stageError(stage, error) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof StagedError) return { stage, type: error.type, message };
+  const code = error && typeof error === "object" && "code" in error ? String(error.code) : "";
+  let type = "network";
+  if (code === "refusal" || /refus(?:al|ed|e)/i.test(message)) type = "refusal";
+  else if (["timeout", "aborted"].includes(code) || /timed?\s*out|timeout|deadline|abort|wait budget.*expir/i.test(message)) type = "timeout";
+  else if (code === "too_large" || /context.*(?:budget|large|limit)|(?:budget|limit).*context/i.test(message)) type = "context_budget";
+  else if (["malformed", "truncated", "unsupported"].includes(code) || /invalid|malformed|missing.*answer/i.test(message)) type = "invalid_answers";
+  return { stage, type, message };
+}
+function validateStageAnswers(stage, questions, result) {
+  if (!result || !result.answers || typeof result.answers !== "object" || Array.isArray(result.answers) || !result.errors || typeof result.errors !== "object" || Array.isArray(result.errors) || !Array.isArray(result.unresolvedQuestionIds)) {
+    throw new StagedError(stage, "The judge returned an invalid answer batch.");
+  }
+  const answers = {};
+  const errors = {};
+  const failures = [];
+  const unknownErrors = Object.keys(result.errors).filter((id) => !Object.hasOwn(questions, id));
+  const batchError = unknownErrors.length ? unknownErrors.map((id) => result.errors[id]).join("; ") : null;
+  for (const [id, question] of Object.entries(questions)) {
+    const raw = result.answers[id];
+    const validation = validateAnswer(question, raw, raw?.provenance ?? "model_reported");
+    const reason = batchError ?? result.errors[id] ?? (result.unresolvedQuestionIds.includes(id) ? "The answer was unresolved." : null) ?? (validation.ok ? null : validation.error);
+    if (reason !== null) {
+      errors[id] = reason;
+      const failure = stageError(stage, reason);
+      if (failure.type === "network") failure.type = "invalid_answers";
+      failures.push({ ...failure, message: `${id}: ${reason}`, questionId: id });
+    } else if (validation.ok) answers[id] = validation.answer;
+  }
+  return { result: { ...result, answers, errors, unresolvedQuestionIds: Object.keys(errors) }, errors: failures };
+}
+async function evaluateStageWithReplay(stage, questions, state, replay, evaluate) {
+  const frozen = {};
+  let source;
+  for (const record of replay ?? []) {
+    if (record.stage !== stage && !(stage === "pacing" && record.stage === "speaker")) continue;
+    for (const [id, question] of Object.entries(questions)) {
+      if (JSON.stringify(record.questions[id]) !== JSON.stringify(question) || record.result.errors[id] || record.result.unresolvedQuestionIds.includes(id)) continue;
+      const answer = record.result.answers[id];
+      const validated = validateAnswer(question, answer, answer?.provenance ?? "model_reported");
+      if (validated.ok) {
+        frozen[id] = validated.answer;
+        source = record.result;
+      }
+    }
+  }
+  const pending = Object.fromEntries(Object.entries(questions).filter(([id]) => !Object.hasOwn(frozen, id)));
+  if (!source) return evaluate(stage, questions, state);
+  if (!Object.keys(pending).length) return { ...source, answers: frozen, errors: {}, unresolvedQuestionIds: [], inputTokens: null, outputTokens: null, durationMs: 0, transportAttempts: 0 };
+  try {
+    const fresh = await evaluate(stage, pending, state);
+    return { ...fresh, answers: { ...fresh.answers, ...frozen } };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { ...source, answers: frozen, errors: Object.fromEntries(Object.keys(pending).map((id) => [id, message])), unresolvedQuestionIds: Object.keys(pending), inputTokens: null, outputTokens: null, durationMs: 0, transportAttempts: 0 };
+  }
+}
 var MAX_ANTECEDENTS = 60;
 function publicState(input) {
   const actors = {};
-  for (const [id, actor] of Object.entries(input.actors)) actors[id] = { name: actor.name, control: actor.control };
+  for (const [id, actor] of Object.entries(input.actors)) actors[id] = { name: visibleText(actor.name), control: actor.control };
   const build = (messages2) => ({
     actors,
     playerActorId: input.playerId,
@@ -5276,15 +5227,26 @@ function antecedentCandidates(input) {
 }
 var choiceOf = (answer) => answer?.type === "choice" ? answer.choice : null;
 async function runStaged(input, env) {
+  input = { ...input, latestInput: stripOutOfCharacterSegments(visibleText(input.latestInput)) };
   const records = [];
-  const out = { outcome: "no_move", records, speakerAnswer: null, reactionAnswers: {}, move: null, route: null, antecedentText: null, ruling: null };
+  const out = { outcome: "no_move", records, errors: [], speakerAnswer: null, reactionAnswers: {}, pacing: null, move: null, route: null, antecedentText: null, ruling: null };
   const call = async (stage, questions, state) => {
-    const result = await env.evaluate(stage, questions, state);
-    records.push({ stage, questions, state, result });
-    return result;
+    try {
+      if (JSON.stringify(state).length > input.maxChars) throw new StagedError(stage, "The judge context exceeds its character budget.", "context_budget");
+      if (Object.keys(questions).length > 16) throw new StagedError(stage, "The judge request exceeds 16 questions.");
+      const validated = validateStageAnswers(stage, questions, await evaluateStageWithReplay(stage, questions, state, input.replay, env.evaluate));
+      records.push({ stage, questions, state, result: validated.result });
+      out.errors.push(...validated.errors.map((failure) => failure.questionId && PACING_QUESTION_IDS.includes(failure.questionId) ? { ...failure, stage: "pacing" } : failure));
+      return validated.result;
+    } catch (error) {
+      out.errors.push(stageError(stage, error));
+      return null;
+    }
   };
   const shared = publicState(input);
-  const spans = input.modules.decisions ? candidateSpans(input.latestInput) : [];
+  const ooc = !input.latestInput.trim();
+  const manual = input.modules.decisions && !ooc ? input.manual : void 0;
+  const spans = input.modules.decisions && !manual && !ooc ? candidateSpans(input.latestInput) : [];
   const aQuestions = {};
   if (input.modules.decisions && spans.length > 0) {
     aQuestions.move = moveQuestion(spans, input.pack);
@@ -5298,35 +5260,78 @@ async function runStaged(input, env) {
       aQuestions[id] = question2;
     });
   }
-  const [speakerResult, aResult] = await Promise.all([
-    input.modules.speaker && input.speakerQuestion ? call("speaker", { speaker: input.speakerQuestion }, shared) : Promise.resolve(null),
-    Object.keys(aQuestions).length ? call("move", aQuestions, shared) : Promise.resolve(null)
+  const entries2 = Object.entries(aQuestions);
+  const batches = [];
+  for (let i = 0; i < entries2.length; i += 16) batches.push(Object.fromEntries(entries2.slice(i, i + 16)));
+  const sQuestions = {};
+  if (input.modules.speaker && input.speakerQuestion) sQuestions.speaker = input.speakerQuestion;
+  if (input.pacing) Object.assign(sQuestions, pacingQuestions(input.pacing.handBack));
+  const [speakerResult, ...aResults] = await Promise.all([
+    Object.keys(sQuestions).length ? call(sQuestions.speaker ? "speaker" : "pacing", sQuestions, shared) : Promise.resolve(null),
+    ...batches.map((questions) => call("move", questions, shared))
   ]);
   if (speakerResult) out.speakerAnswer = speakerResult.answers.speaker ?? null;
-  if (aResult) {
-    for (const [questionId, npcId] of reactionIds) if (aResult.answers[questionId]) out.reactionAnswers[npcId] = aResult.answers[questionId];
+  if (speakerResult && input.pacing) out.pacing = freezePacing(speakerResult.answers, input.pacing);
+  for (const result of aResults) if (result) {
+    for (const [questionId, npcId] of reactionIds) if (result.answers[questionId]) out.reactionAnswers[npcId] = result.answers[questionId];
   }
-  if (!aResult || !aQuestions.move) return out;
-  const selected = choiceOf(aResult.answers.move);
-  if (!selected) throw new StagedError("move", `move selection returned no valid answer (${aResult.errors.move ?? "missing"})`);
-  if (selected === "NONE" || selected === "ROUTINE") return out;
-  const span = spans.find((s) => s.id === selected);
-  if (!span) throw new StagedError("move", `move selection returned an unknown passage ${selected}`);
-  const count = choiceOf(aResult.answers.move_count);
-  out.move = { span, count: count === "one" || count === "multiple" ? count : null };
   const npcIds = Object.keys(input.actors).filter((id) => id !== input.playerId);
-  const actorNames = { [input.playerId]: input.actors[input.playerId]?.name ?? input.playerId };
-  for (const id of npcIds) actorNames[id] = input.actors[id].name;
-  const antecedents = antecedentCandidates(input);
-  const routeState = { ...shared, move: { passage: span.text } };
-  const bResult = await call("route", routeQuestions({ actorNames, playerId: input.playerId, pack: input.pack, antecedents }), routeState);
-  const route = deriveRoute({
-    owner: choiceOf(bResult.answers.owner),
-    target: choiceOf(bResult.answers.target),
-    family: choiceOf(bResult.answers.family),
-    specification: choiceOf(bResult.answers.action_specification),
-    antecedent: choiceOf(bResult.answers.antecedent)
-  }, { playerId: input.playerId, npcIds, pack: input.pack });
+  let span;
+  let route;
+  let antecedents = [];
+  if (manual) {
+    const text2 = visibleText(manual.text);
+    const validTarget = manual.targetId === null || ["SELF", "SEVERAL", "SCENE"].includes(manual.targetId) || Object.hasOwn(input.actors, manual.targetId);
+    if (!text2 || !Object.hasOwn(input.actors, manual.ownerId) || !validTarget || !familyByKey(input.pack, manual.familyKey)) {
+      out.outcome = "unruled";
+      out.errors.push({ stage: "route", type: "invalid_answers", message: "The manual move has no valid text, owner, target or family." });
+      return out;
+    }
+    span = { id: "manual", kind: "whole", text: text2, start: 0, end: text2.length };
+    out.move = { span, count: "one" };
+    route = deriveRoute({ owner: manual.ownerId, target: manual.targetId ?? "UNRESOLVED", family: manual.familyKey, specification: "SPECIFIED_HERE", antecedent: "NONE" }, { playerId: input.playerId, npcIds, pack: input.pack });
+  } else {
+    if (!aQuestions.move) return out;
+    const aResult = aResults[0];
+    if (!aResult) {
+      out.outcome = "unruled";
+      return out;
+    }
+    const selected = choiceOf(aResult.answers.move);
+    if (!selected) {
+      out.outcome = "unruled";
+      return out;
+    }
+    if (selected === "NONE" || selected === "ROUTINE") return out;
+    const selectedSpan = spans.find((s) => s.id === selected);
+    if (!selectedSpan) {
+      out.outcome = "unruled";
+      return out;
+    }
+    span = selectedSpan;
+    const count = choiceOf(aResult.answers.move_count);
+    out.move = { span, count: count === "one" || count === "multiple" ? count : null };
+    if (!out.move.count) {
+      out.outcome = "unruled";
+      return out;
+    }
+    const actorNames = { [input.playerId]: visibleText(input.actors[input.playerId]?.name ?? input.playerId) };
+    for (const id of npcIds) actorNames[id] = visibleText(input.actors[id].name);
+    antecedents = antecedentCandidates(input);
+    const routeState = { ...shared, move: { passage: span.text } };
+    const bResult = await call("route", routeQuestions({ actorNames, playerId: input.playerId, pack: input.pack, antecedents }), routeState);
+    if (!bResult) {
+      out.outcome = "unruled";
+      return out;
+    }
+    route = deriveRoute({
+      owner: choiceOf(bResult.answers.owner),
+      target: choiceOf(bResult.answers.target),
+      family: choiceOf(bResult.answers.family),
+      specification: choiceOf(bResult.answers.action_specification),
+      antecedent: choiceOf(bResult.answers.antecedent)
+    }, { playerId: input.playerId, npcIds, pack: input.pack });
+  }
   out.route = route;
   out.antecedentText = route.antecedentId ? antecedents.find((a) => a.id === route.antecedentId)?.text ?? null : null;
   if (route.route === "UNRULED") {
@@ -5338,10 +5343,15 @@ async function runStaged(input, env) {
     return out;
   }
   const family = familyByKey(input.pack, route.familyKey);
-  const [meters, lore] = await Promise.all([
-    input.meters ? input.meters() : Promise.resolve(void 0),
-    input.lore ? input.lore() : Promise.resolve(void 0)
-  ]);
+  const optionalEvidence = async (stage, read) => {
+    try {
+      return await read?.();
+    } catch (error) {
+      out.errors.push(stageError(stage, error));
+      return void 0;
+    }
+  };
+  const [meters, lore] = await Promise.all([optionalEvidence("state", input.meters), optionalEvidence("lore", input.lore)]);
   const projection = judgeProjection({
     pack: input.pack,
     family,
@@ -5351,7 +5361,6 @@ async function runStaged(input, env) {
     actors: input.actors,
     transcript: input.transcript,
     latestInput: input.latestInput,
-    facts: input.facts,
     move: { passage: span.text, antecedent: out.antecedentText },
     meters,
     lore,
@@ -5360,17 +5369,484 @@ async function runStaged(input, env) {
   });
   const question = rulingQuestion({ family, pack: input.pack, hasAntecedent: out.antecedentText !== null });
   const eResult = await call("ruling", { ruling: question }, projection.state);
-  const answer = eResult.answers.ruling;
-  if (!answer || answer.type !== "noul") throw new StagedError("ruling", `the ruling returned no valid probability (${eResult.errors.ruling ?? "missing"})`);
+  const answer = eResult?.answers.ruling;
+  if (!answer || answer.type !== "noul") {
+    out.outcome = "unruled";
+    return out;
+  }
   out.ruling = { answer, question, projection };
   out.outcome = "ruled";
   return out;
 }
 
+// src/director-tool.ts
+var DIRECTOR_TOOL_NAME = "RPDirector_AdjudicateTurn";
+var MAX_PLANNED_ACTIONS = 3;
+var DIRECTOR_TOOL_DESCRIPTION = [
+  "Adjudicate newly planned uncertain, consequential NPC actions before narrating their results.",
+  "WHEN: your selected character plans an action that can fail and changes the scene: forcing a door, evading an attack, concealing an item, detecting a clue, persuading someone to perform a bounded act, or taking possession.",
+  "SKIP: ordinary dialogue, reactions, trivial or established actions, and the player attempt already resolved by the Director pre-pass.",
+  "Use the frozen actor IDs and evidence references in the Director context. Supply a concrete method, one objective result and bounded failure stakes per action; at most three independent actions in one call.",
+  "You may use the model's normal reasoning before calling, but never put reasoning, a thinking trace, drafted prose, invented rolls or predicted outcomes in the arguments. Do not narrate a result before the tool returns.",
+  "The tool may show its results for review before returning. Its returned permit is authoritative for this attempt. Then write the final reply, obeying the permit; no further Director call, no extra consequential action, and no Director permits, IDs, JSON or other Director metadata. A preset-required fictional tracker block is fine.",
+  "Feelings, attraction, consent, trust and permanent attitudes are not mechanical rewards. Leave the player's voluntary response open."
+].join("\n");
+var FAMILIES = [
+  "overcome_operate",
+  "contest_impose",
+  "evade_resist",
+  "conceal_deceive",
+  "detect_discover",
+  "influence_negotiate",
+  "acquire_secure"
+];
+var STAKES = [
+  "delay",
+  "exposure",
+  "injury",
+  "lost_position",
+  "resource_cost",
+  "relationship_friction",
+  "closed_opportunity",
+  "other"
+];
+var PSYCHOLOGICAL_RESULT = /\b(feel(?:s|ing)?|love|loves|attract(?:ed|ion)?|affection|consent(?:s|ed)?|trust(?:s|ed)?|loyal(?:ty)?|permanent(?:ly)?\s+(?:likes?|hates?|attitude)|fall(?:s|ing)?\s+in\s+love)\b/i;
+function object4(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function exactKeys(value, allowed) {
+  const set = new Set(allowed);
+  return Object.keys(value).find((key) => !set.has(key)) ?? null;
+}
+function boundedText(value, label, max) {
+  if (typeof value !== "string") return { ok: false, message: `${label} must be a string` };
+  const text2 = visibleText(value).replace(/\s+/g, " ").trim();
+  if (!text2) return { ok: false, message: `${label} must not be empty` };
+  if (text2.length > max) return { ok: false, message: `${label} exceeds ${max} characters` };
+  return { ok: true, value: text2 };
+}
+function validateTurnProposal(raw, ctx) {
+  const root = object4(raw);
+  if (!root || root.schemaVersion !== 1 || !Array.isArray(root.actions)) {
+    return { ok: false, code: "malformed", message: "Expected schemaVersion 1 and an actions array." };
+  }
+  const rootUnknown = exactKeys(root, ["schemaVersion", "requestId", "attemptId", "speakerActorId", "actions"]);
+  if (rootUnknown) return { ok: false, code: "unknown_field", message: `Unknown proposal field ${rootUnknown}. Draft prose is not accepted.` };
+  if (root.requestId !== ctx.requestId) return { ok: false, code: "wrong_request", message: "The tool request does not match the active writer request." };
+  if (root.attemptId !== ctx.attemptId) return { ok: false, code: "wrong_attempt", message: "The proposal does not match the active generation attempt." };
+  if (root.speakerActorId !== ctx.speakerActorId) return { ok: false, code: "speaker_mismatch", message: "The writer may not change the frozen reply speaker." };
+  if (root.actions.length === 0) return { ok: false, code: "no_actions", message: "Do not call the tool when no new consequential NPC action is planned." };
+  if (root.actions.length > MAX_PLANNED_ACTIONS) return { ok: false, code: "too_many_actions", message: `At most ${MAX_PLANNED_ACTIONS} planned NPC actions may be adjudicated in one turn.` };
+  const actorIds = new Set(ctx.knownActorIds);
+  const evidence = new Set(ctx.allowedEvidenceRefs);
+  const proposalIds = /* @__PURE__ */ new Set();
+  const actions = [];
+  for (let index = 0; index < root.actions.length; index++) {
+    const item = object4(root.actions[index]);
+    if (!item) return { ok: false, code: "invalid_action", message: `Action ${index + 1} must be an object.` };
+    const unknown = exactKeys(item, ["proposalId", "actingActorId", "targetActorIds", "family", "method", "boundedResult", "failureStake", "opposed", "evidenceRefs"]);
+    if (unknown) return { ok: false, code: "unknown_field", message: `Unknown action field ${unknown}. Full draft text is not accepted.` };
+    const proposalId = boundedText(item.proposalId, `actions[${index}].proposalId`, 80);
+    const method = boundedText(item.method, `actions[${index}].method`, 280);
+    const result = boundedText(item.boundedResult, `actions[${index}].boundedResult`, 240);
+    if (!proposalId.ok || !method.ok || !result.ok) {
+      return { ok: false, code: "invalid_action", message: !proposalId.ok ? proposalId.message : !method.ok ? method.message : result.message };
+    }
+    if (proposalIds.has(proposalId.value)) return { ok: false, code: "duplicate_proposal", message: `Duplicate proposalId ${proposalId.value}.` };
+    proposalIds.add(proposalId.value);
+    if (typeof item.actingActorId !== "string" || !actorIds.has(item.actingActorId)) return { ok: false, code: "unknown_actor", message: `Action ${proposalId.value} has an unknown acting actor.` };
+    if (item.actingActorId !== ctx.speakerActorId) return { ok: false, code: "speaker_mismatch", message: "Newly planned actions must be performed by the frozen reply speaker." };
+    if (!Array.isArray(item.targetActorIds) || item.targetActorIds.some((id) => typeof id !== "string" || !actorIds.has(id))) {
+      return { ok: false, code: "unknown_actor", message: `Action ${proposalId.value} contains an unknown target actor.` };
+    }
+    const targets = [...item.targetActorIds].sort();
+    if (new Set(targets).size !== targets.length) return { ok: false, code: "duplicate_target", message: `Action ${proposalId.value} repeats a target actor.` };
+    if (typeof item.family !== "string" || !FAMILIES.includes(item.family)) return { ok: false, code: "invalid_action", message: `Action ${proposalId.value} has an unknown family.` };
+    if (typeof item.opposed !== "boolean") return { ok: false, code: "invalid_action", message: `Action ${proposalId.value} must declare whether it is opposed.` };
+    if (!Array.isArray(item.evidenceRefs) || item.evidenceRefs.length > 8 || item.evidenceRefs.some((ref) => typeof ref !== "string" || !evidence.has(ref))) {
+      return { ok: false, code: "unknown_evidence", message: `Action ${proposalId.value} references evidence outside the frozen snapshot.` };
+    }
+    if (new Set(item.evidenceRefs).size !== item.evidenceRefs.length) return { ok: false, code: "unknown_evidence", message: `Action ${proposalId.value} repeats an evidence reference.` };
+    const stake = object4(item.failureStake);
+    if (!stake || exactKeys(stake, ["kind", "detail"])) return { ok: false, code: "invalid_action", message: `Action ${proposalId.value} has an invalid failureStake.` };
+    if (typeof stake.kind !== "string" || !STAKES.includes(stake.kind)) return { ok: false, code: "invalid_action", message: `Action ${proposalId.value} has an unknown failure stake.` };
+    const detail = boundedText(stake.detail, `actions[${index}].failureStake.detail`, 240);
+    if (!detail.ok) return { ok: false, code: "invalid_action", message: detail.message };
+    if (PSYCHOLOGICAL_RESULT.test(result.value)) return { ok: false, code: "forbidden_result", message: `Action ${proposalId.value} tries to author feelings, consent, trust, or permanent attitude.` };
+    if (/\n|;|\band\s+then\b/i.test(String(item.boundedResult))) return { ok: false, code: "unbounded_result", message: `Action ${proposalId.value} must name one bounded state change.` };
+    actions.push({
+      proposalId: proposalId.value,
+      actingActorId: item.actingActorId,
+      targetActorIds: targets,
+      family: item.family,
+      method: method.value,
+      boundedResult: result.value,
+      failureStake: { kind: stake.kind, detail: detail.value },
+      opposed: item.opposed,
+      evidenceRefs: [...item.evidenceRefs]
+    });
+  }
+  return {
+    ok: true,
+    proposal: {
+      schemaVersion: 1,
+      requestId: ctx.requestId,
+      attemptId: ctx.attemptId,
+      speakerActorId: ctx.speakerActorId,
+      actions
+    }
+  };
+}
+var TURN_PROPOSAL_SCHEMA = {
+  $schema: "http://json-schema.org/draft-04/schema#",
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    schemaVersion: { type: "integer", enum: [1] },
+    requestId: { type: "string" },
+    attemptId: { type: "string" },
+    speakerActorId: { type: "string" },
+    actions: {
+      type: "array",
+      maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          proposalId: { type: "string", description: "Short unique id for this proposed action." },
+          actingActorId: { type: "string" },
+          targetActorIds: { type: "array", items: { type: "string" } },
+          family: { type: "string", enum: [...FAMILIES] },
+          method: { type: "string", description: "Concrete method, not draft prose." },
+          boundedResult: { type: "string", description: "One objective immediate state change; never feelings, consent, trust, or permanent attitude." },
+          failureStake: {
+            type: "object",
+            additionalProperties: false,
+            properties: { kind: { type: "string", enum: [...STAKES] }, detail: { type: "string" } },
+            required: ["kind", "detail"]
+          },
+          opposed: { type: "boolean" },
+          evidenceRefs: { type: "array", items: { type: "string" } }
+        },
+        required: ["proposalId", "actingActorId", "targetActorIds", "family", "method", "boundedResult", "failureStake", "opposed", "evidenceRefs"]
+      }
+    }
+  },
+  required: ["schemaVersion", "requestId", "attemptId", "speakerActorId", "actions"]
+};
+function plannedQuestion(action, path, score) {
+  const common = `Assess only ${path}. Use its method, boundedResult, failureStake, opposed flag, and evidenceRefs against the frozen pre-action scene. The proposal is not evidence of success. Never manufacture feelings, attraction, consent, trust, love, or permanent attitude change.`;
+  if (score) {
+    return {
+      type: "score",
+      instructions: common,
+      criteria: [
+        "Established evidence strongly opposes the bounded result.",
+        "Support is weak; an important capability, cue, condition, or leverage is missing.",
+        "Mixed or incomplete support; only limited progress is justified.",
+        "Strong concrete support for the bounded result now.",
+        "Established facts make the bounded result clearly justified now."
+      ]
+    };
+  }
+  return {
+    type: "noul",
+    instructions: `${common} Does ${action.actingActorId} achieve the one bounded result now through the stated method?`,
+    criteria: { true: "Established evidence supports the bounded result now.", false: "Established evidence does not support the bounded result now." }
+  };
+}
+function publicToolEvidence(value, names) {
+  const base = object4(value) ?? {};
+  const actors = Object.fromEntries(Object.entries(names).map(([id, name]) => [id, { name: visibleText(name) }]));
+  for (const [id, raw] of Object.entries(object4(base.actors) ?? {})) {
+    const actor = object4(raw);
+    if (!actor) continue;
+    actors[id] = {
+      ...object4(actors[id]) ?? {},
+      ...typeof actor.name === "string" ? { name: visibleText(actor.name) } : {},
+      ...actor.control === "user" || actor.control === "npc" ? { control: actor.control } : {}
+    };
+  }
+  const recentAcceptedMessages = [];
+  for (const raw of Array.isArray(base.recentAcceptedMessages) ? base.recentAcceptedMessages : []) {
+    const message = object4(raw);
+    if (!message || !["user", "assistant"].includes(String(message.role)) || typeof message.text !== "string") continue;
+    recentAcceptedMessages.push({
+      role: String(message.role),
+      text: visibleText(message.text),
+      ...typeof message.actorId === "string" ? { actorId: message.actorId } : {},
+      ...typeof message.speaker === "string" ? { speaker: visibleText(message.speaker) } : {}
+    });
+  }
+  return {
+    actors,
+    recentAcceptedMessages,
+    latestInput: typeof base.latestInput === "string" ? visibleText(base.latestInput) : "",
+    ...typeof base.playerActorId === "string" ? { playerActorId: base.playerActorId } : {}
+  };
+}
+async function adjudicateTurnProposal(input) {
+  const safeProposal = {
+    schemaVersion: 1,
+    requestId: input.proposal.requestId,
+    attemptId: input.proposal.attemptId,
+    speakerActorId: input.proposal.speakerActorId,
+    actions: input.proposal.actions.map((action) => ({
+      proposalId: visibleText(action.proposalId),
+      actingActorId: action.actingActorId,
+      targetActorIds: [...action.targetActorIds],
+      family: action.family,
+      method: visibleText(action.method),
+      boundedResult: visibleText(action.boundedResult),
+      opposed: action.opposed,
+      evidenceRefs: [...action.evidenceRefs],
+      failureStake: { kind: action.failureStake.kind, detail: visibleText(action.failureStake.detail) }
+    }))
+  };
+  if (safeProposal.actions.some((action) => !action.method || !action.boundedResult || !action.failureStake.detail)) throw new StagedError("ruling", "A planned action has no visible method, result or failure stake.");
+  const plannedActions = {};
+  const questions = {};
+  for (const [index, action] of safeProposal.actions.entries()) {
+    plannedActions[action.proposalId] = action;
+    questions[`planned_${index + 1}`] = plannedQuestion(action, `state.plannedActions.${action.proposalId}`, input.profile.drivingQuestionId === "gain_score");
+  }
+  if (Object.keys(questions).length > Math.min(16, input.profile.budgets.maxQuestions)) throw new StagedError("ruling", "Planned action batch exceeds the question budget.");
+  const base = publicToolEvidence(input.snapshot.state, input.actorNames);
+  const publicSnapshot = { ...input.snapshot, state: base };
+  const snapshot = { ...publicSnapshot, state: { ...base, plannedActions } };
+  const contextCharacters = JSON.stringify(snapshot.state).length;
+  if (contextCharacters > input.profile.budgets.maxSerializedCharacters) {
+    throw new StagedError("ruling", `Planned action context exceeds the limit (${contextCharacters}/${input.profile.budgets.maxSerializedCharacters} characters). No decision was requested.`, "context_budget");
+  }
+  const checked = validateStageAnswers("ruling", questions, await input.provider.evaluate({ requestId: newId("req"), phase: "guide", snapshot, questions }, input.signal));
+  if (checked.errors.length) throw new StagedError("ruling", checked.errors.map((error) => error.message).join("; "), checked.errors[0].type);
+  const evaluation = checked.result;
+  const actions = [];
+  for (const [index, proposal] of safeProposal.actions.entries()) {
+    const questionId = `planned_${index + 1}`;
+    const answer = evaluation.answers[questionId];
+    if (!answer) throw new Error(`No valid assessment for ${proposal.proposalId}: ${evaluation.errors[questionId] ?? "missing"}`);
+    const signal = normaliseSignal(answer);
+    if (!signal.ok) throw new Error(`Invalid assessment for ${proposal.proposalId}: ${signal.error}`);
+    const draw = input.profile.resolutionMethod === "sample" ? randomDraw().u : null;
+    const resolved = resolveOutcome({ bands: input.profile.bands, outcomes: input.profile.outcomes, method: input.profile.resolutionMethod, signal: signal.signal, draw });
+    if (!resolved.ok) throw new Error(`Could not resolve ${proposal.proposalId}: ${resolved.error}`);
+    const target = proposal.targetActorIds.map((id) => input.actorNames[id] ?? id).join(" and ") || "the immediate obstacle";
+    const instruction = fillPlaceholders(resolved.value.def.instruction, {
+      gain: proposal.boundedResult,
+      action: proposal.method,
+      target,
+      player: input.playerName,
+      speaker: input.actorNames[input.proposal.speakerActorId] ?? input.proposal.speakerActorId
+    }).trim();
+    actions.push({
+      proposalId: proposal.proposalId,
+      resolutionId: newId("res"),
+      actingActorId: proposal.actingActorId,
+      targetActorIds: proposal.targetActorIds,
+      family: proposal.family,
+      method: proposal.method,
+      boundedResult: proposal.boundedResult,
+      failureStake: proposal.failureStake,
+      opposed: proposal.opposed,
+      outcome: resolved.value.outcome,
+      instruction,
+      recordedValue: resolved.value.def.records,
+      finalForScope: resolved.value.def.final,
+      scope: "attempt",
+      assessment: structuredClone(answer),
+      draw: resolved.value.draw,
+      methodUsed: input.profile.resolutionMethod,
+      policyBand: structuredClone(resolved.value.band),
+      outcomeDefinition: structuredClone(resolved.value.def)
+    });
+  }
+  const permit = {
+    schemaVersion: 1,
+    permitId: newId("permit"),
+    attemptId: input.proposal.attemptId,
+    speakerActorId: input.proposal.speakerActorId,
+    baseCursor: input.snapshot.cursorBefore,
+    stateRevision: input.snapshot.stateRevision,
+    actions,
+    compactState: {
+      sceneId: 0,
+      revision: input.snapshot.stateRevision
+    },
+    constraints: [
+      "Write the final reply directly; do not call RPDirector_AdjudicateTurn again.",
+      "Apply only these attempt-scoped rulings. Do not invent another unresolved consequential action.",
+      "Do not output Director data or metadata such as permits, rulings, request IDs, actor IDs, evidence references, or JSON. This does not prohibit a preset-required fictional tracker block.",
+      `Do not author ${input.playerName}'s voluntary actions, speech, thoughts, feelings, consent, or decisions.`
+    ],
+    createdAt: input.now ?? Date.now(),
+    proposal: structuredClone(safeProposal),
+    snapshot: structuredClone(publicSnapshot),
+    profile: structuredClone(input.profile)
+  };
+  return { permit, evaluation, snapshot, questions };
+}
+function toolPlanningBlock(input) {
+  if (!input.toolAvailable) {
+    return "[Director NPC-action boundary]\nFunction tools are unavailable on this writer backend. Write the final prose directly. You may react, apply established capabilities, or set up pressure, but leave any newly invented uncertain consequential NPC action unresolved.";
+  }
+  return [
+    "[Director NPC-action checkpoint]",
+    "Write the final prose directly unless you newly plan an uncertain consequential NPC action whose result would change fictional state.",
+    `Before any prose for such an action, call ${DIRECTOR_TOOL_NAME} once with schemaVersion 1, requestId ${input.requestId}, attemptId ${input.attemptId}, and speakerActorId ${input.speakerActorId}.`,
+    `Allowed evidenceRefs: ${JSON.stringify(input.evidenceRefs)}.`,
+    `Submit at most ${MAX_PLANNED_ACTIONS} actions. Give only actor IDs, targets, family, concrete method, one bounded objective result, bounded failure stake, opposition, and evidence refs. Never include draft prose.`,
+    "If no newly invented uncertain consequential NPC action is needed, do not call the tool. Do not roll dice before a permit is returned.",
+    "Normal model reasoning may precede the tool call. Send only the bounded proposal, never your thinking trace or draft. If review is enabled, the user keeps or rerolls the results before the tool returns; otherwise the results apply automatically."
+  ].join("\n");
+}
+function permitFollowupBlock(permit, failure = null) {
+  if (!permit) {
+    return `[Director tool result]
+The proposal was not permitted${failure ? `: ${failure}` : "."} Write the final reply without resolving any newly invented uncertain consequential NPC action. Do not call the tool again.`;
+  }
+  return [
+    "[Director turn permit \u2014 binding for this reply]",
+    JSON.stringify(writerPermit(permit)),
+    "Now write the final reply. Obey every permitted outcome and constraint. Do not call the tool again, add another consequential action, or emit Director permits, IDs, JSON, or other Director metadata."
+  ].join("\n");
+}
+function writerPermit(permit) {
+  const { proposal: _proposal, snapshot: _snapshot, profile: _profile, reviewHistory: _history, replayTrimmed: _trimmed, ...result } = permit;
+  return result;
+}
+
+// src/roll-review.ts
+function rerollPermit(previous, profile, names, playerName, draw = () => randomDraw().u) {
+  if (profile.resolutionMethod !== "sample") throw new Error("Threshold outcomes require reassessment, not a random reroll.");
+  const permit = structuredClone(previous);
+  permit.previousPermitId = previous.permitId;
+  permit.permitId = newId("permit");
+  permit.createdAt = Date.now();
+  delete permit.reviewedAt;
+  permit.actions = previous.actions.map((action) => {
+    if (!action.assessment) throw new Error("This legacy permit has no stored assessment for a reroll.");
+    const signal = normaliseSignal(action.assessment);
+    if (!signal.ok) throw new Error(signal.error);
+    const result = resolveOutcome({ bands: profile.bands, outcomes: profile.outcomes, method: "sample", signal: signal.signal, draw: draw() });
+    if (!result.ok) throw new Error(result.error);
+    return {
+      ...structuredClone(action),
+      resolutionId: newId("res"),
+      outcome: result.value.outcome,
+      instruction: fillPlaceholders(result.value.def.instruction, {
+        gain: action.boundedResult,
+        action: action.method,
+        target: action.targetActorIds.map((id) => names[id] ?? id).join(" and ") || "the immediate obstacle",
+        player: playerName,
+        speaker: names[previous.speakerActorId] ?? previous.speakerActorId
+      }),
+      recordedValue: result.value.def.records,
+      finalForScope: result.value.def.final,
+      draw: result.value.draw,
+      policyBand: structuredClone(result.value.band),
+      outcomeDefinition: structuredClone(result.value.def)
+    };
+  });
+  return permit;
+}
+async function reviewPermit(input) {
+  let permit = structuredClone(input.initial);
+  while (!input.signal.aborted && input.isCurrent()) {
+    const choice2 = await input.choose(structuredClone(permit));
+    if (choice2 === "cancel" || input.signal.aborted || !input.isCurrent()) return null;
+    if (choice2 === "keep") return permit;
+    permit = await input.reroll(permit);
+  }
+  return null;
+}
+
+// src/workflow.ts
+var JudgeWaitBudget = class extends Error {
+  code = "timeout";
+  constructor() {
+    super("The judge wait budget expired");
+  }
+};
+function withinBudget(work, signal) {
+  return new Promise((resolve, reject) => {
+    const aborted = () => {
+      cleanup();
+      reject(signal.reason ?? new Error("cancelled"));
+    };
+    const cleanup = () => signal.removeEventListener("abort", aborted);
+    work.then((value) => {
+      cleanup();
+      if (!signal.aborted) resolve(value);
+    }, (error) => {
+      cleanup();
+      reject(error);
+    });
+    if (signal.aborted) aborted();
+    else signal.addEventListener("abort", aborted, { once: true });
+  });
+}
+function visibleJudgeData(value) {
+  if (typeof value === "string") return visibleText(value);
+  if (Array.isArray(value)) return value.map((item) => visibleJudgeData(item));
+  if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visibleJudgeData(item)]));
+  return value;
+}
+
+// src/reply-check.ts
+function replyCheckRuling(binding, permit) {
+  return [binding ? bindingBlock(binding) : "", permit ? permitFollowupBlock(permit) : ""].filter(Boolean).join("\n\n");
+}
+function replyCheckState(input) {
+  const state = {
+    player: visibleText(input.player),
+    latest_input: visibleText(input.latestInput),
+    previous_replies: input.previousReplies.slice(-5).map((reply) => ({ name: visibleText(reply.name), text: visibleText(reply.text) })),
+    reply: { name: visibleText(input.reply.name), text: visibleText(input.reply.text) }
+  };
+  while (state.previous_replies.length && JSON.stringify(state).length > input.maxChars) state.previous_replies.shift();
+  return state;
+}
+function replyCheckQuestions(player, ruling) {
+  const questions = {
+    speaks_for_user: { type: "score", instructions: `Does the latest reply invent voluntary speech, thoughts, feelings, consent, decisions or actions for ${player}? Effects imposed by another character are not voluntary actions.`, criteria: ["None", "Minor implication", "Ambiguous", "Clear invented choice", "Extensive control"] },
+    responds: { type: "score", instructions: `Does the latest reply respond to ${player}'s latest message?`, criteria: ["Ignores it", "Partly responds", "Directly responds"] },
+    repeats: { type: "score", instructions: "Does the latest reply repeat the same prose, actions or conversational beat from the previous five replies without meaningful development?", criteria: ["No repetition", "Small overlap", "Some repeated beats", "Mostly repeated", "Almost entirely repeated"] }
+  };
+  if (ruling) questions.follows_ruling = { type: "noul", instructions: `The reply delivers this frozen outcome, including its boundaries:
+${ruling}` };
+  return questions;
+}
+function assessReply(answers, thresholds, previous) {
+  const score = (id, max) => {
+    const answer = answers[id];
+    return answer?.type === "score" && Number.isFinite(answer.score) && answer.score >= 0 && answer.score <= max ? answer.score : null;
+  };
+  const follows = answers.follows_ruling;
+  const result = {
+    speaksForUser: score("speaks_for_user", 4),
+    responds: score("responds", 2),
+    repeats: score("repeats", 4),
+    followsRuling: follows?.type === "noul" && Number.isFinite(follows.noul) && follows.noul >= 0 && follows.noul <= 1 ? follows.noul : null,
+    reason: null,
+    nudge: ""
+  };
+  if (result.speaksForUser !== null && result.speaksForUser > thresholds.speaksForUser) result.reason = "writes for {{user}}";
+  else if (result.followsRuling !== null && result.followsRuling < thresholds.followsRuling) result.reason = "broken ruling";
+  const nudges = [];
+  if (result.responds !== null && result.responds < thresholds.responds) nudges.push("Respond directly to the latest user message and its actions or questions.");
+  if ([...previous.slice(-5), result].filter((item) => item.repeats !== null && item.repeats > thresholds.repeats).length >= 4) nudges.push("Develop the current beat with fresh actions and wording; do not repeat earlier replies or skip time.");
+  result.nudge = nudges.join(" ");
+  return result;
+}
+function replyCorrection(reason, player) {
+  return reason === "writes for {{user}}" ? `Rewrite the reply without inventing voluntary speech, thoughts, feelings, consent, decisions or actions for ${player}. Leave their response open. Preserve every frozen Director ruling and do not skip time.` : "Rewrite the reply to deliver the frozen Director ruling and its exact boundaries. Do not roll again, change the outcome or skip time.";
+}
+
 // src/pack/packs.ts
 var ROMANCE = {
   id: "romance",
-  version: 2,
+  version: 3,
   label: "Romance & slice of life",
   description: "Closeness, attraction, teasing and pursuit between people. Rules asks, pressure and resistance; tracks how each character feels about the player and how boldly they pursue it.",
   actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
@@ -5390,7 +5866,7 @@ var ROMANCE = {
       key: "ask",
       label: "Ask or press",
       kind: "change",
-      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "target_card", "meters"],
       definition: "Ask, invite, bargain for or press someone for one specific thing they might refuse, now.",
       successSemantics: "The target agrees to the specific thing and does it now, in their own way; the player's answer to any counter-offer is not decided."
     },
@@ -5398,7 +5874,7 @@ var ROMANCE = {
       key: "sway",
       label: "Sway",
       kind: "change",
-      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "target_card", "meters"],
       definition: "Change how someone behaves toward the player in the moment: tease, charm, provoke, reassure, apologise, win them over.",
       successSemantics: "The target visibly responds the way the player was trying for in this exchange; the moment changes, not a lasting attitude."
     },
@@ -5406,7 +5882,7 @@ var ROMANCE = {
       key: "hold_out",
       label: "Hold out",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
       definition: "Resist pressure, refuse, keep a boundary, or keep control of a situation someone else is pushing.",
       successSemantics: "The one resisting holds their ground in this exchange; the pressure does not get what it sought now."
     },
@@ -5414,7 +5890,7 @@ var ROMANCE = {
       key: "conceal",
       label: "Hide or lie",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
       definition: "Hide something, lie, cover a slip, or keep up an alibi in front of someone.",
       successSemantics: "The concealment holds now against the people present, judged by what they could see or check."
     },
@@ -5422,7 +5898,7 @@ var ROMANCE = {
       key: "read",
       label: "Read someone",
       kind: "discovery",
-      evidence: ["transcript", "lore", "state"],
+      evidence: ["transcript", "lore"],
       definition: "Notice a tell, catch a lie, or work out what someone wants or is hiding from what they show.",
       successSemantics: "The observer works out the specified thing now from what the person visibly shows; hidden truth that nothing in the scene has shown is not evidence."
     },
@@ -5430,7 +5906,7 @@ var ROMANCE = {
       key: "act",
       label: "Physical action",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card"],
       definition: "Do something physical or practical whose outcome is uncertain: get somewhere first, move someone, catch, fix, win a game.",
       successSemantics: "The concrete action produces the stated result now, given the people and conditions present."
     }
@@ -5442,7 +5918,7 @@ var ROMANCE = {
 };
 var ADVENTURE = {
   id: "adventure",
-  version: 2,
+  version: 3,
   label: "Adventure & kingdom",
   description: "Danger, skill, force, magic and rule. Rules physical, magical and social risks, including orders given to followers; tracks loyalty and morale.",
   actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
@@ -5459,7 +5935,7 @@ var ADVENTURE = {
       key: "overcome_operate",
       label: "Overcome",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "state"],
+      evidence: ["transcript", "lore", "owner_card"],
       definition: "Overcome danger or an obstacle, cast or channel magic, climb, cross, repair, craft or break something.",
       successSemantics: "The method, given the actor's established skill, power, tools and conditions, produces the specified result now."
     },
@@ -5467,7 +5943,7 @@ var ADVENTURE = {
       key: "contest_impose",
       label: "Fight or force",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
       definition: "Attack, grapple, restrain, seize, break through, or outmanoeuvre active opposition.",
       successSemantics: "The acting side overcomes the opposition in this one exchange; the same fight is not resolved twice."
     },
@@ -5475,7 +5951,7 @@ var ADVENTURE = {
       key: "evade_resist",
       label: "Escape or resist",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
       definition: "Escape, dodge, endure, shake off a spell or poison, or avoid an imposed consequence.",
       successSemantics: "The actor avoids or withstands the specified consequence in this exchange."
     },
@@ -5483,7 +5959,7 @@ var ADVENTURE = {
       key: "conceal_deceive",
       label: "Sneak or deceive",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
       definition: "Sneak, hide, disguise, lie, misdirect or steal unnoticed.",
       successSemantics: "The deception or stealth holds now against those present, judged by what they could perceive or check."
     },
@@ -5491,7 +5967,7 @@ var ADVENTURE = {
       key: "detect_discover",
       label: "Search or discover",
       kind: "discovery",
-      evidence: ["transcript", "lore", "state"],
+      evidence: ["transcript", "lore"],
       definition: "Search, track, scout, notice a threat, read a tell, or uncover a hidden fact.",
       successSemantics: "The searcher establishes the specified fact now from what can actually be seen, heard or found; hidden truth that nothing in the scene has shown is not evidence."
     },
@@ -5499,7 +5975,7 @@ var ADVENTURE = {
       key: "influence_negotiate",
       label: "Persuade or command",
       kind: "change",
-      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "target_card", "meters"],
       definition: "Persuade, command, bargain with or intimidate someone into one specific action now.",
       successSemantics: "The target does the specific thing now; loyalty or a lasting change of heart is not decided."
     },
@@ -5507,7 +5983,7 @@ var ADVENTURE = {
       key: "acquire_secure",
       label: "Secure",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
       definition: "Seize, claim or secure a place, object, passage, right or commitment.",
       successSemantics: "The specified place, object, right or commitment is secured now."
     }
@@ -5519,7 +5995,7 @@ var ADVENTURE = {
 };
 var INVESTIGATION = {
   id: "investigation",
-  version: 2,
+  version: 3,
   label: "Investigation & intrigue",
   description: "Clues, lies, surveillance and leverage. Rules searches, interrogations, cover stories and hacks; tracks trust and suspicion of the player.",
   actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
@@ -5536,7 +6012,7 @@ var INVESTIGATION = {
       key: "examine",
       label: "Examine or trace",
       kind: "discovery",
-      evidence: ["transcript", "lore", "state"],
+      evidence: ["transcript", "lore"],
       definition: "Examine, search, analyse, trace or read someone or something to establish a hidden fact.",
       successSemantics: "The investigator establishes the specified fact now from what can actually be observed, measured or traced; hidden truth that nothing in the scene has shown is not evidence."
     },
@@ -5544,7 +6020,7 @@ var INVESTIGATION = {
       key: "question",
       label: "Question",
       kind: "change",
-      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "target_card", "meters"],
       definition: "Question, interrogate or pressure someone into giving a specific answer or piece of information now.",
       successSemantics: "The target gives the specific answer now; its truth is only what they believe or choose to say."
     },
@@ -5552,7 +6028,7 @@ var INVESTIGATION = {
       key: "cover",
       label: "Keep a cover",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
       definition: "Lie, hide, bluff, plant a false trail or keep up a cover in front of someone.",
       successSemantics: "The cover holds now against the people present, judged by what they could perceive, check or sense with their own abilities."
     },
@@ -5560,7 +6036,7 @@ var INVESTIGATION = {
       key: "operate",
       label: "Operate or break in",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "state"],
+      evidence: ["transcript", "lore", "owner_card"],
       definition: "Hack, bypass, break into, repair or operate a system, device or lock.",
       successSemantics: "The method, given the actor's established skill and tools, produces the specified result now."
     },
@@ -5568,7 +6044,7 @@ var INVESTIGATION = {
       key: "confront",
       label: "Confront",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
       definition: "Fight, restrain, seize or outmanoeuvre someone who resists.",
       successSemantics: "The acting side overcomes the resistance in this one exchange."
     },
@@ -5576,7 +6052,7 @@ var INVESTIGATION = {
       key: "evade",
       label: "Evade",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card"],
       definition: "Escape, slip surveillance, withstand an intrusion or avoid an imposed consequence.",
       successSemantics: "The actor avoids or withstands the specified consequence in this exchange."
     },
@@ -5584,7 +6060,7 @@ var INVESTIGATION = {
       key: "persuade",
       label: "Persuade",
       kind: "change",
-      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "target_card", "meters"],
       definition: "Persuade, bargain with or pressure someone into one specific action now.",
       successSemantics: "The target chooses the specified action now, given their interests and leverage."
     }
@@ -5596,7 +6072,7 @@ var INVESTIGATION = {
 };
 var POLITICS = {
   id: "politics",
-  version: 2,
+  version: 3,
   label: "Politics & factions",
   description: "Deals, pressure, law and intelligence between powers. Rules negotiations, coercion, decrees and schemes; tracks each character's standing with the player and fear of them.",
   actors: { kinds: ["player", "npc"], rulableOwners: ["player", "npc"] },
@@ -5613,7 +6089,7 @@ var POLITICS = {
       key: "negotiate",
       label: "Negotiate",
       kind: "change",
-      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "target_card", "meters"],
       definition: "Bargain or negotiate with someone for specific terms or a commitment now.",
       successSemantics: "The counterpart accepts the specific terms now; the player's acceptance of altered terms is not decided."
     },
@@ -5621,7 +6097,7 @@ var POLITICS = {
       key: "coerce",
       label: "Coerce",
       kind: "change",
-      evidence: ["transcript", "lore", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "target_card", "meters"],
       definition: "Threaten, pressure or blackmail someone into specific compliance now.",
       successSemantics: "The target complies with the specific demand now."
     },
@@ -5629,7 +6105,7 @@ var POLITICS = {
       key: "decree",
       label: "Push a measure",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "state"],
+      evidence: ["transcript", "lore", "owner_card"],
       definition: "Push through a law, order, appointment or policy against institutional resistance.",
       successSemantics: "The measure takes effect as specified now."
     },
@@ -5637,7 +6113,7 @@ var POLITICS = {
       key: "scheme",
       label: "Scheme",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "meters", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card", "meters"],
       definition: "Hide a plan, plant a story, forge, bribe or manoeuvre without being traced.",
       successSemantics: "The scheme proceeds untraced now, judged by what the other powers could perceive or check."
     },
@@ -5645,7 +6121,7 @@ var POLITICS = {
       key: "intel",
       label: "Gather intelligence",
       kind: "discovery",
-      evidence: ["transcript", "lore", "state"],
+      evidence: ["transcript", "lore"],
       definition: "Gather intelligence, or uncover what another power is planning or hiding.",
       successSemantics: "The specified fact is established now through admissible evidence, never through another power's hidden truth."
     },
@@ -5653,7 +6129,7 @@ var POLITICS = {
       key: "force",
       label: "Use force",
       kind: "change",
-      evidence: ["transcript", "lore", "owner_card", "target_card", "state"],
+      evidence: ["transcript", "lore", "owner_card", "target_card"],
       definition: "Use force: arrest, seize, suppress, attack or defend.",
       successSemantics: "The acting side achieves the specified result against the opposition in this exchange."
     }
@@ -5686,11 +6162,19 @@ function registerLocalPacks(raw) {
       warnings.push(`pack ${id}: duplicate id`);
       continue;
     }
+    let removedFacts = false;
+    if (Array.isArray(pack?.families)) for (const family of pack.families) {
+      if (!Array.isArray(family?.evidence)) continue;
+      const evidence = family.evidence.filter((source) => String(source) !== "state");
+      removedFacts ||= evidence.length !== family.evidence.length;
+      family.evidence = evidence;
+    }
     const check = validatePack(pack);
     if (!check.ok) {
       warnings.push(`pack ${id}: ${check.errors.join("; ")}`);
       continue;
     }
+    if (removedFacts) warnings.push(`pack ${id}: removed retired tracked-facts evidence; transcript and other allowed sources remain`);
     localPacks.push(deepFreeze(pack));
     loaded.push(id);
   }
@@ -5730,7 +6214,8 @@ function stateQuestions(input) {
     for (const meter of input.pack.meters) {
       if (!room()) return;
       const current = input.levels[npc.id]?.[meter.key] ?? meter.initial;
-      const first = !input.assessed[npc.id];
+      const status = input.assessed[npc.id];
+      const first = !(typeof status === "boolean" ? status : status?.[meter.key]);
       const allowed = first ? meter.levels : meter.levels.filter((_, i) => Math.abs(i - current) <= 1);
       const label = meterLabel(meter, input.playerName);
       const scale = `Levels, lowest to highest: ${meter.levels.join(", ")}.`;
@@ -5763,16 +6248,16 @@ function stateQuestions(input) {
 function stateEvidence(input) {
   const characters = {};
   for (const c of input.characters) {
-    const card = String(c.card ?? "");
-    characters[c.id] = { name: c.name, card: card.length > STATE_CARD_CHARS ? `${card.slice(0, STATE_CARD_CHARS)}\u2026` : card };
+    const card = visibleText(String(c.card ?? ""));
+    characters[c.id] = { name: visibleText(c.name), card: card.length > STATE_CARD_CHARS ? `${card.slice(0, STATE_CARD_CHARS)}\u2026` : card };
   }
   const secrets = {};
-  for (const s of input.secrets) secrets[s.id] = { text: s.text };
+  for (const s of input.secrets) secrets[s.id] = { text: visibleText(s.text) };
   const build = (messages2) => ({
-    playerName: input.playerName,
+    playerName: visibleText(input.playerName),
     characters,
     secrets,
-    latestInput: input.latestInput,
+    latestInput: visibleText(input.latestInput),
     recentAcceptedMessages: messages2.map((m) => ({ actorId: m.actorId, role: m.role, text: visibleText(m.text) }))
   });
   let messages = input.transcript.slice();
@@ -5783,8 +6268,9 @@ function stateEvidence(input) {
   }
   return state;
 }
-function applyStateAnswers(index, answers, previousLevels, previousKnownBy) {
+function applyStateAnswers(index, answers, previousLevels, previousKnownBy, previousAssessed) {
   const meters = structuredClone(previousLevels);
+  const assessed = structuredClone(previousAssessed ?? Object.fromEntries(Object.entries(previousLevels).map(([npc, values]) => [npc, Object.fromEntries(Object.keys(values).map((key) => [key, true]))])));
   const knownBy = structuredClone(previousKnownBy);
   const changes = [];
   for (const [id, entry] of Object.entries(index)) {
@@ -5796,6 +6282,7 @@ function applyStateAnswers(index, answers, previousLevels, previousKnownBy) {
       if (!chosen || !entry.allowed.includes(chosen)) continue;
       const after = entry.levels.indexOf(chosen);
       meters[entry.npcId][entry.key] = after;
+      (assessed[entry.npcId] ??= {})[entry.key] = true;
       if (before !== void 0 && before !== after) changes.push(`${entry.npcName}: ${entry.key} ${entry.levels[before]} \u2192 ${chosen}`);
     } else {
       if (!chosen || chosen === "KEEP") continue;
@@ -5805,15 +6292,15 @@ function applyStateAnswers(index, answers, previousLevels, previousKnownBy) {
       changes.push(`secret ${entry.secretId} now known to ${learners.join(", ")}`);
     }
   }
-  return { meters, knownBy, changes };
+  return { meters, assessed, knownBy, changes };
 }
 function stateBlock(input) {
   const parts = [];
-  const lines = input.meters ? Object.entries(input.levels).map(([npc, values]) => {
-    const described = input.pack.meters.filter((m) => Number.isInteger(values[m.key])).map((m) => `${meterLabel(m, input.playerName)} ${m.levels[values[m.key]]} (${rank(values[m.key], m.levels.length)})`);
+  const lines2 = input.meters ? Object.entries(input.levels).map(([npc, values]) => {
+    const described = input.pack.meters.filter((m) => Number.isInteger(values[m.key]) && (input.assessed === void 0 || input.assessed[npc]?.[m.key] === true)).map((m) => `${meterLabel(m, input.playerName)} ${m.levels[values[m.key]]} (${rank(values[m.key], m.levels.length)})`);
     return described.length ? `${input.names[npc] ?? npc}: ${described.join("; ")}.` : "";
   }).filter(Boolean) : [];
-  if (lines.length) parts.push(["[Director character state \u2014 judged from play]", ...lines, "Play each character at these levels. They change only through what happens in the scene."].join("\n"));
+  if (lines2.length) parts.push(["[Director character state \u2014 judged from play]", ...lines2, "Play each character at these levels. They change only through what happens in the scene."].join("\n"));
   const nameOf = (id) => id === "player" ? input.playerName : input.names[id] ?? id;
   const secretLines = input.secretsOn ? input.secrets.map((s) => {
     const who = (input.knownBy[s.id] ?? s.holders).map(nameOf);
@@ -5822,24 +6309,54 @@ function stateBlock(input) {
   if (secretLines.length) parts.push(["[Director knowledge boundaries]", ...secretLines, "Characters who do not know a secret must not act on it or show that they know it. Those who know it decide for themselves whether to use it."].join("\n"));
   return parts.join("\n\n");
 }
-function meterFacts(pack, levels, playerName) {
+function meterFacts(pack, levels, playerName, assessed) {
   const facts = {};
   for (const [npc, values] of Object.entries(levels)) {
     facts[npc] = {};
     for (const meter of pack.meters) {
       const value = values[meter.key];
-      if (Number.isInteger(value)) facts[npc][meterLabel(meter, playerName)] = `${meter.levels[value]} (${rank(value, meter.levels.length)})`;
+      if (Number.isInteger(value) && (assessed === void 0 || assessed[npc]?.[meter.key] === true)) facts[npc][meterLabel(meter, playerName)] = `${meter.levels[value]} (${rank(value, meter.levels.length)})`;
     }
   }
   return facts;
 }
 
 // src/lore/stage.ts
+function reuseLorePicks(books, previous) {
+  const trees = new Map(books.map((book) => [book.tree.world, book]));
+  const valid = (refs2) => refs2.filter((ref) => trees.get(ref.world)?.tree.entries.has(ref.uid)).map((ref) => ({ ...ref }));
+  const refs = valid(previous.refs);
+  const evidenceRefs = valid(previous.evidenceRefs ?? previous.refs);
+  const evidence = evidenceRefs.map((ref) => {
+    const book = trees.get(ref.world);
+    return { book: ref.world, title: ref.title, text: book.tree.entries.get(ref.uid).content, public: book.public };
+  });
+  return { refs, evidenceRefs, evidence, requests: 0, steps: [], cutShort: false, failedWorlds: [], reused: true };
+}
+function loreSceneQuestion() {
+  return {
+    type: "choice",
+    instructions: "Compare state.previousScene (the scene where the current lore was originally selected) with the current public scene in state.latestInput and state.recentAcceptedMessages. Has the location, active cast, ongoing objective, or subject changed enough to need different background lore, including gradual changes since that original selection? Keep SAME for another beat of the same scene, rewording, ordinary dialogue, or out-of-character discussion. Choose CHANGED only when the public exchange establishes a material scene change. Never infer a change from hidden lore.",
+    criteria: { SAME: "The same scene continues; keep the previous lore picks.", CHANGED: "The public scene materially changed; choose lore again." }
+  };
+}
 var LORE_SCENE_MESSAGES = 8;
+function loreSceneAnchor(scene) {
+  const state = scene && typeof scene === "object" && !Array.isArray(scene) ? scene : {};
+  const clip = (value, limit) => visibleText(typeof value === "string" ? value : "").slice(-limit);
+  const messages = Array.isArray(state.recentAcceptedMessages) ? state.recentAcceptedMessages.slice(-2) : [];
+  return {
+    latestInput: clip(state.latestInput, 1e3),
+    recentAcceptedMessages: messages.map((message) => {
+      const row2 = message && typeof message === "object" && !Array.isArray(message) ? message : {};
+      return { speaker: clip(row2.speaker, 100), role: row2.role === "user" ? "user" : "assistant", text: clip(row2.text, 1e3) };
+    })
+  };
+}
 function loreSceneState(transcript, latestInput, names, maxChars) {
   const build = (messages2) => ({
-    latestInput,
-    recentAcceptedMessages: messages2.map((m) => ({ speaker: names[m.actorId] ?? m.actorId, role: m.role, text: visibleText(m.text) }))
+    latestInput: visibleText(latestInput),
+    recentAcceptedMessages: messages2.map((m) => ({ speaker: visibleText(names[m.actorId] ?? m.actorId), role: m.role, text: visibleText(m.text) }))
   });
   let messages = transcript.slice(-LORE_SCENE_MESSAGES);
   let state = build(messages);
@@ -5849,7 +6366,35 @@ function loreSceneState(transcript, latestInput, names, maxChars) {
   }
   return state;
 }
-async function runLoreStage(books, evaluate, beam) {
+async function runLoreStage(books, evaluate, beam, continuity) {
+  const trees = new Map(books.map((b) => [b.tree.world, b]));
+  const validRefs = (refs2) => refs2.filter((ref) => trees.get(ref.world)?.tree.entries.has(ref.uid));
+  const evidenceFor = (refs2) => refs2.map((ref) => {
+    const book = trees.get(ref.world);
+    return { book: ref.world, title: ref.title, text: book.tree.entries.get(ref.uid)?.content ?? "", public: book.public };
+  }).filter((item) => item.text.trim().length > 0);
+  let continuityRequests = 0;
+  const continuitySteps = [];
+  if (continuity) {
+    const refs2 = validRefs(continuity.previous.refs).slice(0, beam.maxEntries);
+    const evidenceRefs2 = validRefs(continuity.previous.evidenceRefs ?? continuity.previous.refs);
+    if (refs2.length === Math.min(continuity.previous.refs.length, beam.maxEntries)) {
+      let changed = false;
+      let unavailable = false;
+      continuityRequests = 1;
+      try {
+        const questions = { lore_scene: continuity.sceneQuestion };
+        const result = await evaluate("public")(questions);
+        continuitySteps.push({ depth: 0, questions, results: [result], frontiers: [] });
+        const answer = result.answers?.lore_scene;
+        unavailable = Boolean(result.errors?.lore_scene || result.unresolvedQuestionIds?.includes("lore_scene") || answer?.type !== "choice" || !["SAME", "CHANGED"].includes(answer.choice));
+        changed = !unavailable && answer?.type === "choice" && answer.choice === "CHANGED";
+      } catch {
+        unavailable = true;
+      }
+      if (!changed) return { refs: refs2, evidenceRefs: evidenceRefs2, evidence: evidenceFor(evidenceRefs2), steps: continuitySteps, requests: 1, cutShort: false, failedWorlds: unavailable ? [...trees.keys()] : [], reused: true };
+    }
+  }
   const publicTrees = books.filter((b) => b.public).map((b) => b.tree);
   const privateTrees = books.filter((b) => !b.public).map((b) => b.tree);
   const empty = { refs: [], steps: [], requests: 0, cutShort: false, failedWorlds: [] };
@@ -5858,12 +6403,9 @@ async function runLoreStage(books, evaluate, beam) {
     privateTrees.length ? selectLore(privateTrees, evaluate("private"), beam, { idPrefix: "lore" }) : Promise.resolve(empty)
   ]);
   const refs = [...pub.refs, ...priv.refs].sort((a, b) => b.score - a.score).slice(0, beam.maxEntries);
-  const trees = new Map(books.map((b) => [b.tree.world, b]));
-  const evidence = [...pub.refs, ...priv.refs].sort((a, b) => b.score - a.score).map((ref) => {
-    const book = trees.get(ref.world);
-    return { book: ref.world, title: ref.title, text: book.tree.entries.get(ref.uid)?.content ?? "", public: book.public };
-  }).filter((item) => item.text.trim().length > 0);
-  return { refs, steps: [...pub.steps, ...priv.steps], requests: pub.requests + priv.requests, evidence, cutShort: pub.cutShort || priv.cutShort, failedWorlds: [...pub.failedWorlds, ...priv.failedWorlds] };
+  const evidenceRefs = [...pub.refs, ...priv.refs].sort((a, b) => b.score - a.score);
+  const evidence = evidenceFor(evidenceRefs);
+  return { refs, evidenceRefs, steps: [...continuitySteps, ...pub.steps, ...priv.steps], requests: continuityRequests + pub.requests + priv.requests, evidence, cutShort: pub.cutShort || priv.cutShort, failedWorlds: [...pub.failedWorlds, ...priv.failedWorlds] };
 }
 
 // src/controller.ts
@@ -5893,6 +6435,10 @@ var Controller = class {
   epoch = 0;
   status = "Off";
   lastError = null;
+  /** Runtime-only evidence for the connection label; never inferred from imported activity. */
+  lastWorkingConnection = null;
+  /** Runtime receipts span chats and include cancelled calls; never loaded from history. */
+  sessionUsage = [];
   speakerOverride = null;
   actionDraft = null;
   actionDraftRevision = 0;
@@ -5909,11 +6455,52 @@ var Controller = class {
   preparedTool = null;
   messageTasks = /* @__PURE__ */ new Set();
   writerSettled = null;
-  observerInFlight = /* @__PURE__ */ new Map();
-  pendingSwipeMode = null;
   nativeTurnBusy = false;
-  sceneTransitionPending = false;
-  swipeSource = null;
+  errorTypes = /* @__PURE__ */ new Set();
+  turnErrors = [];
+  approvedSwipeCursor = null;
+  decidingMessage = null;
+  decidingNewSend = false;
+  completionCandidate = null;
+  /** Completion follows the host message object, even after Stop or a slow listener. */
+  replyBinding = null;
+  toolContinuation = null;
+  writerIdleWaiters = /* @__PURE__ */ new Set();
+  preparedDeadline = null;
+  pendingForSwipe = false;
+  preparedInputCursor = null;
+  cancelSwipe = false;
+  replyCheckAbort = null;
+  replyCheckTimer = null;
+  /**
+   * Identity survives cancellation until the single native swipe dispatch settles.
+   * `finished`: a real completion was received (never an empty, '...' or tool
+   * intermediary). `toolFollowUp`: its writer called the Director tool, so
+   * SillyTavern's next 'normal' generation is its follow-up (`followUpPending`
+   * once that generation started).
+   */
+  automaticReply = null;
+  explicitRetry = null;
+  /** The source a native Regenerate confirmed at GENERATION_STARTED, before SillyTavern deleted the reply. */
+  regenerateSource = null;
+  macroUpcomingAttemptId = null;
+  /** Input cursor of a Director resend whose preview must survive its 'normal' start. */
+  macroUpcomingCursor = null;
+  macroSuppressed = false;
+  /**
+   * Quiet, impersonate and dry-run generations suppress readers only until their
+   * own data is built (or they end): each saves the outer state. `nested` ones
+   * started while a Director generation was building its prompt (from its start
+   * to its GENERATE_AFTER_DATA), so their GENERATION_ENDED is not that
+   * generation's end (`nestedEnds` counts those). `restore` is the Director block
+   * taken out of a quiet or impersonate prompt, put back unless rewritten meanwhile.
+   */
+  suppressions = [];
+  nestedEnds = 0;
+  buildingGeneration = false;
+  dryRunRestore = null;
+  groupGenerationType = null;
+  groupSpeakerFailure = null;
   constructor(host2) {
     this.host = host2;
     this.settings = host2.settings();
@@ -5924,33 +6511,70 @@ var Controller = class {
   // ---- lifecycle --------------------------------------------------------------
   async init() {
     await this.host.loadFlags();
-    void loadLocalPacks().then((result) => {
+    if (typeof window !== "undefined" && typeof location !== "undefined") void loadLocalPacks().then((result) => {
       if (result.warnings.length) console.warn("[RP Director] local packs:", ...result.warnings);
       this.notify();
     });
     const sub = (event, handler) => this.unsubscribe.push(this.host.on(event, handler));
     sub("CHAT_CHANGED", () => void this.onChatChanged());
-    sub("GENERATION_STARTED", (type, params) => void this.onGenerationStarted(String(type), params));
+    sub("GENERATION_STARTED", (type, params, dryRun) => this.onGenerationStarted(String(type), { ...params, dryRun: Boolean(dryRun || params?.dryRun) }));
+    if (this.host.ctx().eventTypes.GENERATE_AFTER_DATA) sub("GENERATE_AFTER_DATA", (_data, dryRun) => {
+      const frame = this.suppressions.at(-1);
+      if (frame && frame.dry === Boolean(dryRun)) {
+        this.suppressions.pop();
+        this.macroSuppressed = frame.suppressed;
+        this.resumeInjection(frame);
+        if (!frame.dry && frame.nested) this.nestedEnds += 1;
+      } else if (!dryRun) {
+        this.buildingGeneration = false;
+        this.nestedEnds = 0;
+      }
+      if (!dryRun) return;
+      const restore = this.dryRunRestore;
+      this.dryRunRestore = null;
+      if (restore && restore.epoch === this.epoch && this.currentAttemptId === restore.attemptId && this.record?.attempts[restore.attemptId]?.status === "writing") this.setInjection(restore.text);
+    });
     sub("GENERATION_STOPPED", () => void this.onGenerationStopped());
     sub("GENERATION_ENDED", () => this.onGenerationEnded());
+    if (this.host.ctx().eventTypes.GROUP_WRAPPER_STARTED) sub("GROUP_WRAPPER_STARTED", (details) => {
+      this.groupGenerationType = String(details?.type ?? "normal");
+      this.groupSpeakerFailure = null;
+    });
+    if (this.host.ctx().eventTypes.GROUP_MEMBER_DRAFTED) sub("GROUP_MEMBER_DRAFTED", () => this.enforceDraftedSpeaker());
+    if (this.host.ctx().eventTypes.GROUP_WRAPPER_FINISHED) sub("GROUP_WRAPPER_FINISHED", () => {
+      this.groupGenerationType = null;
+      this.groupSpeakerFailure = null;
+    });
     sub("MESSAGE_RECEIVED", (mesId, type) => {
       this.queueMessageReceived(Number(mesId), String(type ?? "normal"));
     });
     if (this.host.ctx().eventTypes.CHARACTER_MESSAGE_RENDERED) sub("CHARACTER_MESSAGE_RENDERED", async (mesId) => {
-      if (this.settings.enabled && this.refreshResultFooter(Number(mesId))) await this.persist();
+      if (this.settings.enabled && this.refreshWorkflowBadge(Number(mesId))) await this.persist();
     });
     sub("MESSAGE_SENT", (mesId) => this.onMessageSent(Number(mesId)));
     sub("MESSAGE_SWIPED", (mesId) => this.onMessageSwiped(Number(mesId)));
     sub("MESSAGE_EDITED", (mesId) => void this.onHeadChanged("edit", Number(mesId)));
     sub("MESSAGE_DELETED", () => void this.onHeadChanged("delete", null));
-    sub("MESSAGE_SWIPE_DELETED", () => void this.onHeadChanged("unknown", null));
+    sub("MESSAGE_SWIPE_DELETED", (details) => {
+      this.onSwipeDeleted(details);
+      void this.onHeadChanged("unknown", null);
+    });
     this.loreHooked = this.host.installLoreHook();
     this.host.onLoreActivation = () => this.notify();
     this.registerWriterTool();
     this.unsubscribe.push(this.host.interceptNativeSend(
-      () => this.settings.enabled && !this.host.isAutoDirectorEnabled(),
+      () => this.settings.enabled && Boolean(this.record && this.host.chatKey()) && !this.record?.paused && !this.host.isAutoDirectorEnabled(),
       () => this.directorSend()
     ));
+    this.unsubscribe.push(this.host.interceptNativeRegenerate(
+      () => this.settings.enabled && !this.record?.paused && Boolean(this.record) && this.host.hasSelectedReply(),
+      () => this.regenerateSelected()
+    ));
+    this.unsubscribe.push(this.host.interceptRegenerateCommand(
+      () => this.settings.enabled && !this.record?.paused && Boolean(this.record) && this.host.hasSelectedReply(),
+      () => this.regenerateSelected()
+    ));
+    this.unsubscribe.push(this.host.onComposerInput(() => this.cancelReplyCheck()));
     await this.loadChat();
   }
   registerWriterTool() {
@@ -5966,15 +6590,16 @@ var Controller = class {
     });
   }
   destroy() {
+    this.cancelReplyCheck();
+    this.replyBinding?.end();
+    this.releaseWriterWaiters();
     for (const off of this.unsubscribe) off();
     this.unsubscribe = [];
     this.host.unregisterFunctionTool(DIRECTOR_TOOL_NAME);
     this.host.removeLoreHook();
-    for (const controller2 of this.observerInFlight.values()) controller2.abort(new Error("Director destroyed"));
-    this.observerInFlight.clear();
+    this.inFlight?.abort(new Error("Director destroyed"));
     this.toolWindow = null;
     this.preparedTool = null;
-    this.pendingSwipeMode = null;
     this.host.clearInjection();
   }
   onChange(listener) {
@@ -6012,6 +6637,19 @@ var Controller = class {
   async persist() {
     if (!this.record || !this.chatKey) return;
     try {
+      const liveVariantIds = this.host.chat().flatMap((message) => [message.extra, ...(message.swipe_info ?? []).map((info) => info?.extra)]).flatMap((extra) => {
+        const marker2 = extra?.rpd;
+        return typeof marker2?.v === "string" ? [marker2.v] : [];
+      });
+      const chain = this.chainNow();
+      this.record.transcriptCursors = chain;
+      this.record = compactRecord(this.record, {
+        liveCursors: chain,
+        liveVariantIds,
+        activeAttemptIds: [this.currentAttemptId, this.completionCandidate, this.explicitRetry?.sourceId],
+        activeResolutionIds: [this.explicitRetry?.resolutionId],
+        activePermitIds: [this.explicitRetry?.permitId]
+      });
       const ok = await this.host.writeRecord(this.record, this.chatKey);
       if (!ok) console.warn("[RP Director] metadata write skipped (chat changed)");
     } catch (e) {
@@ -6047,53 +6685,91 @@ var Controller = class {
     };
     this.apply({ type: "inspect", entry });
   }
-  fail(message, extra = {}) {
+  /** Count only actual transport calls; saved answer replay never enters this wrapper. */
+  usageProvider(provider, stage, receipts, network = this.isNetworkProvider()) {
+    if (!network) return provider;
+    return { ...provider, evaluate: async (request, signal) => {
+      const started = Date.now();
+      const receipt = failedRequestUsage(request.requestId, stage, 0);
+      receipts.push(receipt);
+      this.sessionUsage.push(receipt);
+      this.notify();
+      try {
+        const result = await provider.evaluate(request, signal);
+        Object.assign(receipt, requestUsage(result, stage), { requestId: request.requestId });
+        return result;
+      } finally {
+        receipt.durationMs = Date.now() - started;
+        this.notify();
+      }
+    } };
+  }
+  /** `toast` false: the caller tells the user in its own sentence, so a later failure of this type still toasts. */
+  reportJudgeError(type, detail, extra = {}, stage = type, toast = true) {
+    const message = `${detail.replace(/[.\s]+$/, "")}. Your chat isn't affected.`;
     this.lastError = message;
-    this.status = "Error";
+    if (!this.turnErrors.includes(type)) this.turnErrors.push(type);
     this.inspect({ kind: "error", message, ...extra });
-    this.host.toast("error", message);
+    const key = `${stage}:${type}`;
+    if (toast && !this.errorTypes.has(key)) {
+      this.errorTypes.add(key);
+      this.host.toast("warning", message);
+    }
     this.notify();
   }
-  checkDecisionContext(built) {
-    const size = `${built.serializedCharacters}/${this.profile.budgets.maxSerializedCharacters} characters`;
-    if (built.overBudget) {
-      this.fail(`Judge context exceeds the limit (${size}) even after removing older messages. Shorten the message or manual attempt, or review the saved facts in Inspector. No decision was requested.`);
-      return false;
+  recoverJudgeStage(stage) {
+    for (const key of this.errorTypes) if (key.startsWith(`${stage}:`)) this.errorTypes.delete(key);
+    if (!this.errorTypes.size && this.lastError !== null) {
+      this.lastError = null;
+      this.refreshStatus();
     }
-    if (built.exclusions.length) {
-      this.inspect({ kind: "info", message: `Judge context (${size}): ${built.exclusions.join("; ")}.` });
-    }
-    return true;
   }
   refreshStatus() {
-    if (!this.settings.enabled) {
-      this.status = "Off";
-      this.notify();
-      return;
-    }
-    if (!this.record) {
-      this.status = "No chat";
-      this.notify();
-      return;
-    }
-    if (this.status === "Deciding" || this.status === "Writing" || this.status === "Review rolls" || this.status === "Paused" || this.status === "Error") {
-      this.notify();
-      return;
-    }
-    if (Object.values(this.record.attempts).some((attempt) => attempt.status === "observing")) this.status = "Observing";
-    else if (provisionalAttempts(this.record).length > 0) this.status = "Provisional";
-    else if (this.record.pending) this.status = "Frozen";
-    else if (this.record.projection.status === "stale") this.status = "Stale";
-    else this.status = "Ready";
+    if (!this.settings.enabled) this.status = "Off";
+    else if (!this.record) this.status = "No chat";
+    else if (this.record.paused) this.status = "Paused";
+    else if (!["Deciding", "Writing", "Frozen"].includes(this.status)) this.status = this.lastError ? "Error" : "Ready";
     this.notify();
   }
   clearError() {
-    if (this.status === "Error" || this.status === "Paused") this.status = "Ready";
+    this.errorTypes.clear();
     this.lastError = null;
+    this.status = "Ready";
+    this.refreshStatus();
+  }
+  async setPaused(paused) {
+    if (!this.record) {
+      this.host.toast("warning", "Open a chat first.");
+      return;
+    }
+    this.record.paused = paused;
+    if (paused) {
+      this.cancelReplyCheck();
+      this.inFlight?.abort(new Error("paused"));
+      this.host.clearInjection();
+      void this.host.armLore(null);
+    }
+    await this.persist();
     this.refreshStatus();
   }
   // ---- chat load --------------------------------------------------------------
   async loadChat() {
+    this.macroUpcomingAttemptId = null;
+    this.macroUpcomingCursor = null;
+    this.macroSuppressed = false;
+    this.suppressions = [];
+    this.nestedEnds = 0;
+    this.buildingGeneration = false;
+    this.regenerateSource = null;
+    this.dryRunRestore = null;
+    this.cancelReplyCheck();
+    this.errorTypes.clear();
+    this.completionCandidate = null;
+    this.replyBinding?.end();
+    this.replyBinding = null;
+    this.toolContinuation = null;
+    this.preparedInputCursor = null;
+    this.releaseWriterWaiters();
     this.chatKey = this.host.chatKey();
     this.speakerOverride = null;
     this.actionDraft = null;
@@ -6102,47 +6778,40 @@ var Controller = class {
     this.pendingInjection = "";
     this.toolWindow = null;
     this.preparedTool = null;
-    this.pendingSwipeMode = null;
-    this.swipeSource = null;
-    for (const controller2 of this.observerInFlight.values()) controller2.abort(new Error("chat loaded"));
-    this.observerInFlight.clear();
+    this.preparedDeadline = null;
+    this.pendingForSwipe = false;
+    this.approvedSwipeCursor = null;
+    this.explicitRetry = null;
+    this.groupGenerationType = null;
+    this.groupSpeakerFailure = null;
     this.host.clearInjection();
-    if (!this.settings.enabled) {
-      this.record = null;
-      this.status = "Off";
-      this.notify();
-      return;
-    }
+    this.record = null;
     if (!this.chatKey) {
-      this.record = null;
-      this.status = "No chat";
-      this.notify();
+      this.refreshStatus();
       return;
     }
-    const recovered = recoverInterruptedObservations(normalizeRecord(this.host.readRecord(), this.host.seedId(), this.profile.revision));
-    this.record = recovered.record;
-    if (recovered.recoveredVariantIds.length) this.inspect({ kind: "restore", message: `Prepared ${recovered.recoveredVariantIds.length} legacy or interrupted observation(s) for retry; accepted history was retained.` });
+    const stripped = this.host.stripLegacyResultFooters();
+    if (!this.settings.enabled && !stripped.copies) {
+      this.record = null;
+      this.refreshStatus();
+      return;
+    }
+    this.record = normalizeRecord(this.host.readRecord(), this.host.seedId(), this.profile.revision);
+    this.record = rebaseRecordCursors(this.record, this.host.chat(), this.host.fingerprintMessages(this.host.chat()));
+    if (stripped.copies) this.inspect({ kind: "info", message: `Removed ${stripped.copies} old Director footer ${stripped.copies === 1 ? "copy" : "copies"} from ${stripped.messages} ${stripped.messages === 1 ? "message" : "messages"}.` });
+    if (!this.settings.enabled) {
+      await this.host.writeRecord(this.record, this.chatKey);
+      this.record = null;
+      this.refreshStatus();
+      return;
+    }
     this.bindActors();
-    const chain = this.chainNow();
-    const head = chain[chain.length - 1];
-    if (Object.keys(this.record.checkpoints).length === 0) {
-      this.apply({ type: "set_baseline", cursor: head, state: emptyState(), reason: "first Director use in this chat" });
-      this.inspect({ kind: "info", message: "Baseline set at the current transcript head. Earlier state was not reconstructed." });
-    } else {
-      this.apply({ type: "head_changed", cursor: head, chain, reason: "load" });
-      const pending = this.record.pending;
-      if (pending) {
-        this.apply({ type: "cancel", attemptId: pending.attemptId, epoch: pending.epoch, reason: "reload before the writer started; the frozen resolution stays available" });
-        this.inspect({ kind: "info", message: "An interrupted decision was found after reload. Its ruling remains in history. Send again when ready; a wording swipe can reuse an existing ruling." });
-      }
-      for (const attempt of Object.values(this.record.attempts)) {
-        if (attempt.status === "writing" || attempt.status === "prepared") this.apply({ type: "cancel", attemptId: attempt.attemptId, epoch: attempt.epoch, reason: "reload during generation" });
-      }
+    for (const attempt of Object.values(this.record.attempts)) {
+      if (attempt.status === "writing" || attempt.status === "prepared") this.apply({ type: "cancel", attemptId: attempt.attemptId, epoch: attempt.epoch, reason: "reload during generation" });
     }
     this.status = "Ready";
-    this.refreshResultFooters(0, chain);
+    this.refreshWorkflowBadges(0);
     await this.persist();
-    if (this.hasRepairableSelectedFailure() && this.canAdoptEmptyBaseline()) await this.repairSelectedBranch();
     this.refreshStatus();
   }
   async onChatChanged() {
@@ -6150,11 +6819,8 @@ var Controller = class {
     void this.host.armLore(null);
     this.inFlight?.abort(new Error("chat changed"));
     this.inFlight = null;
-    for (const controller2 of this.observerInFlight.values()) controller2.abort(new Error("chat changed"));
-    this.observerInFlight.clear();
     this.toolWindow = null;
     this.preparedTool = null;
-    this.pendingSwipeMode = null;
     this.continueRemaining = 0;
     if (this.record) this.apply({ type: "abort_epoch", epoch: this.epoch - 1, reason: "chat changed" });
     this.status = "Ready";
@@ -6196,26 +6862,6 @@ var Controller = class {
   cursorOf(messages) {
     return prefixCursor(this.record?.seedId ?? this.host.seedId(), this.host.fingerprintMessages(messages));
   }
-  /**
-   * User messages extend the accepted prefix without changing tracked state.
-   * Walks back over trailing user messages and copies the nearest checkpoint
-   * forward so the generation's predecessor state is known.
-   */
-  ensurePredecessor(prefix) {
-    if (!this.record) return;
-    const seed = this.record.seedId;
-    const fp = this.host.fingerprintMessages(prefix);
-    const chain = cursorChain(seed, fp);
-    const head = chain[chain.length - 1];
-    if (this.record.checkpoints[head]) return;
-    let i = fp.length;
-    while (i > 0 && fp[i - 1].role === "user" && !this.record.checkpoints[chain[i]]) i -= 1;
-    const parentCursor = chain[i];
-    if (!this.record.checkpoints[parentCursor]) return;
-    for (let j = i + 1; j <= fp.length; j++) {
-      this.apply({ type: "extend_checkpoint", cursor: chain[j], parentCursor: chain[j - 1] });
-    }
-  }
   // ---- provider ---------------------------------------------------------------
   provider() {
     const c = this.settings.connection;
@@ -6249,8 +6895,6 @@ var Controller = class {
     try {
       await this.waitForMessageTasks();
       if (epoch !== this.epoch) return;
-      if (this.hasRepairableSelectedFailure()) await this.repairSelectedBranch();
-      if (epoch !== this.epoch) return;
       await this.directorTurn("director_send");
     } finally {
       this.nativeTurnBusy = false;
@@ -6263,7 +6907,7 @@ var Controller = class {
     }
     await this.directorTurn("director_next");
   }
-  /** Finite continuation: re-selects after each accepted reply up to the profile cap; stops on YIELD, provisional, stale, or Stop. */
+  /** Finite continuation: re-selects after each accepted reply up to the profile cap; stops on yield, pause, failure, or Stop. */
   async directorContinue(cap = 3) {
     this.continueRemaining = Math.max(1, Math.min(cap, 3));
     while (this.continueRemaining > 0) {
@@ -6273,7 +6917,7 @@ var Controller = class {
       if (!this.record) break;
       const after = Object.keys(this.record.attempts).length;
       if (after === before) break;
-      if (this.status === "Observing" || this.status === "Stale" || this.status === "Paused" || this.status === "Error") break;
+      if (this.record.paused) break;
     }
     this.continueRemaining = 0;
   }
@@ -6282,60 +6926,11 @@ var Controller = class {
     this.host.stopGeneration();
   }
   async guardTurn() {
-    if (!this.settings.enabled) {
-      this.host.toast("warning", "RP Director is disabled.");
-      return false;
-    }
-    if (this.host.isAutoDirectorEnabled()) {
-      this.host.toast("warning", "The legacy RP Director Auto is active. Enable RP Director to take over.");
-      return false;
-    }
-    if (!this.record || !this.chatKey) {
-      this.host.toast("warning", "No chat is open.");
-      return false;
-    }
-    if (this.host.isGenerating()) {
-      this.host.toast("warning", "A generation is already running.");
-      return false;
-    }
-    if (this.host.isAutoMode()) {
-      this.host.toast("warning", "Group auto mode is on. Turn it off before using Director.");
-      return false;
-    }
-    if (provisionalAttempts(this.record).length > 0) {
-      this.host.toast("warning", "The selected reply is still being observed or awaits commit. Wait for observation, then try again.");
-      return false;
-    }
-    if (this.record.projection.status === "stale") {
-      this.host.toast("warning", "Tracked state needs repair. Choose Repair selected branch from the Director menu.");
-      return false;
-    }
-    if (this.record.projection.status === "unknown") {
-      if (!this.canAdoptEmptyBaseline()) {
-        this.host.toast("warning", "This branch has no saved Director state. Restore a tracked swipe or explicitly reset tracking at this message.");
-        return false;
-      }
-      const chain = this.chainNow();
-      this.apply({ type: "set_baseline", cursor: chain[chain.length - 1], state: this.record.projection.state, reason: "no checkpoint matched the transcript head" });
-      this.inspect({ kind: "info", message: "No checkpoint matched the current transcript; a baseline was set from the last known state." });
-    }
-    if (this.profile.mode === "binding" && !this.settings.bindingConfirmedAt) {
-      const ok = await this.host.confirm(
-        "Binding outcomes and frozen swipes",
-        "<p>Director uses normal <b>Send and Enter</b> to decide consequential attempts before the writer runs. A ruled outcome is <b>preserved across wording swipes and regenerations</b>. Explicit rerolls or reassessments change the ruling. Newly planned NPC actions pause for your review when the writer calls the Director tool.</p><p>The observer checks the reply; its validated changes commit when you continue from that reply or choose <b>Commit reply</b>. Disable RP Director in Extensions to return to ordinary chat.</p>"
-      );
-      if (!ok) {
-        this.host.toast("info", "Cancelled; nothing was generated. Confirm next time, or disable RP Director in Extensions for ordinary chat.");
-        return false;
-      }
-      this.settings.bindingConfirmedAt = (/* @__PURE__ */ new Date()).toISOString();
-      this.host.saveSettings();
-    }
-    return true;
+    return this.settings.enabled && Boolean(this.record && this.chatKey) && !this.record?.paused && !this.host.isGenerating();
   }
   async directorTurn(kind) {
-    if (!await this.commitCurrentVariant("next Director turn")) return;
     if (!await this.guardTurn()) return;
+    this.cancelReplyCheck();
     const record = this.record;
     const composerText = kind === "director_send" ? this.host.composerText() : "";
     const epoch = this.epoch;
@@ -6344,7 +6939,6 @@ var Controller = class {
     const profileRevisionAtStart = this.profile.revision;
     const reactionSettings = structuredClone(this.settings.reactions);
     const reactionSettingsAtStart = JSON.stringify(reactionSettings);
-    const sceneIdAtStart = record.projection.state.sceneId;
     const modules = { ...this.settings.modules, reactions: reactionSettings.enabled };
     for (const attempt of Object.values(record.attempts)) {
       if (attempt.status === "writing" || attempt.status === "prepared") this.apply({ type: "cancel", attemptId: attempt.attemptId, epoch: attempt.epoch, reason: "superseded by a new Director turn" });
@@ -6359,7 +6953,7 @@ var Controller = class {
       }
       return;
     }
-    if (!modules.speaker && !modules.decisions && !modules.reactions && !modules.meters && !modules.secrets && !modules.lore) {
+    if (!modules.speaker && !modules.decisions && !modules.reactions && !modules.meters && !modules.secrets && !modules.lore && !modules.pacing && !modules.replyCheck) {
       this.inspect({ kind: "info", message: "Every Director module is off; native generation with no Director request or injection." });
       await this.persist();
       try {
@@ -6369,7 +6963,31 @@ var Controller = class {
       }
       return;
     }
+    const target = kind === "director_send" && composerText.trim() ? [...this.host.chat(), { name: this.host.playerName(), is_user: true, is_system: false, mes: composerText }] : this.host.chat();
+    const existing = this.attemptAt(target);
+    if (existing) {
+      const cursor = existing.cursorBefore ?? this.cursorOf(target);
+      if (!await this.confirmRetry(existing, cursor)) return;
+      this.approvedSwipeCursor = cursor;
+      this.macroUpcomingAttemptId = existing.attemptId;
+      this.macroUpcomingCursor = cursor;
+      const actor = existing.actorId ? this.actorMap().byId[existing.actorId] : null;
+      try {
+        await this.host.generate(this.host.isGroup() && actor ? this.host.resolveIndex(actor.avatar) : null);
+      } finally {
+        await this.waitForMessageTasks();
+        this.explicitRetry = null;
+        this.approvedSwipeCursor = null;
+        if (this.macroUpcomingCursor === cursor) {
+          this.macroUpcomingAttemptId = null;
+          this.macroUpcomingCursor = null;
+        }
+      }
+      return;
+    }
     this.status = "Deciding";
+    this.cancelSwipe = false;
+    this.toolWindow = null;
     this.lastError = null;
     this.notify();
     const actors = this.bindActors();
@@ -6382,306 +7000,22 @@ var Controller = class {
     const lastAvatar = this.host.lastAssistantAvatar();
     const lastSpeakerActorId = lastAvatar ? actors.byAvatar[lastAvatar] ?? null : null;
     let explicit = this.speakerOverride && this.speakerOverride !== "auto" ? this.speakerOverride : null;
-    if (!isGroup && eligible.length === 1) explicit = eligible[0];
+    if (!isGroup && eligible.length === 1 && !explicit) explicit = eligible[0];
     const nativeSpeaker = isGroup && !explicit && !modules.speaker;
-    const changed = () => this.actionDraftRevision !== declarationRevision || this.profile.revision !== profileRevisionAtStart || this.record?.projection.state.sceneId !== sceneIdAtStart || JSON.stringify(this.settings.reactions) !== reactionSettingsAtStart;
-    const manual = modules.decisions && this.actionDraft ? this.buildDeclaredAction(actors) : null;
-    if (this.settings.pipeline === "staged" && !manual && composerText.trim()) {
+    const changed = () => this.actionDraftRevision !== declarationRevision || this.profile.revision !== profileRevisionAtStart || JSON.stringify(this.settings.reactions) !== reactionSettingsAtStart;
+    this.decidingNewSend = kind === "director_send";
+    this.host.setComposerLocked(true);
+    try {
       await this.stagedTurn({ kind, composerText, epoch, chatKey, actors, isGroup, candidates, eligible, names, explicit, nativeSpeaker, lastSpeakerActorId, modules, reactionSettings, changed });
-      return;
+    } finally {
+      this.decidingNewSend = false;
+      this.host.setComposerLocked(false);
+      this.preparedDeadline = null;
     }
-    let action = manual ?? (modules.decisions ? this.buildAutomaticAction(composerText, record.projection.state.sceneId) : null);
-    const established = record.projection.state.variables;
-    const gate = gateAction(action, established, this.profile.outcomes, {
-      actorPolicy: this.profile.actorPolicy,
-      playerActorId: PLAYER_ACTOR_ID,
-      currentSceneId: record.projection.state.sceneId,
-      settledGains: record.projection.state.settledGains
-    });
-    const questions = {};
-    const needSpeaker = modules.speaker && isGroup && !explicit && eligible.length > 0;
-    if (needSpeaker) questions.speaker = speakerQuestion(eligible, names, this.profile.speakers.includeYield, composerText.trim() || null);
-    const needGain = modules.decisions && gate.kind === "adjudicate";
-    const drivingId = this.profile.drivingQuestionId;
-    if (needGain && action) {
-      if (manual) questions[drivingId] = drivingId === "gain_score" ? attemptScoreQuestion(action) : attemptNoulQuestion(action);
-      else {
-        questions.attempt_gate = autoAttemptGateQuestion();
-        questions.attempt_family = autoAttemptFamilyQuestion();
-        questions[drivingId] = autoAttemptNoulQuestion();
-      }
-    }
-    const reactionQuestions = /* @__PURE__ */ new Map();
-    if (reactionSettings.enabled && !manual && composerText.trim()) {
-      const remaining = Math.max(0, this.profile.budgets.maxQuestions - Object.keys(questions).length);
-      const candidates2 = explicit ? [explicit].filter((id) => eligible.includes(id)) : eligible;
-      for (const [index, id] of candidates2.slice(0, remaining).entries()) {
-        const questionId = `npc_reaction_${index + 1}`;
-        reactionQuestions.set(id, questionId);
-        questions[questionId] = reactionQuestion(id);
-      }
-    }
-    const recent = this.host.chat().filter((m) => !m.is_system).slice(-this.profile.budgets.maxRecentMessages).map((m) => ({
-      actorId: m.is_user ? PLAYER_ACTOR_ID : actors.byAvatar[m.original_avatar ?? ""] ?? `name:${m.name}`,
-      role: m.is_user ? "user" : "assistant",
-      text: m.is_user ? m.mes ?? "" : stripResultFooter(m.mes ?? "")
-    }));
-    const publicCards = {};
-    const built = buildState({
-      scopeId: "shared-public",
-      actors: record.actors,
-      eligibleActorIds: eligible,
-      publicCards,
-      facts: jsonSafe(established),
-      action,
-      latestInput: composerText,
-      recentMessages: recent,
-      sceneId: record.projection.state.sceneId,
-      acceptedReplyCount: record.projection.state.sceneReplyCount,
-      maxRecentMessages: this.profile.budgets.maxRecentMessages,
-      maxSerializedCharacters: this.profile.budgets.maxSerializedCharacters
-    });
-    if (!this.checkDecisionContext(built)) {
-      await this.persist();
-      return;
-    }
-    const snapshot = {
-      chatId: chatKey,
-      cursorBefore: this.chainNow().at(-1),
-      stateRevision: record.projection.state.revision,
-      scopeId: "shared-public",
-      profileRevision: this.profile.revision,
-      catalogRevision: "",
-      actorBindingRevision: actors.order.join(","),
-      state: built.state
-    };
-    let result = null;
-    let networkCalls = 0;
-    if (Object.keys(questions).length > 0) {
-      const check = checkBatch(questions, this.profile.budgets.maxQuestions, Object.keys(questions).map(() => "shared-public"));
-      if (!check.ok) {
-        this.fail("Batch rejected: " + check.errors.join("; "));
-        return;
-      }
-      let provider;
-      try {
-        provider = this.provider();
-      } catch (e) {
-        this.fail(`Connection error: ${e.message}`);
-        return;
-      }
-      if (this.isNetworkProvider()) networkCalls = 1;
-      const abort = new AbortController();
-      this.inFlight = abort;
-      const requestId = newId("req");
-      try {
-        result = await provider.evaluate({ requestId, phase: "guide", snapshot, questions }, abort.signal);
-      } catch (e) {
-        this.inFlight = null;
-        if (epoch !== this.epoch || this.chatKey !== chatKey) {
-          console.debug("[RP Director] decision aborted by a chat switch; no record touched");
-          return;
-        }
-        const msg = e instanceof ProviderError ? `${e.code}: ${e.message}` : e.message;
-        if (needGain) {
-          this.status = "Paused";
-          this.inspect({ kind: "error", message: `Binding provider failed before freeze; paused (no advisory downgrade, no fallback). ${msg}`, questions, stateSent: built.state, providerKind: provider.kind, networkCalls, actionId: action?.actionId ?? null });
-          this.host.toast("error", `Provider failed before the outcome was frozen: ${msg}. Nothing was generated. Retry, rule manually, or fix the connection.`);
-          await this.persist();
-          this.notify();
-          return;
-        }
-        if (needSpeaker) {
-          this.status = "Paused";
-          this.inspect({ kind: "error", message: `Speaker provider failed: ${msg}. Pick a speaker explicitly or retry.`, questions, stateSent: built.state, providerKind: provider.kind, networkCalls });
-          this.host.toast("error", `Speaker assessment failed: ${msg}. Choose a speaker in the bar and try again.`);
-          await this.persist();
-          this.notify();
-          return;
-        }
-        this.inspect({ kind: "info", message: `Optional NPC reaction unavailable; continuing without it. ${msg}`, questions, stateSent: built.state, networkCalls });
-      }
-      this.inFlight = null;
-      if (epoch !== this.epoch || this.chatKey !== chatKey) {
-        this.inspect({ kind: "error", message: "Decision result arrived after the chat changed; discarded." });
-        return;
-      }
-      if (kind === "director_send" && this.host.composerText() !== composerText) {
-        this.status = "Ready";
-        this.inspect({ kind: "error", message: "Composer text changed while deciding; preparation discarded (nothing was frozen).", questions, answers: result?.answers ?? null, stateSent: built.state, networkCalls });
-        this.host.toast("warning", "Your message changed while Director was deciding. Press Send again.");
-        await this.persist();
-        return;
-      }
-      if (changed()) {
-        this.status = "Ready";
-        this.inspect({ kind: "error", message: "The declared attempt, actor policy, profile, reactions, or scene changed while deciding; the result was discarded before freeze.", questions, answers: result?.answers ?? null, stateSent: built.state, networkCalls });
-        this.host.toast("warning", "The attempt or scene changed while the Director was deciding. Review it and send again.");
-        await this.persist();
-        return;
-      }
-    }
-    if (action && needGain && !manual) {
-      const interpreted = interpretAutomaticAttempt(action, result?.answers ?? {}, result?.errors ?? {});
-      if (!interpreted.ok) {
-        this.status = "Paused";
-        this.fail(`${interpreted.error}. Nothing was generated.`, { questions, answers: result?.answers ?? null, stateSent: built.state, networkCalls });
-        return;
-      }
-      action = interpreted.action;
-    }
-    let speaker;
-    if (!isGroup) {
-      speaker = { questionId: null, eligibleActorIds: eligible, raw: null, adjusted: null, selected: eligible[0] ?? YIELD, source: eligible.length ? "single" : "yield", tieBroken: false };
-    } else if (nativeSpeaker) {
-      speaker = null;
-    } else {
-      const decided = decideSpeaker({
-        candidates,
-        explicitActorId: explicit,
-        includeYield: this.profile.speakers.includeYield,
-        priors: this.profile.speakers.priors,
-        repetitionFactor: this.profile.speakers.repetitionFactor,
-        lastSpeakerActorId,
-        answer: result?.answers.speaker ?? null,
-        questionId: needSpeaker ? "speaker" : null
-      });
-      if (!decided.ok) {
-        this.status = "Paused";
-        this.inspect({ kind: "error", message: `Speaker could not be resolved: ${decided.error}`, questions, answers: result?.answers ?? null, stateSent: built.state, networkCalls, providerKind: result?.provider ?? null });
-        this.host.toast("warning", `Speaker unresolved: ${decided.error}. Choose a speaker in the bar.`);
-        await this.persist();
-        this.notify();
-        return;
-      }
-      speaker = decided.decision;
-    }
-    let resolution = null;
-    let bandId2 = null;
-    if (gate.kind === "rules" && action) {
-      const settled = gate.outcome;
-      resolution = freeze({
-        resolutionId: newId("res"),
-        previousResolutionId: null,
-        action,
-        snapshot,
-        assessment: null,
-        decisionSource: "rules",
-        policyRevision: this.profile.revision,
-        band: null,
-        method: "rules",
-        draw: null,
-        outcome: settled.name,
-        def: settled,
-        cursorBefore: null,
-        generation: 1,
-        providerKind: null,
-        requestedModel: null,
-        returnedModel: null,
-        now: Date.now()
-      });
-    } else if (needGain && action) {
-      const answer = result?.answers[drivingId] ?? null;
-      const answerError = result?.errors[drivingId];
-      if (!answer) {
-        this.status = "Paused";
-        this.inspect({ kind: "error", message: `No valid assessment for ${drivingId}: ${answerError ?? "missing"}. Paused before freeze; no effect and no fallback.`, questions, answers: result?.answers ?? null, stateSent: built.state, networkCalls, providerKind: result?.provider ?? null, actionId: action.actionId, applicability: action.applicability });
-        this.host.toast("error", `The provider gave no valid answer for the outcome question (${answerError ?? "missing"}). Paused; nothing generated.`);
-        await this.persist();
-        this.notify();
-        return;
-      }
-      if (this.profile.mode === "binding") {
-        const sig = normaliseSignal(answer);
-        if (!sig.ok) {
-          this.status = "Paused";
-          this.fail(`Assessment invalid: ${sig.error}`, { questions, answers: result?.answers ?? null, stateSent: built.state, networkCalls });
-          return;
-        }
-        const draw = this.profile.resolutionMethod === "sample" ? randomDraw().u : null;
-        const resolved = resolveOutcome({ bands: this.profile.bands, outcomes: this.profile.outcomes, method: this.profile.resolutionMethod, signal: sig.signal, draw });
-        if (!resolved.ok) {
-          this.status = "Paused";
-          this.fail(`Outcome could not be resolved: ${resolved.error}`, { questions, answers: result?.answers ?? null, stateSent: built.state, networkCalls });
-          return;
-        }
-        bandId2 = resolved.value.band.id;
-        resolution = freeze({
-          resolutionId: newId("res"),
-          previousResolutionId: null,
-          action,
-          snapshot,
-          assessment: answer,
-          decisionSource: "provider",
-          policyRevision: this.profile.revision,
-          band: resolved.value.band,
-          method: resolved.value.method,
-          draw: resolved.value.draw,
-          outcome: resolved.value.outcome,
-          def: resolved.value.def,
-          cursorBefore: null,
-          generation: 1,
-          providerKind: result?.provider ?? null,
-          requestedModel: result?.requestedModel ?? null,
-          returnedModel: result?.returnedModel ?? null,
-          now: Date.now()
-        });
-      }
-    }
-    let reaction = null;
-    const reactionAnswer = speaker ? result?.answers[reactionQuestions.get(speaker.selected) ?? ""] : void 0;
-    if (!action && reactionSettings.enabled && speaker && speaker.selected !== YIELD && reactionAnswer?.type === "choice" && ["resolve", "secret", "exposure"].includes(reactionAnswer.choice)) {
-      try {
-        reaction = chooseReaction(reactionAnswer.choice, reactionSettings, speaker.selected, randomDraw().u);
-      } catch (error) {
-        this.inspect({ kind: "info", message: `NPC reaction skipped: ${error.message}` });
-      }
-    }
-    const advisoryNotes = [];
-    if (this.profile.mode === "advisory" && action && result?.answers[drivingId]) {
-      const a = result.answers[drivingId];
-      const sig = normaliseSignal(a);
-      if (sig.ok) advisoryNotes.push(`Support for the requested gain "${action.requestedGain}" is assessed at ${sig.signal.x.toFixed(2)} on a 0\u20131 scale (${a.provenance}). Treat this as guidance about plausibility, not a ruling.`);
-    }
-    const speakerLabel = speaker ? names[speaker.selected] ?? speaker.selected : "chosen by SillyTavern";
-    const fallbackMessage = gate.kind === "skip" ? `No adjudication (${gate.reason.replace(/_/g, " ")}). Speaker ${speakerLabel}.` : action && this.profile.mode === "advisory" ? `Advisory: gain support assessed, no binding outcome. Speaker ${speakerLabel}.` : `Speaker ${speakerLabel}; no action declared.`;
-    await this.finishTurn({
-      kind,
-      composerText,
-      epoch,
-      actors,
-      isGroup,
-      names,
-      speaker,
-      preparedAction: resolution ? action : gate.kind === "skip" ? action : null,
-      resolution,
-      bandId: bandId2,
-      reaction,
-      snapshot,
-      established,
-      decisionsOn: modules.decisions,
-      disarmDeclaration: Boolean(action),
-      advisoryNotes,
-      questions: Object.keys(questions).length ? questions : null,
-      answers: result?.answers ?? null,
-      stateSent: built.state,
-      result,
-      networkCalls,
-      actionId: action?.actionId ?? null,
-      applicability: action?.applicability ?? null,
-      fallbackMessage,
-      messageSuffix: "",
-      stateBlock: "",
-      loreCursor: null
-    });
   }
-  /**
-   * Staged pipeline (docs/STAGED-JEV-PLAN.md): Speaker ∥ A (move) → B (routing)
-   * → E (ruling), then the same freeze and writer path as legacy.
-   */
   async stagedTurn(c) {
     const record = this.record;
-    const established = record.projection.state.variables;
+    const established = {};
     const npcs = c.eligible;
     const playerName = c.names[PLAYER_ACTOR_ID];
     const actorsIn = { [PLAYER_ACTOR_ID]: { name: playerName, control: "user" } };
@@ -6689,60 +7023,101 @@ var Controller = class {
       const actor = c.actors.byId[id];
       actorsIn[id] = { name: actor.name, control: "npc", card: this.host.cardText(actor.avatar) };
     }
-    const transcript = this.host.chat().filter((m) => !m.is_system).slice(-this.profile.budgets.maxRecentMessages).map((m) => ({
+    const transcript = (c.transcriptPrefix ?? this.host.chat()).filter((m) => !m.is_system).slice(-this.profile.budgets.maxRecentMessages).map((m) => ({
       actorId: m.is_user ? PLAYER_ACTOR_ID : c.actors.byAvatar[m.original_avatar ?? ""] ?? `name:${m.name}`,
       role: m.is_user ? "user" : "assistant",
       text: m.is_user ? m.mes ?? "" : stripResultFooter(m.mes ?? "")
     }));
     const needSpeaker = c.modules.speaker && c.isGroup && !c.explicit && npcs.length > 0;
     const reactionTargets = c.modules.reactions ? (c.explicit ? [c.explicit].filter((id) => npcs.includes(id)) : npcs).slice(0, STAGED_MAX_REACTION_TRIGGERS) : [];
-    const chain = this.chainNow();
+    const prefix = c.boundPrefix ?? c.transcriptPrefix;
+    const chain = prefix ? cursorChain(record.seedId, this.host.fingerprintMessages(prefix)) : this.chainNow();
     const cursorBefore = chain.at(-1);
-    let provider;
+    const connectionAtStart = JSON.stringify(this.settings.connection);
+    let connectionError = null;
+    let provider = null;
     try {
       provider = this.provider();
     } catch (e) {
-      this.fail(`Connection error: ${e.message}`);
-      return;
+      connectionError = e;
     }
     let networkCalls = 0;
+    const receipts = [];
+    const networkProvider = this.isNetworkProvider();
     const abort = new AbortController();
     this.inFlight = abort;
+    this.turnErrors = [];
+    this.lastError = null;
+    this.preparedDeadline = Date.now() + Math.max(0, this.settings.waitForJudgeSeconds) * 1e3;
+    const timer = setTimeout(() => abort.abort(new JudgeWaitBudget()), Math.max(0, this.preparedDeadline - Date.now()));
+    if (this.preparedDeadline <= Date.now()) abort.abort(new JudgeWaitBudget());
+    const failedStages = /* @__PURE__ */ new Set();
+    const askedStages = /* @__PURE__ */ new Set();
+    const report = (stage, error) => {
+      if (abort.signal.aborted && !(abort.signal.reason instanceof JudgeWaitBudget)) return;
+      const failure = stageError(stage, error);
+      const id = stage === "move" && /^npc_reaction_/.test(failure.message) ? "reaction" : stage;
+      failedStages.add(id);
+      if (c.epoch === this.epoch && this.chatKey === c.chatKey) this.reportJudgeError(failure.type, `Judge unavailable (${id}): ${failure.message}`, {}, id);
+    };
     let catalogRevision = "pack:pending";
     const snapshotBase = () => ({
       chatId: c.chatKey,
       cursorBefore,
-      stateRevision: record.projection.state.revision,
+      stateRevision: 0,
       scopeId: "shared-public",
       profileRevision: this.profile.revision,
       catalogRevision,
       actorBindingRevision: c.actors.order.join(",")
     });
     const ask = async (stage, questions2, state) => {
+      askedStages.add(stage);
+      questions2 = visibleJudgeData(questions2);
+      state = visibleJudgeData(state);
       const check = checkBatch(questions2, STAGED_MAX_QUESTIONS, Object.keys(questions2).map(() => "shared-public"));
       if (!check.ok) throw new StagedError(stage, `batch rejected: ${check.errors.join("; ")}`);
-      if (this.isNetworkProvider()) networkCalls += 1;
-      return provider.evaluate({ requestId: newId("req"), phase: "guide", snapshot: { ...snapshotBase(), state }, questions: questions2 }, abort.signal);
+      if (abort.signal.aborted) throw abort.signal.reason;
+      if (connectionError || !provider) throw connectionError ?? new Error("No judge connection");
+      if (JSON.stringify(state).length > STAGED_MAX_STATE_CHARS) throw new StagedError(stage, "context exceeds the character budget", "context_budget");
+      const answered = await evaluateStageWithReplay(stage, questions2, state, c.replay ? c.retrySource?.stageRecords : void 0, async (_stage, missing, evidence) => {
+        if (networkProvider) networkCalls += 1;
+        const result = await withinBudget(this.usageProvider(provider, stage, receipts, networkProvider).evaluate({ requestId: newId("req"), phase: "guide", snapshot: { ...snapshotBase(), state: evidence }, questions: missing }, abort.signal), abort.signal);
+        this.lastWorkingConnection = connectionAtStart;
+        return result;
+      });
+      for (const id of Object.keys(questions2)) {
+        if (PACING_QUESTION_IDS.includes(id)) askedStages.add("pacing");
+        else if (id.startsWith("npc_reaction_")) askedStages.add("reaction");
+      }
+      return answered;
     };
     const characters = npcs.slice(0, STATE_MAX_CHARACTERS).map((id) => ({ id, name: c.names[id], card: actorsIn[id].card }));
     const notes = [];
-    const loreRun = c.modules.lore ? this.startLore(c, transcript, ask) : null;
+    const loreRun = c.modules.lore ? withinBudget(this.startLore(c, transcript, ask), abort.signal).catch((error) => ({ result: null, books: [], error: error.message })) : null;
     let pack = this.chatPack();
     if (record.story.packId === "auto" && (c.modules.decisions || c.modules.meters)) {
       try {
-        const pick = await ask("pack", { pack: packQuestion(listPacks()) }, stateEvidence({ transcript, latestInput: c.composerText, characters, secrets: [], playerName, maxChars: STAGED_MAX_STATE_CHARS }));
-        const answer = pick.answers.pack;
-        if (answer?.type === "choice" && hasPack(answer.choice) && this.record === record) {
-          record.story = { ...record.story, packId: answer.choice, packSource: "judge" };
+        const questions2 = { pack: packQuestion(listPacks()) };
+        const pick = await ask("pack", questions2, stateEvidence({ transcript, latestInput: c.composerText, characters, secrets: [], playerName, maxChars: STAGED_MAX_STATE_CHARS }));
+        const checked = validateStageAnswers("pack", questions2, pick);
+        if (checked.errors.length) throw new StagedError("pack", checked.errors[0].message, checked.errors[0].type);
+        const answer = checked.result.answers.pack;
+        if (answer?.type === "choice" && hasPack(answer.choice) && c.epoch === this.epoch && c.chatKey === this.chatKey && !abort.signal.aborted) {
+          this.record.story = { ...this.record.story, packId: answer.choice, packSource: "judge" };
           pack = packById(answer.choice);
           notes.push(`Pack for this chat: ${pack.label} (picked by the judge).`);
-        }
+        } else throw new StagedError("pack", "No valid genre answer", "invalid_answers");
       } catch (e) {
-        notes.push(`Pack pick failed (${e.message}); used ${pack.label} this turn.`);
+        report("pack", e);
+        notes.push(`Pack pick failed; kept ${pack.label} this turn.`);
       }
     }
     catalogRevision = `pack:${pack.id}@${pack.version}`;
-    const story = record.story;
+    const story = c.retrySource?.storyBefore !== void 0 ? { ...this.record.story, history: c.retrySource.storyBefore ? { [cursorBefore]: structuredClone(c.retrySource.storyBefore) } : {} } : c.retrySource ? { ...this.record.story, history: (() => {
+      const prior = snapshotAt(this.record.story, chain.slice(0, -1));
+      return prior ? { [cursorBefore]: prior } : {};
+    })(), historyAliases: {} } : this.record.story;
+    const storyBefore = snapshotAt(story, chain);
     const stateNpcs = characters.map(({ id, name: name2 }) => ({ id, name: name2 }));
     const before = levelsAt(story, chain, pack, stateNpcs.map((n) => n.id));
     const knownBefore = knownByAt(story, chain);
@@ -6757,15 +7132,29 @@ var Controller = class {
       secrets: wantSecrets ? story.secrets : [],
       knownBy: knownBefore,
       actorNames: { ...c.names, player: playerName },
-      maxQuestions: STAGED_MAX_QUESTIONS
+      maxQuestions: stateNpcs.length * pack.meters.length + story.secrets.length
     }) : null;
     let stateError = null;
-    const stateRun = built && Object.keys(built.questions).length ? ask("state", built.questions, stateEvidence({ transcript, latestInput: c.composerText, characters, secrets: wantSecrets ? story.secrets : [], playerName, maxChars: STAGED_MAX_STATE_CHARS })).catch((e) => {
-      stateError = e instanceof ProviderError ? `${e.code}: ${e.message}` : e.message;
-      return null;
-    }) : Promise.resolve(null);
-    const judged = stateRun.then((result) => applyStateAnswers(built?.index ?? {}, result?.answers ?? {}, before.levels, knownBefore));
-    const metersForRuling = wantMeters ? () => judged.then((state) => meterFacts(pack, state.meters, playerName)) : void 0;
+    const stateRecords = [];
+    const stateEntries = Object.entries(built?.questions ?? {});
+    const stateBatches = [];
+    for (let offset = 0; offset < stateEntries.length; offset += STAGED_MAX_QUESTIONS) stateBatches.push(Object.fromEntries(stateEntries.slice(offset, offset + STAGED_MAX_QUESTIONS)));
+    const stateRun = Promise.all(stateBatches.map(async (questions2) => {
+      try {
+        const result = await ask("state", questions2, stateEvidence({ transcript, latestInput: c.composerText, characters, secrets: wantSecrets ? story.secrets : [], playerName, maxChars: STAGED_MAX_STATE_CHARS }));
+        const checked = validateStageAnswers("state", questions2, result);
+        for (const failure of checked.errors) report("state", new StagedError("state", failure.message, failure.type));
+        stateRecords.push({ stage: "state", questions: questions2, state: null, result: checked.result });
+        return checked.result.answers;
+      } catch (error) {
+        report("state", error);
+        stateError = error.message;
+        return {};
+      }
+    })).then((batches) => Object.assign({}, ...batches));
+    const judged = stateRun.then((answers2) => applyStateAnswers(built?.index ?? {}, answers2, before.levels, knownBefore, before.assessed));
+    const metersForRuling = wantMeters ? () => judged.then((state) => meterFacts(pack, state.meters, playerName, state.assessed)) : void 0;
+    const manual = c.kind === "director_send" && !c.swipe && c.modules.decisions && this.actionDraft && !isOutOfCharacterMessage(visibleText(c.composerText)) ? this.buildDeclaredAction(c.actors) : null;
     let out;
     try {
       out = await runStaged({
@@ -6775,8 +7164,12 @@ var Controller = class {
         eligibleNpcIds: npcs,
         latestInput: c.composerText,
         transcript,
-        facts: jsonSafe(established),
+        pacing: c.modules.pacing ? { texts: this.settings.pacingTexts, handBack: this.settings.handBackBeats !== false, dynamicResponse: this.host.dynamicResponseEnabled(), playerName } : void 0,
         modules: c.modules,
+        replay: c.replay ? c.retrySource?.stageRecords : void 0,
+        manual: manual ? { text: `${manual.attemptedAction}
+Requested result: ${manual.requestedGain}
+User-provided evidence: ${manual.availableEvidence}`, ownerId: manual.actingActorId ?? manual.playerActorId, targetId: manual.targetActorIds[0] ?? null, familyKey: this.actionDraft.templateId } : void 0,
         speakerQuestion: needSpeaker ? speakerQuestion(npcs, c.names, this.profile.speakers.includeYield, c.composerText.trim() || null) : null,
         reactionQuestions: Object.fromEntries(reactionTargets.map((id) => [id, reactionQuestion(id)])),
         maxChars: STAGED_MAX_STATE_CHARS,
@@ -6785,59 +7178,63 @@ var Controller = class {
         maxLoreChars: this.settings.lore.judgeChars
       }, { evaluate: ask });
     } catch (e) {
-      abort.abort(new Error("staged turn stopped"));
-      if (this.inFlight === abort) this.inFlight = null;
-      if (c.epoch !== this.epoch || this.chatKey !== c.chatKey) return;
-      const stage = e instanceof StagedError ? e.stage : "decision";
-      const msg = e instanceof ProviderError ? `${e.code}: ${e.message}` : e.message;
-      this.status = "Paused";
-      this.inspect({ kind: "error", message: `Staged ${stage} stage stopped before anything was frozen; nothing was generated. ${msg}`, networkCalls, providerKind: provider.kind });
-      this.host.toast("error", `Director could not complete the ${stage} stage: ${msg}. Nothing was generated.`);
-      await this.persist();
-      this.notify();
-      return;
+      report(e instanceof StagedError ? e.stage : "move", e);
+      out = { pacing: null, outcome: "unruled", records: [], errors: [], speakerAnswer: null, reactionAnswers: {}, move: null, route: null, antecedentText: null, ruling: null };
     }
-    const stateResult = await stateRun;
+    for (const failure of out.errors) report(failure.stage, new StagedError(failure.stage, failure.message, failure.type));
     const judgedState = await judged;
     const loreTurn = loreRun ? await loreRun : null;
+    clearTimeout(timer);
+    if (loreTurn?.error) report("lore", abort.signal.reason instanceof JudgeWaitBudget ? abort.signal.reason : new Error(loreTurn.error));
+    if (loreTurn?.result?.failedWorlds.length) report("lore", new StagedError("lore", "Some lore questions had no valid answer", "invalid_answers"));
     if (loreTurn) {
       const note = loreNote(loreTurn);
       if (note) notes.push(note);
     }
     if (stateError) notes.push(`Character state kept from before (the judge request failed: ${stateError}).`);
     else if (judgedState.changes.length) notes.push(`State: ${judgedState.changes.join("; ")}.`);
-    if (stateResult && built) out.records.push({ stage: "state", questions: built.questions, state: null, result: stateResult });
+    out.records.push(...stateRecords);
     if (this.inFlight === abort) this.inFlight = null;
     const loreSteps = loreTurn?.result?.steps ?? [];
     const questions = Object.assign({}, ...out.records.map((r) => r.questions), ...loreSteps.map((step) => step.questions));
     const answers = Object.assign({}, ...out.records.map((r) => r.result.answers), ...loreSteps.flatMap((step) => step.results.map((r) => r.answers)));
     const stateSent = out.ruling?.projection.state ?? out.records.filter((r) => r.state !== null).at(-1)?.state ?? null;
     const lastResult = out.records.at(-1)?.result ?? null;
-    if (c.epoch !== this.epoch || this.chatKey !== c.chatKey) {
-      this.inspect({ kind: "error", message: "Decision result arrived after the chat changed; discarded." });
+    if (c.epoch !== this.epoch || this.chatKey !== c.chatKey || !this.settings.enabled || this.record?.paused || abort.signal.aborted && !(abort.signal.reason instanceof JudgeWaitBudget)) {
+      if (c.epoch === this.epoch && this.chatKey === c.chatKey) {
+        this.inspect({ kind: "info", message: "Judge requests completed before preparation was cancelled.", networkCalls, requestUsage: mergeRequestUsage(receipts) });
+        this.status = "Ready";
+        this.refreshStatus();
+      }
       return;
     }
-    if (c.kind === "director_send" && this.host.composerText() !== c.composerText) {
+    if (c.kind === "director_send" && !c.swipe && this.host.composerText() !== c.composerText) {
       this.status = "Ready";
-      this.inspect({ kind: "error", message: "Composer text changed while deciding; preparation discarded (nothing was frozen).", questions, answers, stateSent, networkCalls });
+      this.inspect({ kind: "error", message: "Composer text changed while deciding; preparation discarded (nothing was frozen).", questions, answers, stateSent, networkCalls, requestUsage: mergeRequestUsage(receipts) });
       this.host.toast("warning", "Your message changed while Director was deciding. Press Send again.");
       await this.persist();
       return;
     }
     if (c.changed()) {
-      this.status = "Ready";
-      this.inspect({ kind: "error", message: "The profile, reactions, or scene changed while deciding; the result was discarded before freeze.", questions, answers, stateSent, networkCalls });
-      this.host.toast("warning", "The scene or settings changed while the Director was deciding. Send again.");
-      await this.persist();
-      return;
+      this.reportJudgeError("invalid_answers", "Settings changed while the judge was deciding; this reply has no ruling", {}, "move");
+      failedStages.add("move");
+      out = { ...out, outcome: "unruled", move: null, route: null, ruling: null, reactionAnswers: {} };
     }
-    if (loreTurn?.result) record.story = withLore(record.story, cursorBefore, { at: Date.now(), refs: loreTurn.result.refs, requests: loreTurn.result.requests, books: loreTurn.books, failed: loreTurn.result.failedWorlds });
-    if (stateResult) record.story = withSnapshot(record.story, cursorBefore, { at: Date.now(), meters: wantMeters ? judgedState.meters : snapshotAt(record.story, chain)?.meters ?? {}, knownBy: judgedState.knownBy });
-    const shownLevels = Object.fromEntries(Object.entries(judgedState.meters).filter(([npc]) => stateResult || before.assessed[npc]));
-    const writerState = stateBlock({ pack, levels: wantMeters ? shownLevels : {}, names: c.names, playerName, secrets: record.story.secrets, knownBy: judgedState.knownBy, meters: wantMeters, secretsOn: wantSecrets });
+    if (loreTurn?.result) this.record.story = withLore(this.record.story, cursorBefore, { at: Date.now(), refs: loreTurn.result.refs, evidenceRefs: loreTurn.result.evidenceRefs, requests: loreTurn.result.requests, books: loreTurn.books, failed: loreTurn.result.failedWorlds, scene: loreTurn.scene, configuration: loreTurn.configuration });
+    const judgedMeters = structuredClone(storyBefore?.meters ?? {});
+    const assessed = structuredClone(storyBefore?.assessed ?? Object.fromEntries(Object.entries(judgedMeters).map(([npc, values]) => [npc, Object.fromEntries(Object.keys(values).map((key) => [key, true]))])));
+    if (wantMeters) {
+      for (const npc of stateNpcs) {
+        judgedMeters[npc.id] = { ...judgedMeters[npc.id], ...judgedState.meters[npc.id] };
+        assessed[npc.id] = { ...assessed[npc.id], ...judgedState.assessed[npc.id] };
+      }
+    }
+    const storyAfter = { at: Date.now(), meters: judgedMeters, assessed, knownBy: judgedState.knownBy };
+    const shownLevels = judgedMeters;
+    const writerState = stateBlock({ pack, levels: wantMeters ? shownLevels : {}, assessed, names: c.names, playerName, secrets: record.story.secrets, knownBy: judgedState.knownBy, meters: wantMeters, secretsOn: wantSecrets });
     let speaker;
     if (!c.isGroup) {
-      speaker = { questionId: null, eligibleActorIds: npcs, raw: null, adjusted: null, selected: npcs[0] ?? YIELD, source: npcs.length ? "single" : "yield", tieBroken: false };
+      speaker = { questionId: null, eligibleActorIds: npcs, raw: null, adjusted: null, selected: c.explicit ?? npcs[0] ?? YIELD, source: c.explicit === YIELD ? "explicit" : npcs.length ? "single" : "yield", tieBroken: false };
     } else if (c.nativeSpeaker) {
       speaker = null;
     } else {
@@ -6852,15 +7249,11 @@ var Controller = class {
         questionId: needSpeaker ? "speaker" : null
       });
       if (!decided.ok) {
-        this.status = "Paused";
-        this.inspect({ kind: "error", message: `Speaker could not be resolved: ${decided.error}`, questions, answers, stateSent, networkCalls, providerKind: lastResult?.provider ?? null });
-        this.host.toast("warning", `Speaker unresolved: ${decided.error}. Choose a speaker in the bar.`);
-        await this.persist();
-        this.notify();
-        return;
-      }
-      speaker = decided.decision;
+        report("speaker", new StagedError("speaker", decided.error, "invalid_answers"));
+        speaker = null;
+      } else speaker = decided.decision;
     }
+    if (c.replay && c.retrySource?.frozenSpeaker && !c.retrySource.judgeFailedStages?.includes("speaker")) speaker = structuredClone(c.retrySource.frozenSpeaker);
     const route = out.route;
     const npcOwner = route && (route.route === "SPECIFIED_NPC_MOVE" || route.route === "HANDOFF") && route.ownerId && npcs.includes(route.ownerId) ? route.ownerId : null;
     if (npcOwner && c.isGroup && !c.explicit) {
@@ -6872,94 +7265,99 @@ var Controller = class {
     let reaction = null;
     const advisoryNotes = [];
     let unruledReason = out.outcome === "unruled" ? route?.reason ?? "the routing is unresolved" : null;
-    if (out.outcome === "ruled" && route && out.move && out.ruling) {
-      const declared = this.stagedAction(out, record.projection.state.sceneId, pack);
-      const gate = gateAction(declared, established, this.profile.outcomes, {
-        actorPolicy: this.profile.actorPolicy,
-        playerActorId: PLAYER_ACTOR_ID,
-        currentSceneId: record.projection.state.sceneId,
-        settledGains: record.projection.state.settledGains
-      });
-      const snapshot = { ...snapshotBase(), state: out.ruling.projection.state };
-      if (gate.kind === "skip" || gate.kind === "pause") {
-        unruledReason = `the actor policy leaves it unruled (${gate.reason.replace(/_/g, " ")})`;
-      } else if (gate.kind === "rules") {
-        action = declared;
-        resolution = freeze({
-          resolutionId: newId("res"),
-          previousResolutionId: null,
-          action: declared,
-          snapshot,
-          assessment: null,
-          decisionSource: "rules",
-          policyRevision: this.profile.revision,
-          band: null,
-          method: "rules",
-          draw: null,
-          outcome: gate.outcome.name,
-          def: gate.outcome,
-          cursorBefore: null,
-          generation: 1,
-          providerKind: null,
-          requestedModel: null,
-          returnedModel: null,
-          now: Date.now()
+    try {
+      if (out.outcome === "ruled" && route && out.move && out.ruling) {
+        const staged = this.stagedAction(out, 0, pack);
+        const declared = manual ? { ...manual, pipeline: "staged", move: staged.move } : staged;
+        const gate = gateAction(declared, established, this.profile.outcomes, {
+          actorPolicy: this.profile.actorPolicy,
+          playerActorId: PLAYER_ACTOR_ID,
+          currentSceneId: 0
         });
-      } else if (this.profile.mode === "binding") {
-        const sig = normaliseSignal(out.ruling.answer);
-        if (!sig.ok) {
-          this.status = "Paused";
-          this.fail(`Assessment invalid: ${sig.error}`, { questions, answers, stateSent, networkCalls });
-          return;
+        const snapshot = { ...snapshotBase(), state: out.ruling.projection.state };
+        if (gate.kind === "skip" || gate.kind === "pause") {
+          unruledReason = `the actor policy leaves it unruled (${gate.reason.replace(/_/g, " ")})`;
+        } else if (gate.kind === "rules") {
+          action = declared;
+          resolution = freeze({
+            resolutionId: newId("res"),
+            previousResolutionId: null,
+            action: declared,
+            snapshot,
+            assessment: null,
+            decisionSource: "rules",
+            policyRevision: this.profile.revision,
+            band: null,
+            method: "rules",
+            draw: null,
+            outcome: gate.outcome.name,
+            def: gate.outcome,
+            cursorBefore: null,
+            generation: 1,
+            providerKind: null,
+            requestedModel: null,
+            returnedModel: null,
+            now: Date.now()
+          });
+        } else if (this.profile.mode === "binding") {
+          const sig = normaliseSignal(out.ruling.answer);
+          if (!sig.ok) throw new StagedError("ruling", sig.error, "invalid_answers");
+          const draw = this.profile.resolutionMethod === "sample" ? randomDraw().u : null;
+          const resolved = resolveOutcome({ bands: this.profile.bands, outcomes: this.profile.outcomes, method: this.profile.resolutionMethod, signal: sig.signal, draw });
+          if (!resolved.ok) throw new StagedError("ruling", resolved.error, "invalid_answers");
+          action = declared;
+          bandId2 = resolved.value.band.id;
+          resolution = freeze({
+            resolutionId: newId("res"),
+            previousResolutionId: null,
+            action: declared,
+            snapshot,
+            assessment: out.ruling.answer,
+            decisionSource: "provider",
+            policyRevision: this.profile.revision,
+            band: resolved.value.band,
+            method: resolved.value.method,
+            draw: resolved.value.draw,
+            outcome: resolved.value.outcome,
+            def: resolved.value.def,
+            cursorBefore: null,
+            generation: 1,
+            providerKind: lastResult?.provider ?? null,
+            requestedModel: lastResult?.requestedModel ?? null,
+            returnedModel: lastResult?.returnedModel ?? null,
+            now: Date.now()
+          });
+        } else {
+          const sig = normaliseSignal(out.ruling.answer);
+          if (sig.ok) advisoryNotes.push(`Support for "${out.move.span.text}" is assessed at ${sig.signal.x.toFixed(2)} on a 0\u20131 scale. Treat this as guidance about plausibility, not a ruling.`);
         }
-        const draw = this.profile.resolutionMethod === "sample" ? randomDraw().u : null;
-        const resolved = resolveOutcome({ bands: this.profile.bands, outcomes: this.profile.outcomes, method: this.profile.resolutionMethod, signal: sig.signal, draw });
-        if (!resolved.ok) {
-          this.status = "Paused";
-          this.fail(`Outcome could not be resolved: ${resolved.error}`, { questions, answers, stateSent, networkCalls });
-          return;
-        }
-        action = declared;
-        bandId2 = resolved.value.band.id;
-        resolution = freeze({
-          resolutionId: newId("res"),
-          previousResolutionId: null,
-          action: declared,
-          snapshot,
-          assessment: out.ruling.answer,
-          decisionSource: "provider",
-          policyRevision: this.profile.revision,
-          band: resolved.value.band,
-          method: resolved.value.method,
-          draw: resolved.value.draw,
-          outcome: resolved.value.outcome,
-          def: resolved.value.def,
-          cursorBefore: null,
-          generation: 1,
-          providerKind: lastResult?.provider ?? null,
-          requestedModel: lastResult?.requestedModel ?? null,
-          returnedModel: lastResult?.returnedModel ?? null,
-          now: Date.now()
-        });
-      } else {
-        const sig = normaliseSignal(out.ruling.answer);
-        if (sig.ok) advisoryNotes.push(`Support for "${out.move.span.text}" is assessed at ${sig.signal.x.toFixed(2)} on a 0\u20131 scale. Treat this as guidance about plausibility, not a ruling.`);
-      }
-    } else if (out.outcome === "handoff" && route?.ownerId && c.modules.reactions) {
-      try {
-        reaction = chooseReaction("initiative", c.reactionSettings, route.ownerId, randomDraw().u);
-      } catch (error) {
-        this.inspect({ kind: "info", message: `Hand-off reaction skipped: ${error.message}` });
-      }
-    } else if (out.outcome === "no_move" && c.modules.reactions && speaker && speaker.selected !== YIELD) {
-      const answer = out.reactionAnswers[speaker.selected];
-      if (answer?.type === "choice" && ["resolve", "secret", "exposure"].includes(answer.choice)) {
+      } else if (out.outcome === "handoff" && route?.ownerId && c.modules.reactions) {
         try {
-          reaction = chooseReaction(answer.choice, c.reactionSettings, speaker.selected, randomDraw().u);
+          reaction = chooseReaction("initiative", c.reactionSettings, route.ownerId, randomDraw().u);
         } catch (error) {
-          this.inspect({ kind: "info", message: `NPC reaction skipped: ${error.message}` });
+          this.inspect({ kind: "info", message: `Hand-off reaction skipped: ${error.message}` });
+        }
+      } else if (out.outcome === "no_move" && c.modules.reactions && speaker && speaker.selected !== YIELD) {
+        const answer = out.reactionAnswers[speaker.selected];
+        if (answer?.type === "choice" && ["resolve", "secret", "exposure"].includes(answer.choice)) {
+          try {
+            reaction = chooseReaction(answer.choice, c.reactionSettings, speaker.selected, randomDraw().u);
+          } catch (error) {
+            this.inspect({ kind: "info", message: `NPC reaction skipped: ${error.message}` });
+          }
         }
       }
+    } catch (error) {
+      report("ruling", error);
+      action = null;
+      resolution = null;
+      bandId2 = null;
+      unruledReason = "the judge was unavailable";
+    }
+    for (const stage of askedStages) if (!failedStages.has(stage)) this.recoverJudgeStage(stage);
+    if (c.replay && c.retrySource) {
+      if (c.retrySource.resolutionId) resolution = this.record.resolutions[c.retrySource.resolutionId] ?? resolution;
+      if (c.retrySource.reaction && !c.retrySource.judgeFailedStages?.includes("reaction")) reaction = structuredClone(c.retrySource.reaction);
     }
     const name = (id) => id ? c.names[id] ?? id : "";
     const moveText = out.move ? `"${out.move.span.text}"` : "no move to rule on";
@@ -6974,7 +7372,10 @@ var Controller = class {
     const speakerLabel = speaker ? name(speaker.selected) : "chosen by SillyTavern";
     const fallbackMessage = unruledReason ? `Staged: unruled, because ${unruledReason}. Speaker ${speakerLabel}.${messageSuffix}` : out.outcome === "handoff" ? `Staged: hand-off to ${name(route?.ownerId)}; NPC reactions are off, so no response was drawn. Speaker ${speakerLabel}.${messageSuffix}` : advisoryNotes.length ? `Advisory: support assessed, no binding outcome. Speaker ${speakerLabel}.${messageSuffix}` : `Speaker ${speakerLabel}; no move to rule on.${messageSuffix}`;
     await this.finishTurn({
+      packId: pack.id,
       kind: c.kind,
+      swipe: c.swipe,
+      nativeSwipePending: c.nativeSwipePending,
       composerText: c.composerText,
       epoch: c.epoch,
       actors: c.actors,
@@ -6985,22 +7386,30 @@ var Controller = class {
       resolution,
       bandId: bandId2,
       reaction,
-      snapshot: { ...snapshotBase(), state: stateSent },
+      snapshot: { ...snapshotBase(), state: loreSceneState(transcript, c.composerText, c.names, STAGED_MAX_STATE_CHARS) },
       established,
       decisionsOn: c.modules.decisions,
-      disarmDeclaration: false,
+      disarmDeclaration: Boolean(manual) && c.kind === "director_send" && !c.swipe,
       advisoryNotes,
       questions: Object.keys(questions).length ? questions : null,
       answers,
       stateSent,
       result: lastResult,
       networkCalls,
+      requestUsage: mergeRequestUsage(receipts),
       actionId: action?.actionId ?? null,
       applicability: action?.applicability ?? null,
       fallbackMessage,
       messageSuffix,
       stateBlock: writerState,
-      loreCursor: loreTurn?.result ? cursorBefore : null
+      loreCursor: loreTurn?.result ? cursorBefore : null,
+      storyBefore: storyBefore ? structuredClone(storyBefore) : null,
+      storyAfter,
+      pacing: out.pacing,
+      stageRecords: out.records,
+      failedStages: [...failedStages],
+      outcome: out.outcome,
+      retrySource: c.replay ? c.retrySource : void 0
     });
   }
   /**
@@ -7024,14 +7433,22 @@ var Controller = class {
         }
         const books = catalog.books.map((b) => b.world);
         if (inputs.length === 0) return { result: null, books, error: null };
-        const state = loreSceneState(transcript, c.composerText, c.names, LORE_STATE_CHARS);
+        const scene = loreSceneState(transcript, c.composerText, c.names, LORE_STATE_CHARS);
+        const configuration = hash53(JSON.stringify([settings, inputs.map((book) => [book.tree.world, book.public, [...book.tree.entries.keys()]])]));
+        const frozen = c.replay && c.retrySource?.loreCursor ? this.record?.story.lore[c.retrySource.loreCursor] : null;
+        if (frozen && !c.retrySource?.judgeFailedStages?.includes("lore")) {
+          return { result: reuseLorePicks(inputs, frozen), books, error: null, scene: frozen.scene ?? loreSceneAnchor(scene), configuration };
+        }
+        const previous = this.record ? loreAt(this.record.story, cursorChain(this.record.seedId, this.host.fingerprintMessages(c.transcriptPrefix ?? this.host.chat()))) : null;
+        const reuse = previous?.scene !== void 0 && previous.configuration === configuration && previous.failed.length === 0;
+        const state = reuse ? { ...scene, previousScene: visibleJudgeData(previous.scene) } : scene;
         const result = await runLoreStage(inputs, () => (questions) => ask("lore", questions, state), {
           width: settings.width,
           minProbability: settings.minProbability,
           maxEntries: settings.maxEntries,
           maxDepth: settings.maxDepth
-        });
-        return { result, books, error: null };
+        }, reuse ? { previous, sceneQuestion: loreSceneQuestion() } : void 0);
+        return { result, books, error: null, scene: result.reused ? previous.scene : loreSceneAnchor(scene), configuration };
       } catch (e) {
         return { result: null, books: [], error: e instanceof ProviderError ? `${e.code}: ${e.message}` : e.message };
       }
@@ -7043,12 +7460,25 @@ var Controller = class {
    * follow-up, a swipe of it, or a later Next turn each get exactly their own.
    */
   async armLoreForAttempt(attemptId) {
-    if (!attemptId || !this.settings.modules.lore || !this.record) return;
-    const cursor = this.record.attempts[attemptId]?.loreCursor;
-    const found = cursor ? this.record.story.lore[cursor] : void 0;
-    if (!found) return;
-    const settings = this.settings.lore;
-    await this.host.armLore(lorePlan(found.refs, (world) => effectiveMode(settings, world, this.host.tunnelVisionManages(world)), found.books, found.failed));
+    if (!attemptId || !this.record || !this.settings.modules.lore) return;
+    const attempt = this.record.attempts[attemptId];
+    if (!attempt) return;
+    let plan = attempt.frozenLorePlan;
+    if (plan === void 0 && attempt.loreCursor) {
+      const found = this.record.story.lore[attempt.loreCursor];
+      if (found) {
+        const legacy = lorePlan(found.refs, (world) => effectiveMode(this.settings.lore, world, this.host.tunnelVisionManages(world)), found.books, found.failed, this.settings.lore.placeNearEnd);
+        plan = { force: [...legacy.force], managed: [...legacy.managed], nearEnd: legacy.nearEnd };
+        attempt.frozenLorePlan = plan;
+      }
+    }
+    if (!plan) return;
+    try {
+      await this.host.armLore({ force: new Set(plan.force), managed: new Set(plan.managed), nearEnd: plan.nearEnd });
+    } catch (error) {
+      void this.host.armLore(null);
+      this.reportJudgeError("network", "Lore unavailable: " + error.message, {}, "lore");
+    }
   }
   /** The frozen action for a staged ruling: the player's own passage, routed. */
   stagedAction(out, sceneId, pack) {
@@ -7095,16 +7525,22 @@ var Controller = class {
     const family = familyByKey(pack, move.familyKey) ?? pack.families[0];
     return rulingQuestion({ family, pack, hasAntecedent: move.antecedent !== null });
   }
-  /** Shared end of a turn for both pipelines: writer injection, prepared attempt, generation. */
+  /** End of a staged turn: writer injection, prepared attempt, generation. */
   async finishTurn(t) {
     const { kind, composerText, epoch, actors, isGroup, names, speaker, resolution, reaction } = t;
+    if (!t.nativeSwipePending && !t.swipe && this.host.isGenerating() && this.currentAttemptId) {
+      await new Promise((resolve) => this.writerIdleWaiters.add(resolve));
+      await this.waitForMessageTasks();
+      if (epoch !== this.epoch) return;
+    }
     const speakerId = speaker ? speaker.selected : null;
     const speakerName = speakerId && speakerId !== YIELD ? names[speakerId] ?? null : null;
     const playerName = this.host.playerName();
     const attemptId = newId("att");
     const toolRequestId = newId("toolreq");
     const writerTool = this.host.writerToolCapability("normal");
-    const toolAvailable = t.decisionsOn && speakerId !== null && this.toolRegistered && writerTool.supported && !this.host.isAutoDirectorEnabled();
+    const keptPermit = t.retrySource?.permitId ? this.record?.permits[t.retrySource.permitId] : null;
+    const toolAvailable = !keptPermit && t.decisionsOn && speakerId !== null && this.toolRegistered && writerTool.supported && !this.host.isAutoDirectorEnabled();
     const evidenceRefs = [
       "latest_input",
       ...this.host.chat().map((_, index) => `msg:${index}`).slice(-this.profile.budgets.maxRecentMessages),
@@ -7118,15 +7554,16 @@ var Controller = class {
       speakerName,
       playerName,
       targetNames: resolution.action.targetActorIds.map((id) => names[id] ?? id),
-      npcActionPolicy: toolAvailable ? "checkpoint" : "defer"
+      npcActionPolicy: keptPermit ? "permitted" : toolAvailable ? "checkpoint" : "defer"
     }) : "";
     const advisory = advisoryBlock({ influence: this.profile.advisoryInfluence, notes: t.advisoryNotes });
-    const planning = t.decisionsOn ? toolPlanningBlock({ attemptId, requestId: toolRequestId, speakerActorId: speakerId ?? "", evidenceRefs, toolAvailable }) : "";
-    const transition = this.sceneTransitionPending ? "[Scene transition requested]\nBegin a new scene from the established fiction and the latest user direction. Do not choose voluntary actions or decisions for the player. The Director scene identity has advanced." : "";
-    const injected = [combinedBlock(binding, advisory), t.stateBlock, transition, this.reactionBlock(reaction), planning].filter(Boolean).join("\n\n");
-    this.sceneTransitionPending = false;
+    const planning = t.decisionsOn ? keptPermit ? permitFollowupBlock(keptPermit) + "\nThe Director tool is closed for this reply; do not call it." : toolPlanningBlock({ attemptId, requestId: toolRequestId, speakerActorId: speakerId ?? "", evidenceRefs, toolAvailable }) : "";
+    const replyNudge = this.settings.modules.replyCheck ? t.retrySource?.replyNudge ?? this.selectedAttempt()?.replyCheck?.nudge ?? "" : "";
+    const injected = [combinedBlock(binding, advisory), t.stateBlock, this.reactionBlock(reaction), this.settings.modules.pacing ? pacingBlock(t.pacing ?? null, this.settings.handBackBeats !== false, this.host.dynamicResponseEnabled()) : "", replyNudge, planning].filter(Boolean).join("\n\n");
     if (speakerId === YIELD) {
-      this.inspect({ kind: "yield", message: "Director yielded: no NPC reply.", questions: t.questions, answers: t.answers, stateSent: t.stateSent, speaker, networkCalls: t.networkCalls, providerKind: t.result?.provider ?? null, durationMs: t.result?.durationMs ?? null, inputTokens: t.result?.inputTokens ?? null, outputTokens: t.result?.outputTokens ?? null, actionId: t.actionId, applicability: t.applicability });
+      const usage2 = summarizeUsage(t.requestUsage ?? []);
+      this.inspect({ kind: "yield", message: "Director yielded: no NPC reply.", questions: t.questions, answers: t.answers, stateSent: t.stateSent, speaker, networkCalls: t.networkCalls, requestUsage: t.requestUsage, providerKind: t.result?.provider ?? null, durationMs: usage2.durationMs, inputTokens: usage2.inputTokens, outputTokens: usage2.outputTokens, actionId: t.actionId, applicability: t.applicability });
+      this.speakerOverride = null;
       this.status = "Ready";
       if (composerText.trim()) {
         const posted = await this.host.postUserMessage(composerText);
@@ -7140,7 +7577,28 @@ var Controller = class {
     }
     this.apply({ type: "prepare", resolution, action: t.preparedAction, reaction, attemptId, actorId: speakerId, epoch, composerText, now: Date.now() });
     const prepared = this.record?.attempts[attemptId];
-    if (prepared) prepared.loreCursor = t.loreCursor;
+    if (prepared) {
+      prepared.requestUsage = mergeRequestUsage(t.retrySource?.requestUsage, t.requestUsage);
+      prepared.frozenPackId = t.packId;
+      const decisionFailed = (t.failedStages ?? []).some((stage) => ["move", "route", "ruling"].includes(stage));
+      prepared.decisionsApplied = Boolean(t.decisionsOn && (resolution || keptPermit || !decisionFailed && t.outcome !== "unruled"));
+      prepared.frozenPacing = structuredClone(t.pacing ?? null);
+      prepared.replyNudge = replyNudge;
+      prepared.loreCursor = t.loreCursor;
+      prepared.storyBefore = structuredClone(t.storyBefore);
+      prepared.storyAfter = structuredClone(t.storyAfter);
+      prepared.frozenStateBlock = t.stateBlock;
+      prepared.frozenSpeaker = speaker ? structuredClone(speaker) : null;
+      prepared.judgeErrors = [...this.turnErrors];
+      prepared.judgeFailedStages = t.failedStages ?? [];
+      prepared.stageRecords = structuredClone(t.stageRecords ?? []);
+      prepared.turnKind = kind;
+      prepared.inputText = composerText;
+      if (t.retrySource?.permitId) prepared.permitId = t.retrySource.permitId;
+      const found = t.loreCursor ? this.record?.story.lore[t.loreCursor] : null;
+      const plan = found ? lorePlan(found.refs, (world) => effectiveMode(this.settings.lore, world, this.host.tunnelVisionManages(world)), found.books, found.failed, this.settings.lore.placeNearEnd) : null;
+      prepared.frozenLorePlan = plan ? { force: [...plan.force], managed: [...plan.managed], nearEnd: plan.nearEnd } : null;
+    }
     this.preparedTool = {
       requestId: toolRequestId,
       attemptId,
@@ -7155,6 +7613,7 @@ var Controller = class {
       this.actionDraft = null;
       this.actionDraftRevision += 1;
     }
+    const usage = summarizeUsage(t.requestUsage ?? []);
     this.inspect({
       kind,
       attemptId,
@@ -7172,23 +7631,34 @@ var Controller = class {
       providerKind: t.result?.provider ?? null,
       requestedModel: t.result?.requestedModel ?? null,
       returnedModel: t.result?.returnedModel ?? null,
-      durationMs: t.result?.durationMs ?? null,
-      inputTokens: t.result?.inputTokens ?? null,
-      outputTokens: t.result?.outputTokens ?? null,
+      durationMs: usage.durationMs,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
       networkCalls: t.networkCalls,
+      requestUsage: t.requestUsage,
       message: resolution ? `Frozen ${resolution.outcome} (${resolution.method}${t.bandId ? ", band " + t.bandId : ""}) for ${names[resolution.action.actingActorId ?? PLAYER_ACTOR_ID] ?? resolution.action.actingActorId ?? playerName}; reply speaker ${speakerName ?? speakerId ?? "chosen by SillyTavern"}.${t.messageSuffix}` : reaction ? `NPC ${reaction.kind}: ${reaction.outcome} for ${names[reaction.actorId] ?? reaction.actorId}; sampled from configured weights, preserved across wording swipes.${t.messageSuffix}` : t.fallbackMessage
     });
+    this.pendingForSwipe = Boolean(t.swipe);
+    this.preparedInputCursor = t.swipe ? t.snapshot.cursorBefore : null;
     this.pendingInjection = injected;
     this.status = resolution ? "Frozen" : "Ready";
     await this.persist();
+    if (t.nativeSwipePending) return;
+    if (this.host.isGenerating()) {
+      if (this.replyBinding && this.currentAttemptId && this.currentAttemptId !== attemptId) {
+        await new Promise((resolve) => this.writerIdleWaiters.add(resolve));
+      } else {
+        this.apply({ type: "cancel", attemptId, epoch, reason: "another generation started before this Send was bound" });
+        this.host.toast("info", "Another reply started. Your message is still in the composer; press Send when it finishes.");
+        this.status = "Ready";
+        return;
+      }
+    }
+    await this.waitForMessageTasks();
+    if (epoch !== this.epoch) return;
     const actor = speakerId ? actors.byId[speakerId] : void 0;
     const forceIndex = isGroup && actor ? this.host.resolveIndex(actor.avatar) : null;
-    if (isGroup && speakerId && (forceIndex === null || forceIndex < 0)) {
-      this.apply({ type: "cancel", attemptId, epoch, reason: "actor binding could not be re-resolved to a host character" });
-      this.fail(`Could not re-resolve ${speakerId} to a host character; repair the group before generating.`);
-      await this.persist();
-      return;
-    }
+    this.host.setComposerLocked(false);
     this.status = "Writing";
     this.notify();
     let settleWriter;
@@ -7198,7 +7668,8 @@ var Controller = class {
     this.writerSettled = writerSettled;
     try {
       try {
-        await this.host.generate(forceIndex);
+        if (t.swipe) await this.host.swipeRight(forceIndex);
+        else await this.host.generate(forceIndex !== null && forceIndex >= 0 ? forceIndex : null);
       } finally {
         settleWriter();
         if (this.writerSettled === writerSettled) this.writerSettled = null;
@@ -7206,7 +7677,11 @@ var Controller = class {
     } catch (e) {
       console.warn("[RP Director] generate failed", e);
     } finally {
+      if (epoch !== this.epoch) return;
+      this.pendingForSwipe = false;
+      this.preparedDeadline = null;
       await this.waitForMessageTasks(attemptId);
+      if (epoch !== this.epoch) return;
       const attempt = this.record?.attempts[attemptId];
       if (attempt && (attempt.status === "writing" || attempt.status === "prepared")) {
         this.apply({ type: "cancel", attemptId, epoch, reason: "the writer finished without a completed message (cancelled, failed, or aborted)" });
@@ -7237,6 +7712,7 @@ var Controller = class {
     return listPacks().map((p) => ({ id: p.id, label: p.label, description: p.description }));
   }
   async setChatPack(packId) {
+    if (packId !== "auto" && !hasPack(packId)) throw new Error("Unknown genre pack; choose a listed pack id or auto.");
     if (!this.record) return;
     const id = packId === "auto" || hasPack(packId) ? packId : "auto";
     this.record.story = { ...this.record.story, packId: id, packSource: id === "auto" ? "auto" : "user" };
@@ -7251,7 +7727,7 @@ var Controller = class {
     const pack = this.chatPack();
     return Object.entries(snap.meters).map(([npc, values]) => ({
       name: this.record.actors[npc]?.name ?? npc,
-      meters: pack.meters.filter((m) => Number.isInteger(values[m.key])).map((m) => ({ label: meterLabel(m, PLAYER_LABEL), level: m.levels[values[m.key]], rank: `${values[m.key] + 1} of ${m.levels.length}` }))
+      meters: pack.meters.filter((m) => Number.isInteger(values[m.key])).map((m) => ({ label: meterLabel(m, PLAYER_LABEL), level: snap.assessed !== void 0 && snap.assessed[npc]?.[m.key] !== true ? "not yet judged" : m.levels[values[m.key]], rank: snap.assessed !== void 0 && snap.assessed[npc]?.[m.key] !== true ? "" : `${values[m.key] + 1} of ${m.levels.length}` }))
     })).filter((entry) => entry.meters.length > 0);
   }
   /** The most recent lore choice on this branch, for display. */
@@ -7267,17 +7743,17 @@ var Controller = class {
     const catalog = await this.host.loreCatalog(Object.values(this.actorMap().byId).map((a) => a.avatar));
     const roots = this.host.tunnelVisionRoots();
     return catalog.books.map((book) => {
-      const entries = catalog.entries.filter((e) => e.world === book.world);
-      const own = bookSettings(this.settings.lore, book.world);
+      const entries2 = catalog.entries.filter((e) => e.world === book.world);
+      const own2 = bookSettings(this.settings.lore, book.world);
       return {
         world: book.world,
         source: book.source,
-        entries: entries.length,
-        selectable: entries.filter(selectable).length,
+        entries: entries2.length,
+        selectable: entries2.filter(selectable).length,
         index: roots[book.world] ? "tunnelvision" : "none",
         tunnelVisionManages: this.host.tunnelVisionManages(book.world),
-        mode: own.mode,
-        public: own.public,
+        mode: own2.mode,
+        public: own2.public,
         configured: Boolean(this.settings.lore.books[book.world])
       };
     });
@@ -7312,38 +7788,14 @@ var Controller = class {
     await this.persist();
     this.notify();
   }
-  /** The judged state that applies at the end of this cursor chain, as writer text (swipes reuse it). */
-  storyBlockAt(chain) {
-    if (!this.record) return "";
-    const snap = snapshotAt(this.record.story, chain);
-    if (!snap) return "";
-    const names = {};
-    for (const a of Object.values(this.record.actors)) names[a.actorId] = a.name;
-    return stateBlock({
-      pack: this.chatPack(),
-      levels: snap.meters,
-      names,
-      playerName: this.host.playerName(),
-      secrets: this.record.story.secrets,
-      knownBy: knownByAt(this.record.story, chain),
-      meters: this.settings.modules.meters,
-      secretsOn: this.settings.modules.secrets && this.record.story.secrets.length > 0
-    });
-  }
-  /** A ruling's instruction with its placeholders filled exactly as the writer's binding block fills them. */
-  filledInstruction(resolution, speakerActorId) {
-    const names = Object.fromEntries(Object.values(this.record?.actors ?? {}).map((actor) => [actor.actorId, actor.name]));
-    const speakerName = speakerActorId ? names[speakerActorId] ?? null : null;
-    const targets = resolution.action.targetActorIds.map((id) => names[id] ?? id);
-    return fillPlaceholders(instructionForResolution(resolution), placeholderValues(resolution.action, targets, speakerName, this.host.playerName())).trim();
-  }
+  /** Explicit manual input is routed through the staged evidence rules. */
   buildDeclaredAction(actors) {
     const draft = this.actionDraft;
     if (!draft) return null;
     const validActor = (id) => id === PLAYER_ACTOR_ID || Boolean(actors.byId[id]);
     return declareAction({
       actionId: newId("act"),
-      templateId: draft.templateId,
+      templateId: templateById(draft.templateId) ? draft.templateId : "acquire_secure",
       actingActorId: validActor(draft.actingActorId) ? draft.actingActorId : PLAYER_ACTOR_ID,
       playerActorId: PLAYER_ACTOR_ID,
       targetActorIds: draft.targetActorIds.filter(validActor),
@@ -7352,46 +7804,31 @@ var Controller = class {
       applicability: draft.applicability,
       uncertainConsequential: draft.uncertainConsequential,
       opposed: draft.opposed,
-      resolutionScope: draft.resolutionScope,
-      sceneId: this.record?.projection.state.sceneId ?? 1,
-      persistentFactKey: draft.persistentFactKey,
+      resolutionScope: "attempt",
+      sceneId: 0,
+      persistentFactKey: "",
       failureStake: { kind: draft.failureStakeKind, detail: draft.failureStakeDetail },
       availableEvidence: draft.availableEvidence
     });
   }
-  buildAutomaticAction(composerText, sceneId) {
-    const text2 = composerText.trim();
-    if (!text2) return null;
-    return declareAction({
-      actionId: newId("act"),
-      // Replaced by the independent family Choice after the batch returns.
-      templateId: "acquire_secure",
-      actingActorId: PLAYER_ACTOR_ID,
-      playerActorId: PLAYER_ACTOR_ID,
-      targetActorIds: [],
-      attemptedAction: text2,
-      requestedGain: AUTOMATIC_GAIN,
-      applicability: "favorable",
-      uncertainConsequential: true,
-      opposed: false,
-      resolutionScope: "attempt",
-      sceneId,
-      persistentFactKey: "",
-      failureStake: { kind: "other", detail: "Failure must move the scene without erasing established progress or inventing a disproportionate consequence." },
-      availableEvidence: "Use only observer-visible evidence in the accepted scene and latest user message."
-    });
-  }
   // ---- plan-only writer tool -------------------------------------------------
   shouldOfferWriterTool() {
-    if (!this.settings.enabled || !this.toolRegistered || this.host.isAutoDirectorEnabled()) return false;
-    const window2 = this.toolWindow;
-    if (!window2 || window2.phase !== "initial" || window2.used || this.currentAttemptId !== window2.attemptId) return false;
-    const attempt = this.record?.attempts[window2.attemptId];
-    if (!attempt || attempt.status !== "writing" || attempt.actorId !== window2.speakerActorId || attempt.cursorBefore !== window2.baseCursor) return false;
+    if (!this.settings.enabled || this.record?.paused || !this.settings.modules.decisions || !this.toolRegistered || this.host.isAutoDirectorEnabled()) return false;
     return this.host.writerToolCapability("normal").supported;
   }
-  toolFailure(window2, code, message, malformed = false) {
+  toolFailure(window2, code, message, malformed = false, cause) {
     window2.error = `${code}: ${message}`;
+    const failure = stageError("ruling", cause ?? (code === "provider_failed" ? new Error(message) : new StagedError("ruling", message, "invalid_answers")));
+    if (code === "provider_failed") this.reportJudgeError(failure.type, `NPC judge unavailable: ${message}`, {}, "npc");
+    else {
+      this.inspect({ kind: "error", message: `Writer tool request rejected: ${message}` });
+      if (!this.errorTypes.has(`tool:${code}`)) {
+        this.errorTypes.add(`tool:${code}`);
+        this.host.toast("warning", "The writer's move could not be ruled. Your chat isn't affected.");
+      }
+    }
+    const attempt = this.record?.attempts[window2.attemptId];
+    if (attempt && code === "provider_failed") attempt.judgeErrors = [.../* @__PURE__ */ new Set([...attempt.judgeErrors ?? [], failure.type])];
     window2.phase = malformed ? "malformed_pending" : "failed_pending";
     this.apply({ type: "tool_result", attemptId: window2.attemptId, permit: null, status: malformed ? "malformed" : "failed", error: window2.error });
     this.inspect({ kind: "tool_checkpoint", attemptId: window2.attemptId, message: `Tool checkpoint refused: ${window2.error}`, networkCalls: 0 });
@@ -7400,12 +7837,30 @@ var Controller = class {
   }
   async onToolCall(raw) {
     const window2 = this.toolWindow;
-    if (!window2 || window2.phase !== "initial" || this.currentAttemptId !== window2.attemptId) {
-      return JSON.stringify({ schemaVersion: 1, ok: false, code: "recursive_tool_call", message: "No active initial Director tool window. Continue without another tool call.", retryAllowed: false });
+    const binding = this.replyBinding;
+    const intermediary = binding ? this.host.chat()[binding.index] : null;
+    if (intermediary && !intermediary.is_user && !intermediary.is_system) {
+      binding.rejected.add(intermediary);
+      binding.end();
+    }
+    const automatic = this.automaticReply;
+    if (automatic?.started && automatic.chatKey === this.chatKey && (automatic.cancelled || automatic.attemptId === (this.currentAttemptId ?? this.completionCandidate))) {
+      automatic.finished = false;
+      automatic.toolFollowUp = true;
+    }
+    if (!this.settings.enabled || this.record?.paused || !this.settings.modules.decisions || !window2 || window2.phase !== "initial" || this.currentAttemptId !== window2.attemptId) {
+      const id = this.currentAttemptId ?? this.completionCandidate;
+      if (id && this.settings.enabled && !this.record?.paused) {
+        const attempt = this.record?.attempts[id];
+        const injection = window2?.permit ? [(attempt?.injectedText ?? "").split("[Director NPC-action checkpoint]")[0], permitFollowupBlock(window2.permit)].filter(Boolean).join("\n\n") : attempt?.injectedText || this.pendingInjection || "";
+        this.toolContinuation = { attemptId: id, injection: injection + "\n\n[Director tool result]\nThe Director tool is closed for this reply; continue with the same frozen decisions and do not call it again." };
+      }
+      return JSON.stringify({ schemaVersion: 1, ok: false, code: "tool_window_closed", message: "The Director tool is closed. Continue with the frozen decisions without another tool call.", retryAllowed: false });
     }
     if (window2.used) return this.toolFailure(window2, "recursive_tool_call", "Only one Director tool call is allowed per writer attempt.");
     window2.used = true;
-    const priorProse = this.host.assistantProseSince(window2.chatLengthAtBind);
+    const ignoredPriorReply = window2.priorReplyText !== void 0 && stripResultFooter(this.host.chat()[window2.chatLengthAtBind]?.mes ?? "") === window2.priorReplyText;
+    const priorProse = this.host.assistantProseSince(window2.chatLengthAtBind + (ignoredPriorReply ? 1 : 0));
     if (priorProse.length > 0) return this.toolFailure(window2, "prose_before_tool", "The writer emitted prose before requesting adjudication; the proposal is not accepted.", true);
     const validation = validateTurnProposal(raw, {
       requestId: window2.requestId,
@@ -7416,18 +7871,21 @@ var Controller = class {
     });
     if (!validation.ok) return this.toolFailure(window2, validation.code, validation.message);
     let provider;
+    const receipts = [];
+    let usageRecorded = false;
     try {
-      provider = this.planningProvider(this.provider());
+      provider = this.usageProvider(this.planningProvider(this.provider()), "npc_action", receipts);
     } catch (error) {
-      return this.toolFailure(window2, "provider_failed", error.message);
+      return this.toolFailure(window2, "provider_failed", error.message, false, error);
     }
     const controller2 = new AbortController();
     this.inFlight = controller2;
     const epoch = this.epoch;
     const chatKey = this.chatKey;
+    const timer = setTimeout(() => controller2.abort(new JudgeWaitBudget()), Math.max(0, this.settings.waitForJudgeSeconds) * 1e3);
     const started = Date.now();
     const frozenProfile = structuredClone(this.profile);
-    const stillCurrent = () => epoch === this.epoch && chatKey === this.chatKey && this.toolWindow === window2 && this.settings.enabled && !this.host.isAutoDirectorEnabled() && this.record?.attempts[window2.attemptId]?.status === "writing" && this.cursorOf(this.host.chat().slice(0, window2.chatLengthAtBind)) === window2.baseCursor && this.profile.revision === frozenProfile.revision;
+    const stillCurrent = () => epoch === this.epoch && chatKey === this.chatKey && this.toolWindow === window2 && this.settings.enabled && !this.record?.paused && !this.host.isAutoDirectorEnabled() && this.record?.attempts[window2.attemptId]?.status === "writing" && this.cursorOf(this.host.chat().slice(0, window2.chatLengthAtBind)) === window2.baseCursor && this.profile.revision === frozenProfile.revision;
     try {
       const adjudicationInput = {
         proposal: validation.proposal,
@@ -7438,70 +7896,87 @@ var Controller = class {
         playerName: this.host.playerName(),
         signal: controller2.signal
       };
-      const adjudicated = await adjudicateTurnProposal(adjudicationInput);
+      const adjudicated = await withinBudget(adjudicateTurnProposal(adjudicationInput), controller2.signal);
       if (!stillCurrent() || controller2.signal.aborted) return JSON.stringify({ ok: false, code: "cancelled" });
-      window2.phase = "reviewing";
-      this.status = "Review rolls";
-      this.notify();
-      const kept = await reviewPermit({
+      clearTimeout(timer);
+      const kept = this.settings.reviewNpcRolls ? await reviewPermit({
         initial: adjudicated.permit,
         signal: controller2.signal,
         isCurrent: stillCurrent,
         method: frozenProfile.resolutionMethod,
         choose: (permit) => this.host.reviewRolls(permit, window2.actorNames, frozenProfile.resolutionMethod, controller2.signal),
-        reroll: async (permit) => frozenProfile.resolutionMethod === "sample" ? rerollPermit(permit, frozenProfile, window2.actorNames, adjudicationInput.playerName) : (await adjudicateTurnProposal(adjudicationInput)).permit
-      });
-      if (this.inFlight === controller2) this.inFlight = null;
+        reroll: async (permit) => frozenProfile.resolutionMethod === "sample" ? rerollPermit(permit, frozenProfile, window2.actorNames, adjudicationInput.playerName) : this.reassessPermit(adjudicationInput, controller2)
+      }) : adjudicated.permit;
       if (!kept || !stillCurrent()) {
         window2.phase = "cancelled";
         if (epoch === this.epoch && chatKey === this.chatKey) {
-          this.apply({ type: "cancel", attemptId: window2.attemptId, epoch, reason: "tool result review cancelled or context changed" });
+          this.apply({ type: "cancel", attemptId: window2.attemptId, epoch, reason: "NPC roll review cancelled" });
           this.host.stopGeneration();
-          this.status = "Ready";
           await this.persist();
         }
-        return JSON.stringify({ ok: false, code: "cancelled", message: "Generation cancelled; no roll accepted." });
+        return JSON.stringify({ ok: false, code: "cancelled", message: "Cancelled by the user." });
       }
       window2.permit = kept;
       window2.phase = "followup_pending";
       this.status = "Writing";
       const priorReaction = this.record?.attempts[window2.attemptId]?.reaction;
-      if (priorReaction) this.pendingInjection = this.pendingInjection.replace(this.reactionBlock(priorReaction), "").trim();
+      if (priorReaction) {
+        this.pendingInjection = this.pendingInjection.replace(this.reactionBlock(priorReaction), "").trim();
+        const attempt2 = this.record?.attempts[window2.attemptId];
+        if (attempt2) attempt2.injectedText = attempt2.injectedText.replace(this.reactionBlock(priorReaction), "").trim();
+      }
       this.apply({ type: "tool_result", attemptId: window2.attemptId, permit: kept, status: "permitted", error: null });
+      this.recoverJudgeStage("npc");
+      const attempt = this.record?.attempts[window2.attemptId];
+      if (attempt) attempt.requestUsage = mergeRequestUsage(attempt.requestUsage, receipts);
+      const usage = summarizeUsage(receipts);
       this.inspect({
         kind: "tool_checkpoint",
         attemptId: window2.attemptId,
-        message: `Kept ${kept.actions.length} NPC result(s), after ${kept.reviewHistory?.length ?? 0} reroll/reassessment(s). Review elapsed ${Date.now() - started} ms.`,
+        message: `Applied ${kept.actions.length} NPC result(s) automatically in ${Date.now() - started} ms.`,
         questions: adjudicated.questions,
         stateSent: adjudicated.snapshot.state,
         answers: adjudicated.evaluation.answers,
         providerKind: adjudicated.evaluation.provider,
         requestedModel: adjudicated.evaluation.requestedModel,
         returnedModel: adjudicated.evaluation.returnedModel,
-        durationMs: adjudicated.evaluation.durationMs,
-        inputTokens: adjudicated.evaluation.inputTokens,
-        outputTokens: adjudicated.evaluation.outputTokens,
-        networkCalls: this.isNetworkProvider() ? 1 : 0
+        durationMs: usage.durationMs,
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        networkCalls: receipts.length,
+        requestUsage: mergeRequestUsage(receipts)
       });
+      usageRecorded = true;
       await this.persist();
       return JSON.stringify({ schemaVersion: 1, ok: true, permit: writerPermit(kept) });
     } catch (error) {
       if (this.inFlight === controller2) this.inFlight = null;
-      if (!stillCurrent() || controller2.signal.aborted) {
+      if (!stillCurrent() || controller2.signal.aborted && !(controller2.signal.reason instanceof JudgeWaitBudget)) {
         window2.phase = "cancelled";
         return JSON.stringify({ ok: false, code: "cancelled" });
       }
-      if (window2.phase === "reviewing") {
-        window2.phase = "cancelled";
-        this.host.stopGeneration();
-        this.host.toast("error", `Roll review stopped: ${error.message}`);
-        return JSON.stringify({ ok: false, code: "review_failed" });
-      }
       const message = error instanceof ProviderError ? `${error.code}: ${error.message}` : error.message;
-      return this.toolFailure(window2, "provider_failed", message);
+      return this.toolFailure(window2, "provider_failed", message, false, error);
+    } finally {
+      clearTimeout(timer);
+      if (this.inFlight === controller2) this.inFlight = null;
+      if (!usageRecorded && receipts.length && epoch === this.epoch && chatKey === this.chatKey) {
+        const attempt = this.record?.attempts[window2.attemptId];
+        if (attempt) attempt.requestUsage = mergeRequestUsage(attempt.requestUsage, receipts);
+        this.inspect({ kind: "info", attemptId: window2.attemptId, message: "NPC judge request usage.", networkCalls: receipts.length, requestUsage: mergeRequestUsage(receipts) });
+        await this.persist();
+      }
     }
   }
   /** Mock mode remains useful for headed QA even though its canned ids predate planned_N questions. */
+  async reassessPermit(input, abort) {
+    const timer = setTimeout(() => abort.abort(new JudgeWaitBudget()), Math.max(0, this.settings.waitForJudgeSeconds) * 1e3);
+    try {
+      return (await withinBudget(adjudicateTurnProposal(input), abort.signal)).permit;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   planningProvider(base) {
     if (base.kind !== "mock") return base;
     const scenario = this.settings.connection.mockScenario || "gate-deferred";
@@ -7518,153 +7993,346 @@ var Controller = class {
       }
     };
   }
-  activePermitForCursor(cursor) {
-    if (!this.record) return null;
-    let best = null;
-    for (const permit of Object.values(this.record.permits)) {
-      if (permit.baseCursor !== cursor) continue;
-      if (!best || permit.createdAt > best.createdAt) best = permit;
-    }
-    return best;
-  }
   // ---- interceptor ------------------------------------------------------------
-  /** Host generate_interceptor. Injects the prepared block; never issues a network call. */
-  async interceptor(_chat, _contextSize, _abort, type) {
+  /** Frozen decisions are keyed by the transcript prefix, never by reply text. */
+  attemptAt(prefix, messageIndex) {
+    if (!this.record) return null;
+    const cursor = this.cursorOf(prefix);
+    const retrySource = this.explicitRetry ? this.record.attempts[this.explicitRetry.sourceId] : null;
+    if (retrySource?.cursorBefore === cursor) return retrySource;
+    const marker2 = messageIndex === void 0 ? null : this.host.readMarker(messageIndex);
+    const selected = marker2 ? this.record.attempts[marker2.a] : null;
+    const chain = cursorChain(this.record.seedId, this.host.fingerprintMessages(prefix));
+    const variant = marker2 ? this.record.variants[marker2.v] : null;
+    const message = messageIndex === void 0 ? null : this.host.chat()[messageIndex];
+    const selectedCursor = message ? this.cursorOf([...prefix, message]) : null;
+    if (selected?.cursorBefore && chain.includes(selected.cursorBefore) && !selected.unadjudicated && variant?.attemptId === selected.attemptId && variant.cursorAfter === selectedCursor && (selected.hostVariantRef ?? 0) === (message?.swipe_id ?? 0)) return selected;
+    const attempts = Object.values(this.record.attempts).reverse();
+    const active = activeResolutionForCursor(this.record, cursor);
+    const exact = attempts.find((a) => a.cursorBefore === cursor && !a.unadjudicated && a.resolutionId === active?.resolutionId) ?? attempts.find((a) => a.cursorBefore === cursor && !a.unadjudicated);
+    if (exact) return exact;
+    let end = prefix.length;
+    while (end && !prefix[end - 1].is_user && (Array.isArray(prefix[end - 1].extra?.tool_invocations) || ["", "..."].includes(stripResultFooter(prefix[end - 1].mes ?? "").trim()))) end--;
+    const inputCursor = chain[end];
+    const inputAttempt = end < prefix.length ? attempts.find((a) => a.cursorBefore === inputCursor && !a.unadjudicated) : null;
+    if (inputAttempt) return inputAttempt;
+    if (prefix.some((message2) => Array.isArray(message2.extra?.tool_invocations))) {
+      return attempts.find((a) => a.hostMessageRef === (messageIndex ?? prefix.length) && a.cursorBefore && chain.includes(a.cursorBefore) && !a.unadjudicated) ?? null;
+    }
+    return null;
+  }
+  selectedAttempt() {
+    const chat = this.host.chat();
+    return chat.at(-1)?.is_user ? this.attemptAt(chat) : this.attemptAt(chat.slice(0, -1), chat.length - 1);
+  }
+  attemptSpeakerIndex(attempt) {
+    if (!this.host.isGroup() || !attempt?.actorId) return null;
+    const actor = this.record?.actors[attempt.actorId];
+    const index = actor ? this.host.resolveIndex(actor.avatar) : -1;
+    return index >= 0 ? index : null;
+  }
+  enforceDraftedSpeaker() {
+    if (!this.settings.enabled || !this.record || this.record.paused || !this.host.isGroup()) return;
+    const pending = this.record.pending ? this.record.attempts[this.record.pending.attemptId] : null;
+    const source = pending ?? (this.groupGenerationType === "swipe" || this.groupGenerationType === "continue" ? this.selectedAttempt() : this.attemptAt(this.host.chat()));
+    const actor = source?.actorId ? this.record.actors[source.actorId] : null;
+    if (source && actor && !this.host.enforceGroupSpeaker(actor.avatar)) this.groupSpeakerFailure = source.attemptId;
+  }
+  /** Speaker changes must happen before prompt construction, never in the interceptor. */
+  matchesFrozenSpeaker(attempt) {
+    if (!this.host.isGroup() || !attempt?.actorId) return true;
+    const expected = this.attemptSpeakerIndex(attempt);
+    const matches = expected !== null && Number(this.host.ctx().characterId) === expected && this.groupSpeakerFailure !== attempt.attemptId;
+    if (!matches) {
+      this.host.clearInjection();
+      this.host.toast("warning", "The frozen reply speaker is unavailable. Restore that group member and try again; the result is unchanged.");
+    }
+    return matches;
+  }
+  frozenState(source) {
+    if (!this.record) return "";
+    if (source.frozenStateBlock !== void 0) {
+      return source.frozenStateBlock.split(/(?=\[Director (?:character state|knowledge boundaries))/).filter((block) => block.startsWith("[Director character state") ? this.settings.modules.meters : block.startsWith("[Director knowledge boundaries]") ? this.settings.modules.secrets : false).map((block) => block.trim()).filter(Boolean).join("\n\n");
+    }
+    const oldCursor = source.variantId ? this.record.variants[source.variantId]?.cursorAfter : void 0;
+    const snap = source.storyAfter ?? (oldCursor ? snapshotAt(this.record.story, [oldCursor]) : null) ?? snapshotAt(this.record.story, this.chainNow());
+    if (!snap) return "";
+    return stateBlock({
+      pack: this.chatPack(),
+      levels: snap.meters,
+      assessed: snap.assessed,
+      names: Object.fromEntries(Object.values(this.record.actors).map((a) => [a.actorId, a.name])),
+      playerName: this.host.playerName(),
+      secrets: this.record.story.secrets,
+      knownBy: snap.knownBy,
+      meters: this.settings.modules.meters,
+      secretsOn: this.settings.modules.secrets
+    });
+  }
+  /** `canCancel` false: a native regenerate, which cannot be stopped from deleting its reply. */
+  async confirmRetry(source, cursor, canCancel = true) {
+    if (this.approvedSwipeCursor === cursor) {
+      this.approvedSwipeCursor = null;
+      return true;
+    }
+    if (!this.settings.modules.decisions || !this.settings.askWhenSwiping || !source.resolutionId && !source.permitId || this.explicitRetry?.sourceId === source.attemptId) return true;
+    const epoch = this.epoch;
+    const abort = new AbortController();
+    this.inFlight = abort;
+    try {
+      const choice2 = await this.host.chooseSwipeAction("ruled", true, abort.signal, this.settings, canCancel);
+      if (abort.signal.aborted || epoch !== this.epoch || !this.settings.enabled || this.record?.paused) return false;
+      if (choice2 === "cancel") return !canCancel;
+      if (choice2 === "reroll") {
+        this.inFlight = null;
+        if (await this.changeDecision(false, false, source, !canCancel)) return true;
+        if (canCancel || epoch !== this.epoch || !this.settings.enabled || this.record?.paused) return false;
+        this.host.toast("warning", "The judge could not roll again, so the reply keeps its result.");
+      }
+      return true;
+    } finally {
+      if (this.inFlight === abort) this.inFlight = null;
+    }
+  }
+  /** Binds a fresh decision or reuses the frozen decision for this exchange. */
+  async interceptor(chat, contextSize, abort, type) {
+    const followUp = type === "normal" && this.automaticReply?.followUpPending ? this.automaticReply : null;
+    if (followUp) followUp.followUpPending = false;
+    if (followUp?.cancelled) {
+      this.host.clearInjection();
+      abort(true);
+      return;
+    }
+    const automatic = type === "swipe" || this.toolContinuation || followUp ? this.automaticReply : null;
+    await this.prepareGeneration(chat, contextSize, abort, type);
+    if (automatic?.cancelled) {
+      this.host.clearInjection();
+      abort(true);
+    }
+  }
+  /**
+   * The Director's own rewrite swipe, identified by its dispatch (its MESSAGE_SWIPED
+   * or GENERATION_STARTED was recognised), never by transcript lookup.
+   */
+  ownAutomaticSwipe() {
+    const automatic = this.automaticReply;
+    return automatic && (automatic.started || automatic.swipeObserved) && !automatic.cancelled && automatic.chatKey === this.chatKey && this.host.chat().at(-1) === automatic.message && automatic.message.swipe_id === automatic.nextSwipe ? automatic : null;
+  }
+  async prepareGeneration(_chat, _contextSize, _abort, type) {
+    const cancelled = this.automaticReply;
+    if (cancelled?.cancelled && cancelled.chatKey === this.chatKey && this.host.chat().at(-1) === cancelled.message && type === "swipe" && cancelled.message.swipe_id === cancelled.nextSwipe) {
+      this.approvedSwipeCursor = null;
+      this.explicitRetry = null;
+      this.cancelSwipe = false;
+      this.host.clearInjection();
+      _abort(true);
+      return;
+    }
     void this.host.armLore(null);
     if (Array.isArray(_chat)) {
-      for (const message of _chat) {
-        if (message && !message.is_user && typeof message.mes === "string") message.mes = stripResultFooter(message.mes);
-      }
+      for (const message of _chat) if (message && !message.is_user && typeof message.mes === "string") message.mes = stripResultFooter(message.mes);
     }
-    if (this.toolWindow?.phase === "cancelled") {
-      _abort(true);
-      this.host.clearInjection();
-      return;
-    }
-    if (type === "swipe" && this.pendingSwipeMode === "cancel") {
-      this.pendingSwipeMode = null;
-      _abort(true);
-      this.host.clearInjection();
-      return;
-    }
-    if (!this.settings.enabled || !this.record || this.host.isAutoDirectorEnabled()) {
+    if (!this.settings.enabled || !this.record || this.record.paused || this.host.isAutoDirectorEnabled()) {
       this.host.clearInjection();
       return;
     }
     const genType = ["normal", "swipe", "regenerate", "continue"].includes(type) ? type : null;
     if (!genType) {
-      this.host.clearInjection();
+      const frame = [...this.suppressions].reverse().find((item) => !item.dry);
+      if (frame) this.suspendInjection(frame);
+      else this.host.clearInjection();
       return;
     }
+    if (genType === "regenerate") {
+      this.cancelSwipe = false;
+      if (this.toolWindow?.phase === "cancelled") this.toolWindow = null;
+    }
+    if (this.cancelSwipe || this.toolWindow?.phase === "cancelled") {
+      this.cancelSwipe = false;
+      this.toolWindow = null;
+      this.host.clearInjection();
+      _abort(true);
+      return;
+    }
+    this.macroSuppressed = false;
     const chat = this.host.chat();
-    const swipeMode = genType === "swipe" ? this.pendingSwipeMode : null;
-    const source = genType === "swipe" ? this.swipeSource : null;
-    if (source && (source.epoch !== this.epoch || source.chatKey !== this.chatKey || chat[source.index] !== source.message || source.message.swipe_id !== source.swipe)) {
-      _abort(true);
+    const epoch = this.epoch;
+    const chatKey = this.chatKey;
+    const current = () => epoch === this.epoch && chatKey === this.chatKey;
+    if (this.toolContinuation && genType === "normal") {
+      const continuation = this.toolContinuation;
+      this.toolContinuation = null;
+      this.currentAttemptId = continuation.attemptId;
+      this.pendingInjection = continuation.injection;
+      this.setInjection(continuation.injection);
+      this.bindReplyIdentity(continuation.attemptId, genType, chat.length);
+      await this.armLoreForAttempt(continuation.attemptId);
+      if (!current()) return;
+      this.status = "Writing";
       return;
     }
-    if (genType === "swipe") this.pendingSwipeMode = null;
-    if (swipeMode === "cancel") {
-      _abort(true);
-      this.host.clearInjection();
-      return;
-    }
-    if (genType === "normal" && this.toolWindow && ["followup_pending", "failed_pending", "malformed_pending"].includes(this.toolWindow.phase)) {
+    if ((genType === "normal" || genType === "continue") && this.toolWindow && ["followup_pending", "failed_pending", "malformed_pending"].includes(this.toolWindow.phase)) {
       const window2 = this.toolWindow;
-      if (window2.phase === "followup_pending") window2.phase = "followup_writing";
-      else if (window2.phase === "failed_pending") window2.phase = "failed_writing";
-      else window2.phase = "malformed_writing";
-      const followup = permitFollowupBlock(window2.permit, window2.error);
-      const ruling = this.pendingInjection.split("[Director NPC-action checkpoint]")[0] ?? "";
-      this.setInjection([ruling, followup].filter(Boolean).join("\n\n"));
+      window2.phase = window2.phase === "followup_pending" ? "followup_writing" : window2.phase === "failed_pending" ? "failed_writing" : "malformed_writing";
+      const ruling = (this.record.attempts[window2.attemptId]?.injectedText ?? this.pendingInjection).split("[Director NPC-action checkpoint]")[0] ?? "";
+      this.setInjection([ruling, permitFollowupBlock(window2.permit, window2.error)].filter(Boolean).join("\n\n"));
       await this.armLoreForAttempt(window2.attemptId);
+      if (!current()) return;
       this.currentAttemptId = window2.attemptId;
+      this.bindReplyIdentity(window2.attemptId, genType, chat.length);
       this.status = "Writing";
       await this.persist();
       return;
     }
-    const replacing = genType === "swipe" || genType === "regenerate" || genType === "continue";
-    const replacementMarker = replacing ? this.host.readMarker(chat.length - 1) : null;
-    const replacementVariant = replacementMarker ? this.record.variants[replacementMarker.v] : null;
-    const replacementAttempt = replacementMarker && replacementVariant?.cursorAfter === this.cursorOf(chat) ? this.record.attempts[replacementMarker.a] ?? null : null;
-    if (replacing) {
-      const oldAttempt = replacementAttempt;
-      if (oldAttempt && (oldAttempt.status === "observing" || oldAttempt.status === "provisional")) {
-        if (oldAttempt.variantId) this.observerInFlight.get(oldAttempt.variantId)?.abort(new Error("wording swipe"));
-        this.apply({ type: "reject", attemptId: oldAttempt.attemptId });
-      }
+    if (genType === "continue" && this.currentAttemptId && this.record.attempts[this.currentAttemptId]?.status === "writing") {
+      this.setInjection(this.record.attempts[this.currentAttemptId].injectedText);
+      await this.armLoreForAttempt(this.currentAttemptId);
+      return;
     }
-    const prefix = genType === "swipe" || genType === "continue" ? chat.slice(0, -1) : chat;
-    const cursor = source?.baseCursor ?? replacementAttempt?.cursorBefore ?? this.cursorOf(prefix);
-    if (!replacementAttempt?.cursorBefore) this.ensurePredecessor(prefix);
+    const prefix = (genType === "swipe" || genType === "continue") && !chat.at(-1)?.is_user ? chat.slice(0, -1) : chat;
+    const regenerate = genType === "regenerate" && this.regenerateSource?.cursor === this.cursorOf(prefix) ? this.regenerateSource : null;
+    this.regenerateSource = null;
+    const ownSwipe = genType === "swipe" ? this.ownAutomaticSwipe() : null;
+    let source = (regenerate ? this.record.attempts[regenerate.sourceId] : null) ?? (ownSwipe ? this.record.attempts[ownSwipe.sourceId] : null) ?? this.attemptAt(prefix, prefix.length < chat.length ? chat.length - 1 : void 0);
+    if (!this.record.pending && !source && genType !== "continue") {
+      await this.prepareReplyRetry(true, prefix, false);
+      if (!current()) return;
+    }
     const pending = this.record.pending;
-    if (pending && pending.epoch === this.epoch && genType === "normal") {
-      const prepared = this.preparedTool?.attemptId === pending.attemptId ? this.preparedTool : null;
-      const toolOffered = Boolean(prepared?.available);
-      this.apply({ type: "bind", attemptId: pending.attemptId, cursorBefore: cursor, epoch: this.epoch, injectedText: this.pendingInjection, toolOffered });
-      if (prepared?.available) {
-        this.toolWindow = {
-          requestId: prepared.requestId,
-          attemptId: prepared.attemptId,
-          speakerActorId: prepared.speakerActorId,
-          baseCursor: cursor,
-          stateRevision: prepared.snapshot.stateRevision,
-          chatLengthAtBind: chat.length,
-          allowedEvidenceRefs: prepared.allowedEvidenceRefs,
-          snapshot: { ...prepared.snapshot, cursorBefore: cursor },
-          actorNames: prepared.actorNames,
-          phase: "initial",
-          permit: null,
-          error: null,
-          used: false
-        };
-      } else {
-        this.toolWindow = null;
+    if (pending && pending.epoch === this.epoch) {
+      if (!this.matchesFrozenSpeaker(this.record.attempts[pending.attemptId])) {
+        _abort(true);
+        return;
       }
+      const boundPrefix = this.pendingForSwipe ? prefix : chat;
+      const cursor2 = this.preparedInputCursor ?? this.cursorOf(boundPrefix);
+      this.preparedInputCursor = null;
+      this.pendingForSwipe = false;
+      const prepared = this.preparedTool?.attemptId === pending.attemptId ? this.preparedTool : null;
+      this.apply({ type: "bind", attemptId: pending.attemptId, cursorBefore: cursor2, epoch: this.epoch, injectedText: this.pendingInjection, toolOffered: Boolean(prepared?.available) });
+      this.toolWindow = prepared?.available ? {
+        requestId: prepared.requestId,
+        attemptId: prepared.attemptId,
+        speakerActorId: prepared.speakerActorId,
+        baseCursor: cursor2,
+        stateRevision: prepared.snapshot.stateRevision,
+        chatLengthAtBind: boundPrefix.length,
+        priorReplyText: boundPrefix.length < chat.length ? stripResultFooter(chat[boundPrefix.length]?.mes ?? "") : void 0,
+        allowedEvidenceRefs: prepared.allowedEvidenceRefs,
+        snapshot: { ...prepared.snapshot, cursorBefore: cursor2 },
+        actorNames: prepared.actorNames,
+        phase: "initial",
+        permit: null,
+        error: null,
+        used: false
+      } : null;
       this.currentAttemptId = pending.attemptId;
-      this.setInjection(this.pendingInjection);
+      this.bindReplyIdentity(pending.attemptId, genType, boundPrefix.length);
+      const bound2 = this.record.attempts[pending.attemptId];
+      if (bound2) bound2.generationType = genType;
+      this.setInjection(bound2?.injectedText ?? "");
       await this.armLoreForAttempt(pending.attemptId);
+      if (!current()) return;
+      this.preparedDeadline = null;
       this.status = "Writing";
       await this.persist();
       return;
     }
-    if (pending) {
-      this.apply({ type: "cancel", attemptId: pending.attemptId, epoch: pending.epoch, reason: `a ${genType} generation started instead of the prepared Director turn` });
+    if (!source || source.unadjudicated) {
+      this.clearGeneration("no frozen exchange");
+      return;
     }
-    const actorAvatar = genType === "swipe" || genType === "continue" ? chat.at(-1)?.original_avatar ?? null : null;
-    const actorId = actorAvatar ? this.actorMap().byAvatar[actorAvatar] ?? null : null;
-    const active = source ? source.resolutionId ? this.record.resolutions[source.resolutionId] ?? null : null : activeResolutionForCursor(this.record, cursor);
-    const permit = source ? source.permitId ? this.record.permits[source.permitId] ?? null : null : this.activePermitForCursor(cursor);
-    const reaction = source ? source.reaction : replacementAttempt?.reaction ?? null;
-    const attemptId = newId("att");
-    if (swipeMode !== "bypass" && (active || permit)) {
-      const names = {};
-      for (const a of Object.values(this.record.actors)) names[a.actorId] = a.name;
-      const binding = active ? bindingBlock({ action: active.action, outcome: active.outcome, instruction: instructionForResolution(active), actorName: names[active.action.actingActorId ?? active.action.playerActorId] ?? active.action.actingActorId ?? active.action.playerActorId, speakerName: actorId ? names[actorId] ?? null : null, playerName: this.host.playerName(), targetNames: active.action.targetActorIds.map((id) => names[id] ?? id), npcActionPolicy: permit ? "permitted" : "defer" }) : "";
-      const injected = [binding, this.storyBlockAt(cursorChain(this.record.seedId, this.host.fingerprintMessages(prefix))), permit ? permitFollowupBlock(permit) : "", this.reactionBlock(reaction)].filter(Boolean).join("\n\n");
-      this.apply({ type: "regeneration_attempt", attemptId, resolutionId: active?.resolutionId ?? null, permitId: permit?.permitId ?? null, reaction, cursorBefore: cursor, epoch: this.epoch, generationType: genType, actorId, injectedText: injected, unadjudicated: false, now: Date.now() });
-      this.inspect({ kind: "wording_regeneration", attemptId, resolutionId: active?.resolutionId ?? null, actionId: active?.actionId ?? null, outcome: active?.outcome ?? null, policyBandId: active?.policyBand?.id ?? null, draw: active?.draw ?? null, injectedText: injected, networkCalls: 0, message: `Wording ${genType}: reused ${active ? `frozen ${active.outcome}` : "the frozen turn permit"}${permit ? ` and permit ${permit.permitId}` : ""}; no tool or decision call.` });
-      this.setInjection(injected);
-    } else if (swipeMode !== "bypass" && (swipeMode === "adopt" || swipeMode === "reuse" || replacementAttempt && !replacementAttempt.unadjudicated)) {
-      const injected = ["[Director-managed wording swipe]\nThis is a new wording of the selected reply. No outcome reroll was requested. Preserve established facts, do not invent and resolve a new uncertain consequential NPC action, do not roll dice for a new action, and do not output state or metadata blocks.", this.storyBlockAt(cursorChain(this.record.seedId, this.host.fingerprintMessages(prefix))), this.reactionBlock(reaction)].filter(Boolean).join("\n\n");
-      this.apply({ type: "regeneration_attempt", attemptId, resolutionId: null, permitId: null, reaction, cursorBefore: cursor, epoch: this.epoch, generationType: genType, actorId, injectedText: injected, unadjudicated: false, now: Date.now() });
-      this.inspect({ kind: "wording_regeneration", attemptId, injectedText: injected, networkCalls: 0, message: `Director-managed ${genType}: no frozen ruling applied and no new consequential NPC action permitted.` });
-      this.setInjection(injected);
-    } else {
-      this.apply({ type: "regeneration_attempt", attemptId, resolutionId: null, cursorBefore: cursor, epoch: this.epoch, generationType: genType, actorId, injectedText: "", unadjudicated: true, now: Date.now() });
-      this.inspect({ kind: "native_bypass", attemptId, networkCalls: 0, message: `Native ${genType} generation without a Director decision (unadjudicated).` });
+    if (!this.matchesFrozenSpeaker(source)) {
+      _abort(true);
+      return;
+    }
+    const cursor = source.cursorBefore ?? this.cursorOf(prefix);
+    if (genType !== "continue" && !await this.confirmRetry(source, cursor, genType !== "regenerate")) {
       this.host.clearInjection();
+      if (genType !== "regenerate" || !current()) _abort(true);
+      return;
     }
+    if (!current()) {
+      _abort(true);
+      return;
+    }
+    const retry = this.explicitRetry?.sourceId === source.attemptId ? this.explicitRetry : null;
+    const resolutionId = regenerate ? regenerate.resolutionId : retry ? retry.resolutionId : source.resolutionId;
+    const permitId = regenerate ? regenerate.permitId : retry ? retry.permitId : source.permitId;
+    const active = this.settings.modules.decisions && resolutionId ? this.record.resolutions[resolutionId] : null;
+    const permit = this.settings.modules.decisions && permitId ? this.record.permits[permitId] : null;
+    const names = Object.fromEntries(Object.values(this.record.actors).map((a) => [a.actorId, a.name]));
+    const binding = active ? bindingBlock({
+      action: active.action,
+      outcome: active.outcome,
+      instruction: instructionForResolution(active),
+      actorName: names[active.action.actingActorId ?? active.action.playerActorId] ?? active.action.playerActorId,
+      speakerName: source.actorId ? names[source.actorId] ?? null : null,
+      playerName: this.host.playerName(),
+      targetNames: active.action.targetActorIds.map((id) => names[id] ?? id),
+      npcActionPolicy: permit ? "permitted" : "defer"
+    }) : "";
+    const automatic = ownSwipe && ownSwipe.sourceId === source.attemptId && !ownSwipe.cancelled ? ownSwipe : null;
+    const injected = [
+      binding,
+      this.frozenState(source),
+      permit ? permitFollowupBlock(permit) : "",
+      this.settings.modules.pacing ? pacingBlock(source.frozenPacing ?? null, this.settings.handBackBeats !== false, this.host.dynamicResponseEnabled()) : "",
+      this.settings.modules.replyCheck ? source.replyNudge ?? "" : "",
+      this.settings.reactions.enabled && !permit ? this.reactionBlock(source.reaction) : "",
+      this.settings.modules.decisions ? "The Director tool is closed for this reply; do not call it." : "",
+      automatic ? `(OOC: ${automatic.correction})` : ""
+    ].filter(Boolean).join("\n\n");
+    const attemptId = newId("att");
+    this.apply({
+      type: "regeneration_attempt",
+      attemptId,
+      resolutionId: resolutionId ?? null,
+      permitId: permitId ?? null,
+      reaction: permit ? null : source.reaction,
+      cursorBefore: cursor,
+      epoch: this.epoch,
+      generationType: genType,
+      actorId: source.actorId,
+      injectedText: injected,
+      unadjudicated: false,
+      now: Date.now()
+    });
     const regenerated = this.record.attempts[attemptId];
-    if (regenerated && !regenerated.unadjudicated) {
-      const sourceMarker = source ? this.host.readMarker(source.index) : null;
-      regenerated.loreCursor = replacementAttempt?.loreCursor ?? (sourceMarker ? this.record.attempts[sourceMarker.a]?.loreCursor : null) ?? null;
-      await this.armLoreForAttempt(attemptId);
+    if (regenerated) for (const key of ["loreCursor", "storyBefore", "storyAfter", "frozenLorePlan", "frozenStateBlock", "frozenSpeaker", "judgeErrors", "judgeFailedStages", "stageRecords", "turnKind", "inputText", "frozenPacing", "replyNudge", "frozenPackId", "decisionsApplied", "replayTrimmed"]) {
+      Object.assign(regenerated, { [key]: structuredClone(source[key]) });
     }
+    if (regenerated && automatic) {
+      regenerated.replyCorrection = automatic.correction;
+      regenerated.rerolledByCheck = automatic.reason;
+      regenerated.replyOriginalSwipe = automatic.originalSwipe;
+      automatic.attemptId = attemptId;
+      this.recoverJudgeStage("reply_rewrite");
+    }
+    if (retry) {
+      const decisionEntry = this.record.inspector.find((entry) => entry.id === retry.inspectorId);
+      if (decisionEntry && decisionEntry.attemptId === null) decisionEntry.attemptId = attemptId;
+      if (regenerated) regenerated.requestUsage = mergeRequestUsage(source.requestUsage, decisionEntry?.requestUsage);
+    } else if (regenerated) regenerated.requestUsage = mergeRequestUsage(source.requestUsage);
+    this.inspect({
+      kind: "wording_regeneration",
+      attemptId,
+      resolutionId: active?.resolutionId ?? null,
+      outcome: active?.outcome ?? null,
+      injectedText: injected,
+      networkCalls: 0,
+      message: `Reused this exchange's decisions for ${genType}.`
+    });
     this.currentAttemptId = attemptId;
-    this.swipeSource = null;
+    this.bindReplyIdentity(attemptId, genType, prefix.length);
+    this.approvedSwipeCursor = null;
+    this.explicitRetry = null;
     this.toolWindow = null;
     this.preparedTool = null;
+    this.pendingInjection = injected;
+    this.setInjection(injected);
+    await this.armLoreForAttempt(attemptId);
+    if (!current()) return;
     this.status = "Writing";
     await this.persist();
   }
@@ -7676,822 +8344,946 @@ ${name}: ${reaction.kind} \u2192 ${reaction.outcome}. ${reaction.instruction}
 This chosen response is already decided; do not roll or call the tool again for this same response. It is a direction for the reply, not proof that an event occurred. Respect established motives and knowledge and leave the player's choices open. A separate new uncertain consequential action still requires the Director tool before prose; its kept ruling supersedes this reaction.`;
   }
   setInjection(text2) {
-    if (text2 && text2.trim()) this.host.setInjection(text2, this.profile.injection.depth, this.profile.injection.role);
+    if (text2 && text2.trim()) this.host.setInjection(text2, 0, "system");
     else this.host.clearInjection();
   }
   // ---- host events ------------------------------------------------------------
-  async onGenerationStarted(type, params) {
-    void params;
-    if (!this.record) return;
-    if (!["normal", "swipe", "regenerate", "continue"].includes(type)) return;
-    let changed = false;
-    for (const attempt of Object.values(this.record.attempts)) {
-      if (attempt.status === "writing" && attempt.attemptId !== this.currentAttemptId) {
-        this.apply({ type: "cancel", attemptId: attempt.attemptId, epoch: attempt.epoch, reason: "a new generation started before this attempt completed" });
-        changed = true;
-      }
-      if (attempt.status === "writing" && attempt.attemptId === this.currentAttemptId && this.record.pending === null && attempt.generationType !== type) {
-        this.apply({ type: "cancel", attemptId: attempt.attemptId, epoch: attempt.epoch, reason: "replaced by a new generation" });
-        this.currentAttemptId = null;
-        changed = true;
-      }
+  bindReplyIdentity(attemptId, type, prefixLength) {
+    const existing = type === "swipe" || type === "continue" ? this.host.chat()[prefixLength] ?? null : null;
+    let end;
+    const ended = new Promise((resolve) => {
+      end = resolve;
+    });
+    this.replyBinding = {
+      attemptId,
+      index: prefixLength,
+      message: existing,
+      swipeId: existing?.swipe_id ?? 0,
+      rejected: this.replyBinding?.attemptId === attemptId ? this.replyBinding.rejected : /* @__PURE__ */ new Set(),
+      ended,
+      end
+    };
+    this.completionCandidate = null;
+  }
+  captureReplyIdentity() {
+    const binding = this.replyBinding;
+    if (!binding || binding.message) return;
+    const message = this.host.chat()[binding.index];
+    if (message && !message.is_user && !message.is_system && !binding.rejected.has(message)) {
+      binding.message = message;
+      binding.swipeId = message.swipe_id ?? 0;
     }
-    if (changed) await this.persist();
+  }
+  releaseWriterWaiters() {
+    const waiters = [...this.writerIdleWaiters];
+    this.writerIdleWaiters.clear();
+    setTimeout(() => {
+      for (const resolve of waiters) resolve();
+    }, 0);
+  }
+  async onGenerationStarted(type, _params) {
+    if (_params?.dryRun || !["normal", "swipe", "regenerate", "continue"].includes(type)) {
+      const frame = { suppressed: this.macroSuppressed, dry: Boolean(_params?.dryRun), nested: this.buildingGeneration };
+      this.suppressions.push(frame);
+      this.macroSuppressed = true;
+      if (!_params?.dryRun) {
+        this.suspendInjection(frame);
+        return;
+      }
+      const attempt = this.currentAttemptId ? this.record?.attempts[this.currentAttemptId] : null;
+      const correction = attempt?.replyCorrection ? `(OOC: ${attempt.replyCorrection})` : "";
+      const live = this.host.currentInjection();
+      if (attempt && correction && live.includes(correction)) {
+        this.dryRunRestore = { attemptId: attempt.attemptId, epoch: this.epoch, text: live };
+        this.setInjection(live.replace(`
+
+${correction}`, "").replace(correction, "").trim());
+      }
+      return;
+    }
+    this.macroSuppressed = false;
+    this.suppressions = [];
+    this.nestedEnds = 0;
+    this.buildingGeneration = true;
+    this.regenerateSource = null;
+    if (type !== "swipe") this.cancelSwipe = false;
+    const automatic = this.automaticReply;
+    if (type === "normal" && automatic?.toolFollowUp && automatic.chatKey === this.chatKey) {
+      automatic.toolFollowUp = false;
+      automatic.followUpPending = true;
+      return;
+    }
+    const recursion = this.toolContinuation || this.toolWindow && ["cancelled", "followup_pending", "failed_pending", "malformed_pending"].includes(this.toolWindow.phase);
+    if (recursion || type === "continue" && this.currentAttemptId) return;
+    const ownSwipe = type === "swipe" && automatic && !automatic.started && automatic.chatKey === this.chatKey && this.host.chat().at(-1) === automatic.message && automatic.message.swipe_id === automatic.nextSwipe;
+    if (ownSwipe) automatic.started = true;
+    else {
+      if (automatic) automatic.preserveUserChanges = true;
+      this.cancelReplyCheck();
+      if (automatic?.swipeObserved) this.automaticReply = null;
+    }
+    this.toolWindow = null;
+    this.completionCandidate = null;
+    this.replyBinding?.end();
+    this.replyBinding = null;
+    if (this.currentAttemptId) this.clearGeneration("replaced by a new generation");
+    if (!this.record || !this.settings.enabled || this.record.paused || this.host.isAutoDirectorEnabled()) return;
+    if (["swipe", "regenerate", "continue"].includes(type)) {
+      const chat = this.host.chat();
+      const hasReply = chat.length > 0 && !chat.at(-1).is_user && !chat.at(-1).is_system;
+      const prefix = hasReply ? chat.slice(0, -1) : chat;
+      const source = (ownSwipe ? this.record.attempts[automatic.sourceId] : null) ?? this.attemptAt(prefix, hasReply ? chat.length - 1 : void 0);
+      this.macroUpcomingCursor = null;
+      if (source) {
+        if (type === "regenerate") {
+          const cursor = source.cursorBefore ?? this.cursorOf(prefix);
+          if (!await this.confirmRetry(source, cursor, false)) return;
+          this.approvedSwipeCursor = cursor;
+          const retry = this.explicitRetry?.sourceId === source.attemptId ? this.explicitRetry : null;
+          this.regenerateSource = {
+            sourceId: source.attemptId,
+            cursor,
+            resolutionId: retry ? retry.resolutionId : source.resolutionId,
+            permitId: retry ? retry.permitId : source.permitId ?? null
+          };
+        }
+        this.macroUpcomingAttemptId = source.attemptId;
+      }
+    } else if (!this.macroUpcomingCursor || this.macroUpcomingCursor !== this.sendInputCursor()) {
+      this.macroUpcomingAttemptId = null;
+      this.macroUpcomingCursor = null;
+    }
+  }
+  /**
+   * Takes the Director block out of a quiet or impersonate prompt. SillyTavern
+   * builds the Director generation's own prompt after its interceptor, so the
+   * block is put back (`resumeInjection`) once the quiet prompt is built.
+   */
+  suspendInjection(frame) {
+    const live = this.host.currentInjection();
+    if (!live) return;
+    this.host.clearInjection();
+    frame.restore = { text: live, version: this.host.injectionVersion() };
+  }
+  /** Puts a suspended block back, unless the Director wrote (or cleared) its injection meanwhile. */
+  resumeInjection(frame) {
+    const restore = frame.restore;
+    frame.restore = void 0;
+    if (restore && this.host.injectionVersion() === restore.version) this.setInjection(restore.text);
+  }
+  /** The input cursor a 'normal' generation starting now will answer (the composer becomes the user message). */
+  sendInputCursor() {
+    const chat = this.host.chat();
+    const text2 = this.host.composerText();
+    return this.cursorOf(text2.trim() ? [...chat, { name: this.host.playerName(), is_user: true, is_system: false, mes: text2 }] : chat);
+  }
+  clearGeneration(reason) {
+    this.macroUpcomingAttemptId = null;
+    this.macroUpcomingCursor = null;
+    this.dryRunRestore = null;
+    this.replyBinding?.end();
+    this.completionCandidate = null;
+    const id = this.currentAttemptId ?? this.record?.pending?.attemptId;
+    if (id) this.apply({ type: "cancel", attemptId: id, epoch: this.epoch, reason });
+    this.currentAttemptId = null;
+    this.pendingForSwipe = false;
+    this.pendingInjection = "";
+    this.preparedDeadline = null;
+    this.preparedTool = null;
+    if (this.toolWindow?.phase !== "cancelled") this.toolWindow = null;
+    this.toolContinuation = null;
+    this.explicitRetry = null;
+    this.host.clearInjection();
+    if (this.status === "Writing" || this.status === "Frozen") this.status = "Ready";
   }
   async onGenerationStopped() {
+    this.cancelReplyCheck(false);
     void this.host.armLore(null);
     this.continueRemaining = 0;
+    this.regenerateSource = null;
     this.inFlight?.abort(new Error("generation stopped"));
-    if (!this.record || !this.currentAttemptId) return;
-    const id = this.currentAttemptId;
-    this.currentAttemptId = null;
-    if (this.toolWindow) this.toolWindow.phase = "cancelled";
-    this.preparedTool = null;
-    this.apply({ type: "cancel", attemptId: id, epoch: this.epoch, reason: "generation stopped by the user" });
-    this.host.clearInjection();
-    this.status = "Ready";
+    const window2 = this.toolWindow;
+    if (window2 && (this.inFlight || window2.phase === "cancelled")) window2.phase = "cancelled";
+    this.captureReplyIdentity();
+    const binding = this.replyBinding;
+    const partialMessage = binding?.message;
+    const partial = binding && partialMessage && !binding.rejected.has(partialMessage) && window2?.phase !== "cancelled" && this.record?.attempts[binding.attemptId]?.status === "writing" && (!partialMessage.swipes || (partialMessage.swipe_id ?? 0) < partialMessage.swipes.length) ? binding.attemptId : null;
+    this.clearGeneration("generation stopped by the user");
+    if (partial && this.record?.attempts[partial]) {
+      this.record.attempts[partial].status = "writing";
+      this.completionCandidate = partial;
+    }
+    this.releaseWriterWaiters();
     await this.persist();
     this.refreshStatus();
   }
   onGenerationEnded() {
+    const frame = this.suppressions.at(-1);
+    if (frame && !frame.dry) {
+      this.suppressions.pop();
+      this.macroSuppressed = frame.suppressed;
+      this.resumeInjection(frame);
+      if (frame.nested) return;
+    } else if (this.nestedEnds > 0) {
+      this.nestedEnds -= 1;
+      return;
+    }
+    this.buildingGeneration = false;
+    this.regenerateSource = null;
+    this.macroUpcomingAttemptId = null;
+    this.macroUpcomingCursor = null;
+    this.dryRunRestore = null;
+    this.releaseWriterWaiters();
+    this.replyBinding?.end();
     void this.host.armLore(null);
-    if (!this.toolWindow || !["followup_pending", "failed_pending", "malformed_pending"].includes(this.toolWindow.phase)) this.host.clearInjection();
+    if (this.toolContinuation || this.toolWindow && ["cancelled", "followup_pending", "failed_pending", "malformed_pending"].includes(this.toolWindow.phase)) return;
+    this.captureReplyIdentity();
+    const id = this.currentAttemptId;
+    this.completionCandidate = id;
+    this.currentAttemptId = null;
+    this.pendingForSwipe = false;
+    this.preparedTool = null;
+    this.host.clearInjection();
+    if (this.record?.pending) this.apply({ type: "cancel", attemptId: this.record.pending.attemptId, epoch: this.epoch, reason: "writer returned before binding" });
+    this.status = "Ready";
   }
   queueMessageReceived(mesId, type) {
-    const attemptId = this.currentAttemptId;
+    if (!["normal", "swipe", "regenerate", "continue", "appendFinal"].includes(type)) return;
+    const attemptId = this.currentAttemptId ?? this.completionCandidate;
     if (!attemptId) return;
+    const binding = this.replyBinding;
+    const message = this.host.chat()[mesId];
+    if (!binding || binding.attemptId !== attemptId || mesId !== binding.index || binding.message && binding.message !== message || (message?.swipe_id ?? 0) !== binding.swipeId) return;
+    if (!binding.message) binding.message = message ?? null;
+    if (this.automaticReply?.attemptId === attemptId && !this.automaticReply.cancelled && !["", "..."].includes(stripResultFooter(String(message?.mes ?? "")).trim())) this.automaticReply.finished = true;
     const phaseAtEvent = this.toolWindow?.attemptId === attemptId ? this.toolWindow.phase : null;
     const writerSettled = this.writerSettled;
+    const nativeEnded = !writerSettled && this.host.isGenerating() ? binding.ended : null;
     let task;
-    task = new Promise((resolve) => setTimeout(resolve, 0)).then(() => writerSettled).then(() => this.completeMessage(mesId, type, attemptId, phaseAtEvent)).catch((error) => console.error("[RP Director] deferred message completion failed", error)).finally(() => this.messageTasks.delete(task));
+    task = new Promise((resolve) => setTimeout(resolve, 0)).then(() => writerSettled).then(() => nativeEnded).then(() => {
+      if (message && !binding.rejected.has(message) && this.host.chat()[mesId] === message && (message.swipe_id ?? 0) === binding.swipeId) return this.completeMessage(mesId, type, attemptId, phaseAtEvent);
+    }).catch((error) => console.error("[RP Director] deferred message completion failed", error)).finally(() => this.messageTasks.delete(task));
     this.messageTasks.add(task);
   }
   async waitForMessageTasks(_attemptId) {
     while (this.messageTasks.size > 0) await Promise.all([...this.messageTasks]);
   }
   async completeMessage(mesId, type, attemptId, phaseAtEvent) {
-    if (!this.record || type === "first_message") return;
+    if (!this.record || !["normal", "swipe", "regenerate", "continue", "appendFinal"].includes(type)) return;
     const attempt = this.record.attempts[attemptId];
     if (!attempt || attempt.status !== "writing") return;
     if (phaseAtEvent === "initial" && this.toolWindow?.attemptId === attemptId && this.toolWindow.used) return;
     const chat = this.host.chat();
     const message = chat[mesId];
-    if (!message || message.is_system || message.is_user || !stripResultFooter(String(message.mes ?? "")).trim()) return;
+    if (!message || message.is_system || message.is_user || ["", "..."].includes(stripResultFooter(String(message.mes ?? "")).trim())) return;
     const cursorAfter = this.cursorOf(chat.slice(0, mesId + 1));
     const swipeId = typeof message.swipe_id === "number" ? message.swipe_id : 0;
     const variantId = newId("var");
     const operationId = `complete:${attemptId}:${mesId}:${swipeId}`;
     const actorId = message.original_avatar ? this.actorMap().byAvatar[message.original_avatar] ?? null : null;
     this.host.writeMarker(mesId, { v: variantId, a: attemptId, r: attempt.resolutionId });
-    const notices = this.apply({ type: "completed", attemptId, epoch: this.epoch, operationId, variantId, hostMessageRef: mesId, hostVariantRef: swipeId, cursorAfter, now: Date.now(), actorId, observerRequired: true });
+    const notices = this.apply({ type: "completed", attemptId, epoch: this.epoch, operationId, variantId, hostMessageRef: mesId, hostVariantRef: swipeId, cursorAfter, now: Date.now(), actorId });
     void notices;
-    this.refreshResultFooter(mesId);
-    this.currentAttemptId = null;
-    this.host.clearInjection();
-    await this.persist();
-    const after = this.record.attempts[attemptId];
-    if (after?.status !== "observing") return;
-    if (after.toolStatus === "malformed") {
-      this.apply({ type: "observation_failed", attemptId, variantId, error: after.toolError ?? "writer emitted prose before its required tool call" });
-      this.status = "Stale";
-      await this.persist();
-      this.host.toast("error", "The reply used the Director tool after prose. It was preserved, but no state was committed; swipe to retry.");
-      this.refreshStatus();
-      return;
+    if (attempt.storyAfter) this.record.story = withSnapshot(this.record.story, cursorAfter, structuredClone(attempt.storyAfter));
+    if (this.completionCandidate === attemptId) this.completionCandidate = null;
+    this.refreshWorkflowBadge(mesId);
+    if (!attempt.toolError && (attempt.toolStatus === "offered" || attempt.toolStatus === "permitted")) this.recoverJudgeStage("tool");
+    if (this.currentAttemptId === attemptId) {
+      this.currentAttemptId = null;
+      this.host.clearInjection();
     }
-    this.status = "Observing";
-    this.notify();
-    await this.observeVariant(attemptId, variantId, mesId);
-    this.refreshStatus();
-  }
-  refreshResultFooter(mesId, cursorAfter) {
-    if (!this.record) return false;
-    const marker = this.host.readMarker(mesId);
-    if (!marker) return false;
-    const variant = this.record.variants[marker.v];
-    const matches = variant?.attemptId === marker.a && variant.cursorAfter === (cursorAfter ?? this.cursorOf(this.host.chat().slice(0, mesId + 1)));
-    return this.host.writeResultFooter(mesId, matches ? formatResultFooter(this.record, marker.a) : "");
-  }
-  refreshResultFooters(from, chain) {
-    for (let index = from; index < this.host.chat().length; index++) this.refreshResultFooter(index, chain[index + 1]);
-  }
-  observationProvider() {
-    const connection = this.settings.connection;
-    const timeoutMs = this.profile.budgets.deadlineMs;
-    if (connection.kind === "mock" || connection.kind === "rules") return createLocalObservationProvider();
-    const observerProfileId = this.settings.observerConnection.stProfileId;
-    if (observerProfileId) return createStructuredObservationProvider({ transport: this.host.stProfileTransport(observerProfileId), model: null, timeoutMs });
-    if (connection.kind === "jev" || connection.kind === "openrouter" && (!connection.model || /^(?:~)?typesafe\/jev/.test(connection.model))) return createDecisionObservationProvider(this.provider());
-    if (connection.kind === "openrouter") return createStructuredObservationProvider({ transport: this.host.openRouterTransport(), model: connection.model, timeoutMs });
-    if (connection.kind === "structured") {
-      const transport = connection.stProfileId ? this.host.stProfileTransport(connection.stProfileId) : createDirectFetchTransport({ baseUrl: connection.baseUrl, getApiKey: () => sessionStorage.getItem(STRUCTURED_KEY_STORAGE) });
-      return createStructuredObservationProvider({ transport, model: connection.model || null, timeoutMs });
-    }
-    return createLocalObservationProvider();
-  }
-  stateAtCursor(cursor) {
-    if (!this.record) return null;
-    if (cursor && this.record.checkpoints[cursor]) return structuredClone(this.record.checkpoints[cursor].stateAfter);
-    if (cursor && this.record.projection.cursor === cursor) return structuredClone(this.record.projection.state);
-    return null;
-  }
-  async observeVariant(attemptId, variantId, mesId) {
-    if (!this.record || !this.chatKey) return;
-    const attempt = this.record.attempts[attemptId];
-    const variant = this.record.variants[variantId];
-    const message = this.host.chat()[mesId];
-    if (!attempt || !variant || !message || attempt.status !== "observing" || !variant.cursorAfter || !attempt.cursorBefore) return;
-    const priorState = this.stateAtCursor(attempt.cursorBefore);
-    if (!priorState) {
-      this.apply({ type: "observation_failed", attemptId, variantId, error: "the predecessor checkpoint is unavailable" });
-      await this.persist();
-      return;
-    }
-    const permit = attempt.permitId ? this.record.permits[attempt.permitId] ?? null : null;
-    const expectedRulings = [];
-    const preResolution = attempt.resolutionId ? this.record.resolutions[attempt.resolutionId] ?? null : null;
-    if (preResolution) expectedRulings.push({
-      resolutionId: preResolution.resolutionId,
-      actingActorId: preResolution.action.actingActorId ?? preResolution.action.playerActorId,
-      boundedResult: preResolution.action.requestedGain,
-      outcome: preResolution.outcome,
-      instruction: this.filledInstruction(preResolution, attempt.actorId ?? null)
-    });
-    for (const permitted of permit?.actions ?? []) expectedRulings.push({
-      resolutionId: permitted.resolutionId,
-      actingActorId: permitted.actingActorId,
-      boundedResult: permitted.boundedResult,
-      outcome: permitted.outcome,
-      instruction: permitted.instruction
-    });
-    const expectedResolutionIds = expectedRulings.map((ruling) => ruling.resolutionId);
-    const actorId = attempt.actorId ?? "unknown";
-    const request = {
-      schemaVersion: 1,
-      requestId: newId("obsreq"),
-      attemptId,
-      variantId,
-      baseCursor: attempt.cursorBefore,
-      cursorAfter: variant.cursorAfter,
-      stateRevision: priorState.revision,
-      acceptedSpan: { id: `span:${variantId}`, actorId, role: "assistant", text: stripResultFooter(String(message.mes ?? "")), accepted: true },
-      expectedResolutionIds,
-      expectedRulings,
-      permit,
-      priorState,
-      registry: buildObservationRegistry({ state: priorState, actorIds: Object.keys(this.record.actors), expectedResolutionIds, permit })
-    };
-    const abort = new AbortController();
-    this.observerInFlight.set(variantId, abort);
     const epoch = this.epoch;
     const chatKey = this.chatKey;
-    let provider;
-    try {
-      provider = this.observationProvider();
-    } catch (error) {
-      this.apply({ type: "observation_failed", attemptId, variantId, error: `observer setup failed: ${error.message}` });
-      await this.persist();
-      return;
-    }
-    try {
-      const observation = await provider.observe(request, abort.signal);
-      this.observerInFlight.delete(variantId);
-      if (epoch !== this.epoch || chatKey !== this.chatKey || !this.record || this.record.attempts[attemptId]?.status !== "observing") return;
-      const liveMessage = this.host.chat()[mesId];
-      if (!liveMessage || this.cursorOf(this.host.chat().slice(0, mesId + 1)) !== variant.cursorAfter || this.host.readMarker(mesId)?.v !== variantId) return;
-      this.apply({ type: "observation_ready", attemptId, variantId, observation });
-      this.inspect({
-        kind: "observer",
-        attemptId,
-        resolutionId: attempt.resolutionId,
-        message: `Observed reply: ${observation.realizedResolutionIds.length} realized ruling${observation.realizedResolutionIds.length === 1 ? "" : "s"}, ${observation.operations.length} factual operation${observation.operations.length === 1 ? "" : "s"}${observation.unresolved.length ? `, ${observation.unresolved.length} unresolved` : ""}.`,
-        stateSent: jsonSafe(request),
-        providerKind: observation.providerKind === "local" ? null : observation.providerKind,
-        requestedModel: observation.requestedModel,
-        returnedModel: observation.returnedModel,
-        durationMs: observation.durationMs,
-        inputTokens: observation.inputTokens,
-        outputTokens: observation.outputTokens,
-        networkCalls: observation.providerKind === "local" ? 0 : 1
-      });
-      await this.persist();
-    } catch (error) {
-      this.observerInFlight.delete(variantId);
-      if (abort.signal.aborted || epoch !== this.epoch || chatKey !== this.chatKey || !this.record || this.record.attempts[attemptId]?.status !== "observing") return;
-      const messageText = error instanceof ProviderError ? `${error.code}: ${error.message}` : error.message;
-      this.apply({ type: "observation_failed", attemptId, variantId, error: messageText });
-      this.inspect({ kind: "observer", attemptId, resolutionId: attempt.resolutionId, message: `Observer failed; reply preserved and prior state retained: ${messageText}`, stateSent: jsonSafe(request), networkCalls: provider.kind === "local" ? 0 : 1 });
-      this.status = "Stale";
-      await this.persist();
-      this.host.toast("warning", "The reply was preserved, but state tracking is stale because the post-reply observer failed.");
-    }
-  }
-  /** Next user input implicitly accepts the currently selected observed variant. */
-  async onMessageSent(mesId) {
-    if (!this.settings.enabled || this.host.isAutoDirectorEnabled()) return;
-    await this.waitForMessageTasks();
-    if (!this.record) return;
-    const committed = await this.commitCurrentVariant("next user message");
-    if (!committed) {
-      this.host.toast("warning", "Your message was sent, but Director state could not advance because the selected reply was not safely observed. State tracking is stale until repaired or a known swipe is restored.");
-      return;
-    }
-    const prefix = this.host.chat().slice(0, mesId + 1);
-    this.ensurePredecessor(prefix);
     await this.persist();
-    this.refreshStatus();
-  }
-  async commitCurrentVariant(reason) {
-    if (!this.record) return true;
-    const cursor = this.record.projection.cursor;
-    const variant = Object.values(this.record.variants).find((candidate) => candidate.cursorAfter === cursor && candidate.acceptance === "pending");
-    if (!variant) return this.record.projection.status !== "stale";
-    const liveMessages = this.host.chat();
-    const index = this.record.attempts[variant.attemptId]?.hostMessageRef;
-    if (typeof index !== "number" || this.host.readMarker(index)?.v !== variant.variantId || this.cursorOf(liveMessages.slice(0, index + 1)) !== variant.cursorAfter) return false;
-    if (variant.observerStatus === "pending") {
-      this.status = "Observing";
-      this.host.toast("info", "The reply is still being checked. Try again when Director shows Ready to continue or Ready with an outcome.");
-      this.notify();
-      return false;
-    }
-    if (variant.observerStatus !== "ready" || !variant.observation) {
-      this.status = "Stale";
-      this.lastError = variant.observerError ?? "The selected reply has no valid observation.";
-      this.notify();
-      return false;
-    }
-    this.apply({ type: "commit_observation", variantId: variant.variantId, operationId: `commit-observation:${variant.variantId}`, now: Date.now() });
-    const accepted = this.record.variants[variant.variantId]?.acceptance === "accepted";
-    if (!accepted) {
-      this.status = "Stale";
-      this.lastError = "The observation commit was refused because its predecessor state changed.";
-      this.notify();
-      return false;
-    }
-    this.inspect({ kind: "acceptance", attemptId: variant.attemptId, resolutionId: variant.resolutionId, networkCalls: 0, message: `Implicitly accepted selected reply on ${reason}; observer deltas committed once.` });
+    if (epoch !== this.epoch || chatKey !== this.chatKey || this.currentAttemptId || this.inFlight) return;
     this.status = "Ready";
-    await this.persist();
-    return true;
-  }
-  async commitReply() {
-    const ok = await this.commitCurrentVariant("explicit Commit reply");
-    if (ok) this.host.toast("success", "Selected reply committed.");
     this.refreshStatus();
+    this.scheduleReplyCheck(mesId, attemptId);
   }
-  selectedVariantRecord() {
-    if (!this.record) return null;
-    const marker = this.host.readMarker(this.host.chat().length - 1);
-    const variant = marker ? this.record.variants[marker.v] ?? null : null;
-    return variant?.cursorAfter === this.cursorOf(this.host.chat()) ? variant : null;
+  /** Values belong to the generation under construction, never the last badge. */
+  macroState() {
+    try {
+      if (this.macroSuppressed || !this.settings.enabled || !this.record || this.record.paused || this.host.isAutoDirectorEnabled()) return { active: false, modules: {} };
+      const id = this.currentAttemptId ?? this.record.pending?.attemptId ?? this.macroUpcomingAttemptId;
+      let attempt = id ? this.record.attempts[id] : null;
+      const preview = id === this.macroUpcomingAttemptId && !this.currentAttemptId && !this.record.pending;
+      if (!attempt || !preview && !["prepared", "writing"].includes(attempt.status)) return { active: false, modules: {} };
+      if (preview && this.explicitRetry?.sourceId === id) attempt = { ...attempt, resolutionId: this.explicitRetry.resolutionId, permitId: this.explicitRetry.permitId };
+      const correction = preview ? this.automaticReply?.sourceId === id && !this.automaticReply.cancelled ? this.automaticReply.correction : "" : attempt.replyCorrection;
+      const output = attempt.status === "prepared" ? this.pendingInjection : preview ? [
+        this.frozenState(attempt),
+        this.settings.modules.pacing ? pacingBlock(attempt.frozenPacing, this.settings.handBackBeats !== false, this.host.dynamicResponseEnabled()) : "",
+        this.settings.reactions.enabled && !attempt.permitId ? this.reactionBlock(attempt.reaction) : "",
+        this.settings.modules.replyCheck ? attempt.replyNudge : "",
+        correction
+      ].filter(Boolean).join("\n\n") : attempt.injectedText ?? "";
+      const hasBlock = (header) => output.includes(header);
+      const decisionFailed = attempt.judgeFailedStages === void 0 ? Boolean(attempt.judgeErrors?.length) && !attempt.resolutionId && !attempt.permitId : attempt.judgeFailedStages.some((stage) => ["move", "route", "ruling"].includes(stage));
+      const move = attempt.stageRecords?.find((stage) => stage.stage === "move")?.result.answers.move;
+      const noMove = move?.type === "choice" && ["NONE", "ROUTINE"].includes(move.choice);
+      const applied = attempt.decisionsApplied ?? !attempt.unadjudicated;
+      const modules = {
+        decisions: Boolean(this.settings.modules.decisions && (attempt.resolutionId || attempt.permitId || !decisionFailed && (applied || noMove))),
+        speaker: Boolean(this.settings.modules.speaker && attempt.frozenSpeaker?.selected && !attempt.judgeFailedStages?.includes("speaker")),
+        meters: Boolean(this.settings.modules.meters && hasBlock("[Director character state \u2014 judged from play]")),
+        secrets: Boolean(this.settings.modules.secrets && hasBlock("[Director knowledge boundaries]")),
+        lore: Boolean(this.settings.modules.lore && attempt.frozenLorePlan?.force.length),
+        pacing: Boolean(this.settings.modules.pacing && (hasBlock("[Director pacing \u2014 preserve on wording swipes]") || hasBlock("[Director hand-back \u2014 preserve on wording swipes]"))),
+        reactions: Boolean(this.settings.reactions.enabled && hasBlock("[Director NPC reaction \u2014 preserve on wording swipes]")),
+        replyCheck: Boolean(this.settings.modules.replyCheck && (correction && output.includes(correction) || attempt.replyNudge && output.includes(attempt.replyNudge)))
+      };
+      if (!Object.values(modules).some(Boolean)) return { active: false, modules: {} };
+      const pack = attempt.frozenPackId ? packById(attempt.frozenPackId) : this.chatPack();
+      const badge = buildWorkflowBadge({
+        attempt,
+        record: this.record,
+        pack,
+        resolution: attempt.resolutionId ? this.record.resolutions[attempt.resolutionId] : null,
+        permit: attempt.permitId ? this.record.permits[attempt.permitId] : null
+      });
+      const result = modules.decisions ? badge.results[0] : void 0;
+      const meters = {};
+      if (modules.meters) for (const [actorId, levels] of Object.entries(attempt.storyAfter?.meters ?? {})) {
+        const words = {};
+        for (const definition of pack.meters) {
+          const level = levels[definition.key];
+          if (level !== void 0 && definition.levels[level] && (attempt.storyAfter?.assessed === void 0 || attempt.storyAfter.assessed[actorId]?.[definition.key] === true)) words[definition.key] = definition.levels[level];
+        }
+        meters[actorId] = words;
+      }
+      for (const [actorId, words] of Object.entries(meters)) {
+        const name = this.record.actors[actorId]?.name;
+        if (name && Object.values(this.record.actors).filter((actor) => actor.name.toLowerCase() === name.toLowerCase()).length === 1 && !Object.keys(meters).some((id2) => id2.toLowerCase() === name.toLowerCase())) meters[name] = words;
+      }
+      return {
+        active: true,
+        modules,
+        outcome: result?.outcome,
+        odds: result?.odds ?? void 0,
+        roll: result?.draw ?? void 0,
+        scene: modules.pacing ? attempt.frozenPacing?.scene ?? void 0 : void 0,
+        pack: pack.id,
+        meters
+      };
+    } catch {
+      return { active: false, modules: {} };
+    }
+  }
+  getMacro(key) {
+    return resolveDirectorMacro(this.macroState(), key);
+  }
+  setSpeakerByName(name) {
+    const key = name.trim().toLowerCase();
+    if (key === "auto") {
+      this.setSpeakerOverride(null);
+      return;
+    }
+    if (key === "yield") {
+      this.setSpeakerOverride(YIELD);
+      return;
+    }
+    const actors = this.actorsForUi().filter((actor) => !actor.disabled && actor.name.toLowerCase() === key);
+    if (key === this.host.playerName().toLowerCase() && !actors.length) {
+      this.setSpeakerOverride(YIELD);
+      return;
+    }
+    if (actors.length !== 1 || key === this.host.playerName().toLowerCase()) throw new Error("Choose one enabled character by their exact name, yield, or auto.");
+    this.setSpeakerOverride(actors[0].actorId);
+  }
+  cancelReplyCheck(stopWriter = true) {
+    const automatic = this.automaticReply;
+    if (automatic && !automatic.cancelled && !automatic.finished) {
+      automatic.cancelled = true;
+      this.approvedSwipeCursor = null;
+      const attempt = automatic.attemptId ? this.record?.attempts[automatic.attemptId] : null;
+      if (attempt?.status === "writing") {
+        this.apply({ type: "cancel", attemptId: attempt.attemptId, epoch: this.epoch, reason: "automatic reply cancelled" });
+        this.clearGeneration("automatic reply cancelled");
+        this.refreshWorkflowBadges(Math.max(0, this.host.chat().indexOf(automatic.message)));
+        if (stopWriter) this.host.stopGeneration();
+      }
+    }
+    this.replyCheckAbort?.abort(new Error("reply check cancelled"));
+    this.replyCheckAbort = null;
+    if (this.replyCheckTimer !== null) clearTimeout(this.replyCheckTimer);
+    this.replyCheckTimer = null;
+  }
+  scheduleReplyCheck(mesId, attemptId) {
+    if (!this.settings.modules.replyCheck) return;
+    this.cancelReplyCheck();
+    const abort = new AbortController();
+    this.replyCheckAbort = abort;
+    this.replyCheckTimer = setTimeout(() => {
+      this.replyCheckTimer = null;
+      void this.checkReply(mesId, attemptId, abort);
+    }, 0);
+  }
+  async checkReply(mesId, attemptId, abort) {
+    const epoch = this.epoch, chatKey = this.chatKey;
+    const message = this.host.chat()[mesId];
+    const attempt = this.record?.attempts[attemptId];
+    if (!message || !attempt || attempt.replyCheck) return;
+    const swipeId = message.swipe_id ?? 0;
+    const text2 = message.mes;
+    const composer = this.host.composerText();
+    const cursor = this.cursorOf(this.host.chat());
+    const valid = () => !abort.signal.aborted && this.settings.enabled && this.settings.modules.replyCheck && !this.record?.paused && epoch === this.epoch && chatKey === this.chatKey && this.host.chatKey() === chatKey && this.host.chat().at(-1) === message && (message.swipe_id ?? 0) === swipeId && message.mes === text2 && this.cursorOf(this.host.chat()) === cursor && this.host.composerText() === composer;
+    const timeout = setTimeout(() => abort.abort(new JudgeWaitBudget()), Math.max(0, this.settings.waitForJudgeSeconds) * 1e3);
+    const receipts = [];
+    let usageRecorded = false;
+    try {
+      if (!valid()) return;
+      const resolution = this.settings.modules.decisions && attempt.resolutionId ? this.record?.resolutions[attempt.resolutionId] : null;
+      const permit = this.settings.modules.decisions && attempt.permitId ? this.record?.permits[attempt.permitId] : null;
+      const names = Object.fromEntries(Object.values(this.record.actors).map((actor) => [actor.actorId, actor.name]));
+      const ruling = replyCheckRuling(resolution ? {
+        action: resolution.action,
+        outcome: resolution.outcome,
+        instruction: instructionForResolution(resolution),
+        actorName: names[resolution.action.actingActorId ?? resolution.action.playerActorId] ?? resolution.action.playerActorId,
+        speakerName: attempt.actorId ? names[attempt.actorId] ?? null : null,
+        playerName: this.host.playerName(),
+        targetNames: resolution.action.targetActorIds.map((id) => names[id] ?? id),
+        npcActionPolicy: permit ? "permitted" : attempt.toolStatus === "offered" ? "checkpoint" : "defer"
+      } : null, permit ?? null);
+      const questions = visibleJudgeData(replyCheckQuestions(this.host.playerName(), ruling));
+      const prefix = this.host.chat().slice(0, mesId);
+      let latestUser = prefix.length - 1;
+      while (latestUser >= 0 && !prefix[latestUser].is_user) latestUser--;
+      const state = replyCheckState({
+        player: this.host.playerName(),
+        latestInput: latestUser >= 0 ? prefix[latestUser].mes : "",
+        previousReplies: prefix.filter((item) => !item.is_user && !item.is_system).slice(-5).map((item) => ({ name: item.name, text: item.mes })),
+        reply: { name: message.name, text: text2 },
+        maxChars: STAGED_MAX_STATE_CHARS
+      });
+      if (JSON.stringify(state).length > STAGED_MAX_STATE_CHARS) throw new Error("Reply check context exceeds the character budget");
+      const result = await withinBudget(this.usageProvider(this.provider(), "reply_check", receipts).evaluate({
+        requestId: newId("req"),
+        phase: "guide",
+        questions,
+        snapshot: {
+          chatId: chatKey,
+          cursorBefore: cursor,
+          stateRevision: 0,
+          scopeId: "reply-check",
+          profileRevision: this.profile.revision,
+          catalogRevision: "reply-check:1",
+          actorBindingRevision: "",
+          state
+        }
+      }, abort.signal), abort.signal);
+      if (!valid()) return;
+      const checked = validateStageAnswers("speaker", questions, result);
+      if (!Object.keys(checked.result.answers).length) throw new Error(checked.errors.map((error) => error.message).join("; "));
+      this.recoverJudgeStage("reply_check");
+      const previous = prefix.filter((item) => !item.is_user && !item.is_system).slice(-5).flatMap((item) => {
+        const index = this.host.chat().indexOf(item);
+        const marker2 = this.host.readMarker(index);
+        const check = marker2 ? this.record?.attempts[marker2.a]?.replyCheck : null;
+        return check ? [check] : [];
+      });
+      const assessment = assessReply(checked.result.answers, this.settings.replyCheckThresholds, previous);
+      const live = this.record?.attempts[attemptId];
+      if (!live) return;
+      live.replyCheck = assessment;
+      live.requestUsage = mergeRequestUsage(live.requestUsage, receipts);
+      this.inspect({
+        kind: "info",
+        attemptId,
+        questions,
+        stateSent: state,
+        answers: result.answers,
+        providerKind: result.provider,
+        requestedModel: result.requestedModel,
+        returnedModel: result.returnedModel,
+        durationMs: result.durationMs,
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        networkCalls: receipts.length,
+        requestUsage: mergeRequestUsage(receipts),
+        message: `Reply check: ${assessment.reason ?? (assessment.nudge ? "nudge next turn" : "passed")}.`
+      });
+      usageRecorded = true;
+      this.refreshWorkflowBadge(mesId);
+      await this.persist();
+      if (!valid() || !assessment.reason || latestUser < 0 || composer.trim() || this.host.isGroup() || !this.host.swipesEnabled()) return;
+      const turnKey = this.cursorOf(prefix.slice(0, latestUser + 1));
+      if (this.record?.replyCheckRerolls?.includes(turnKey)) return;
+      const idle = async () => {
+        await this.writerSettled;
+        while (valid() && this.host.swipeState() !== "none") await new Promise((resolve) => setTimeout(resolve, 20));
+        return valid() && !this.host.isGenerating() && !this.inFlight && !this.currentAttemptId;
+      };
+      if (!await idle()) return;
+      this.record.replyCheckRerolls = [...this.record.replyCheckRerolls ?? [], turnKey];
+      await this.persist();
+      if (!await idle()) return;
+      const automatic = {
+        sourceId: attemptId,
+        message,
+        chatKey,
+        reason: assessment.reason,
+        correction: replyCorrection(assessment.reason, this.host.playerName()),
+        originalSwipe: swipeId,
+        nextSwipe: message.swipes?.length ?? 1,
+        attemptId: null,
+        swipeObserved: false,
+        started: false,
+        finished: false,
+        cancelled: false,
+        preserveUserChanges: false,
+        toolFollowUp: false,
+        followUpPending: false
+      };
+      this.automaticReply = automatic;
+      this.macroUpcomingAttemptId = attemptId;
+      this.macroUpcomingCursor = null;
+      this.approvedSwipeCursor = live.cursorBefore;
+      clearTimeout(timeout);
+      try {
+        await this.host.swipeRight();
+      } catch (error) {
+        if (!automatic.cancelled && epoch === this.epoch && chatKey === this.chatKey) {
+          this.reportJudgeError("reply_rewrite", `The rewrite could not start: ${error.message}`, { attemptId });
+          await this.persist();
+        }
+      } finally {
+        if (this.automaticReply === automatic) this.automaticReply = null;
+        this.approvedSwipeCursor = null;
+        if (!automatic.started && !automatic.preserveUserChanges && this.macroUpcomingAttemptId === attemptId) this.macroUpcomingAttemptId = null;
+        if ((automatic.cancelled || !automatic.finished) && !automatic.preserveUserChanges && automatic.chatKey === this.chatKey && this.host.chatKey() === chatKey) {
+          const changed = await this.host.discardAutomaticSwipe(automatic.message, automatic.nextSwipe, automatic.originalSwipe, automatic.cancelled);
+          if (changed || automatic.cancelled) await this.persist();
+        }
+      }
+    } catch (error) {
+      if (epoch === this.epoch && chatKey === this.chatKey && (!abort.signal.aborted || abort.signal.reason instanceof JudgeWaitBudget)) {
+        const live = this.record?.attempts[attemptId];
+        if (live) live.replyCheckError = error.message;
+        this.reportJudgeError("reply_check", `Reply check unavailable: ${error.message}`, { attemptId });
+        this.refreshWorkflowBadge(mesId);
+        await this.persist();
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (!usageRecorded && receipts.length && epoch === this.epoch && chatKey === this.chatKey) {
+        const live = this.record?.attempts[attemptId];
+        if (live) live.requestUsage = mergeRequestUsage(live.requestUsage, receipts);
+        this.inspect({ kind: "info", attemptId, message: "Reply-check request usage; no automatic action applied.", networkCalls: receipts.length, requestUsage: mergeRequestUsage(receipts) });
+        this.refreshWorkflowBadge(mesId);
+        await this.persist();
+      }
+      if (this.replyCheckAbort === abort) {
+        this.replyCheckAbort = null;
+        this.approvedSwipeCursor = null;
+      }
+    }
+  }
+  refreshWorkflowBadge(mesId, suppliedChain) {
+    if (!this.record) return false;
+    const marker2 = this.host.readMarker(mesId);
+    const variant = marker2 ? this.record.variants[marker2.v] : null;
+    const chain = suppliedChain ?? this.chainNow();
+    const matches = Boolean(marker2 && variant?.attemptId === marker2.a && variant.cursorAfter === chain[mesId + 1] && (this.record.attempts[marker2.a]?.hostVariantRef ?? 0) === (this.host.chat()[mesId]?.swipe_id ?? 0));
+    const attempt = matches && marker2 ? this.record.attempts[marker2.a] : null;
+    const saved = this.host.readWorkflowBadge(mesId);
+    if (attempt && saved?.attemptId === attempt.attemptId && ["actorNames", "move", "route", "writerInstruction", "speaker", "meterChanges", "reveals", "lore"].every((key) => Object.hasOwn(saved, key))) {
+      return this.host.writeWorkflowBadge(mesId, {
+        ...saved,
+        ...attempt.replyCheck ? { replyCheck: structuredClone(attempt.replyCheck) } : {},
+        ...attempt.replyCheckError ? { replyCheckError: attempt.replyCheckError } : {},
+        ...attempt.replyOriginalSwipe !== void 0 ? { replyOriginalSwipe: attempt.replyOriginalSwipe } : {},
+        ...attempt.requestUsage ? { requestUsage: structuredClone(attempt.requestUsage) } : {}
+      });
+    }
+    return this.host.writeWorkflowBadge(mesId, attempt ? buildWorkflowBadge({
+      attempt,
+      record: this.record,
+      pack: this.chatPack(),
+      resolution: attempt.resolutionId ? this.record.resolutions[attempt.resolutionId] : null,
+      permit: attempt.permitId ? this.record.permits[attempt.permitId] : null
+    }) : null);
+  }
+  refreshWorkflowBadges(from) {
+    const chain = this.chainNow();
+    for (let index = from; index < this.host.chat().length; index++) {
+      this.refreshWorkflowBadge(index, chain);
+    }
   }
   canRerollSelected() {
-    if (!this.record) return false;
-    const variant = this.selectedVariantRecord();
-    if (!variant) return false;
-    const attempt = this.record.attempts[variant.attemptId];
-    return Boolean(attempt?.resolutionId && this.record.resolutions[attempt.resolutionId]);
+    if (!this.record || !this.settings.modules.decisions) return false;
+    const attempt = this.selectedAttempt();
+    return Boolean(attempt?.resolutionId && this.record.resolutions[attempt.resolutionId] || attempt?.permitId && this.record.permits[attempt.permitId]);
   }
-  canRepairSelected() {
-    return Boolean(this.record && this.record.projection.status === "stale");
-  }
-  hasRepairableSelectedFailure() {
-    const variant = this.selectedVariantRecord();
-    return Boolean(variant?.observerStatus === "failed");
-  }
-  canAdoptEmptyBaseline() {
-    const state = this.record?.projection.state;
-    return Boolean(state && JSON.stringify(state) === JSON.stringify(emptyState()));
-  }
-  async retryObservation() {
-    if (!this.record || this.host.isGenerating()) return;
-    const cursor = this.record.projection.cursor;
-    const variant = Object.values(this.record.variants).find((candidate) => candidate.cursorAfter === cursor && candidate.observerStatus === "failed");
-    if (!variant) {
-      this.host.toast("info", "The selected reply has no failed observation to retry.");
-      return;
-    }
-    const attempt = this.record.attempts[variant.attemptId];
-    if (!attempt || attempt.hostMessageRef === null) return;
-    this.apply({ type: "retry_observation", attemptId: attempt.attemptId, variantId: variant.variantId });
-    this.status = "Observing";
-    await this.persist();
-    await this.observeVariant(attempt.attemptId, variant.variantId, attempt.hostMessageRef);
-    this.refreshStatus();
-  }
-  /**
-   * Repair the selected branch at the seam a swipe actually needs. When the
-   * failed variant has no predecessor checkpoint, baseline that predecessor
-   * from the preserved fail-closed state, then retry observation. Generic
-   * imported/edit staleness still falls back to a head baseline.
-   */
-  async repairSelectedBranch() {
-    if (!this.record || this.host.isGenerating() || this.inFlight) return;
-    const variant = this.selectedVariantRecord();
-    const attempt = variant ? this.record.attempts[variant.attemptId] ?? null : null;
-    if (variant?.observerStatus === "failed" && attempt?.cursorBefore && attempt.hostMessageRef !== null) {
-      if (!this.record.checkpoints[attempt.cursorBefore]) {
-        if (!this.canAdoptEmptyBaseline()) {
-          this.host.toast("warning", "This swipe has no predecessor state. Restore a tracked swipe or explicitly reset tracking; later facts cannot be copied backwards.");
-          return;
-        }
-        this.apply({ type: "set_baseline", cursor: attempt.cursorBefore, state: this.record.projection.state, reason: "user repaired the selected swipe predecessor" });
-        this.inspect({ kind: "restore", attemptId: attempt.attemptId, resolutionId: attempt.resolutionId, networkCalls: 0, message: "Repair: established a predecessor baseline for the selected swipe from the preserved fail-closed state." });
-      }
-      this.apply({ type: "retry_observation", attemptId: attempt.attemptId, variantId: variant.variantId });
-      this.status = "Observing";
-      await this.persist();
-      await this.observeVariant(attempt.attemptId, variant.variantId, attempt.hostMessageRef);
-      this.refreshStatus();
-      if (this.record.variants[variant.variantId]?.observerStatus === "ready") this.host.toast("success", "Selected swipe repaired. Continue normally to commit it.");
-      return;
-    }
-    const epoch = this.epoch;
-    const cursor = this.chainNow().at(-1);
-    if (!await this.host.confirm("Reset tracking at the selected message", "<p>Discard the current tracked facts for this branch and start an empty baseline at the selected message? Chat text and saved swipes are preserved.</p>")) return;
-    if (epoch !== this.epoch || cursor !== this.chainNow().at(-1)) return;
-    this.apply({ type: "set_baseline", cursor, state: emptyState(), reason: "explicit reset of tracking at selected message" });
-    this.status = "Ready";
-    await this.persist();
+  async onMessageSent(_mesId) {
     this.refreshStatus();
   }
   async onMessageSwiped(mesId) {
-    if (!this.record || !this.settings.enabled || this.host.isAutoDirectorEnabled()) return;
+    const automatic = this.automaticReply;
+    const ownSwipe = automatic && !automatic.swipeObserved && this.host.chat()[mesId] === automatic.message && this.host.chat()[mesId]?.swipe_id === automatic.nextSwipe;
+    if (ownSwipe) automatic.swipeObserved = true;
+    if (!ownSwipe) this.cancelReplyCheck();
+    if (ownSwipe && automatic.cancelled) return;
+    if (!this.record || !this.settings.enabled || this.record.paused || this.pendingForSwipe) return;
     const chat = this.host.chat();
     const message = chat[mesId];
     if (!message) return;
-    const swipeId = typeof message.swipe_id === "number" ? message.swipe_id : 0;
-    if (Array.isArray(message.swipes) && swipeId >= message.swipes.length) {
-      const marker2 = this.host.readMarker(mesId);
-      const variant = marker2 ? this.record.variants[marker2.v] : null;
-      const matches = variant?.cursorAfter === this.cursorOf(chat.slice(0, mesId + 1));
-      const priorAttempt = matches && marker2 ? this.record.attempts[marker2.a] ?? null : null;
-      const baseCursor = priorAttempt?.cursorBefore ?? this.cursorOf(chat.slice(0, mesId));
-      const source = { epoch: this.epoch, chatKey: this.chatKey, message, index: mesId, swipe: swipeId, baseCursor, resolutionId: priorAttempt?.resolutionId ?? null, permitId: priorAttempt?.permitId ?? null, reaction: priorAttempt?.reaction ? structuredClone(priorAttempt.reaction) : null };
-      this.swipeSource = source;
-      const prefixAtPrompt = this.cursorOf(chat.slice(0, mesId));
-      const isCurrent = () => source.epoch === this.epoch && source.chatKey === this.chatKey && this.settings.enabled && !this.host.isAutoDirectorEnabled() && this.host.chat()[mesId] === message && message.swipe_id === swipeId && this.cursorOf(this.host.chat().slice(0, mesId)) === prefixAtPrompt;
-      const active = source.resolutionId ? this.record.resolutions[source.resolutionId] : null;
-      const permit = source.permitId ? this.record.permits[source.permitId] : null;
-      if (active || permit) {
-        const canReroll = Boolean(active || permit?.profile);
-        const choice = await this.host.chooseSwipeAction("ruled", canReroll);
-        if (!isCurrent()) {
-          this.pendingSwipeMode = "cancel";
-          return;
-        }
-        if (choice === "cancel") {
-          this.pendingSwipeMode = "cancel";
-          return;
-        }
-        if (choice === "reroll") {
-          if (active && !await this.reroll(false)) {
-            this.pendingSwipeMode = "cancel";
-            return;
-          }
-          if (permit && !await this.reviewStoredPermit(permit, isCurrent)) {
-            this.pendingSwipeMode = "cancel";
-            return;
-          }
-          if (!isCurrent()) {
-            this.pendingSwipeMode = "cancel";
-            return;
-          }
-        }
-        this.pendingSwipeMode = "reuse";
-      } else if (priorAttempt && !priorAttempt.unadjudicated) {
-        this.pendingSwipeMode = "reuse";
-      } else {
-        const choice = await this.host.chooseSwipeAction("native");
-        if (!isCurrent() || choice === "cancel") {
-          this.pendingSwipeMode = "cancel";
-          return;
-        }
-        this.pendingSwipeMode = choice === "bypass" ? "bypass" : "adopt";
-        if (this.pendingSwipeMode === "adopt" && !this.record.checkpoints[baseCursor]) {
-          if (!this.canAdoptEmptyBaseline()) {
-            this.pendingSwipeMode = "cancel";
-            this.host.toast("warning", "The predecessor has no tracked state. Restore a tracked swipe or reset tracking explicitly before generating.");
-            return;
-          }
-          this.apply({ type: "set_baseline", cursor: baseCursor, state: this.record.projection.state, reason: "user adopted the native swipe predecessor into Director tracking" });
-          this.inspect({ kind: "restore", attemptId: priorAttempt?.attemptId ?? null, networkCalls: 0, message: "Native swipe adopted: established its predecessor as the Director baseline before generation." });
-          await this.persist();
-        }
-        if (this.pendingSwipeMode === "adopt" && !await this.prepareAdoptedSwipe(source, isCurrent)) this.pendingSwipeMode = "cancel";
-      }
+    const newSwipe = Array.isArray(message.swipes) && (message.swipe_id ?? 0) >= message.swipes.length;
+    if (!newSwipe) {
+      this.refreshWorkflowBadges(mesId);
       return;
     }
-    const marker = this.host.readMarker(mesId);
-    const chain = this.chainNow();
-    const cursorAfterVariant = this.cursorOf(chat.slice(0, mesId + 1));
-    if (marker && this.record.variants[marker.v]) {
-      this.apply({ type: "select_variant", variantId: marker.v, cursorAfter: cursorAfterVariant, chain });
-      this.inspect({ kind: "restore", attemptId: marker.a, resolutionId: marker.r, networkCalls: 0, message: `Restored variant ${marker.v} (${this.record.projection.status}); no provider or writer call.` });
-    } else {
-      this.apply({ type: "head_changed", cursor: chain.at(-1), chain, reason: "unknown" });
+    if (this.decidingNewSend) return;
+    if (!ownSwipe) this.cancelSwipe = false;
+    const prefix = chat.slice(0, mesId);
+    const source = (ownSwipe ? this.record.attempts[automatic.sourceId] : null) ?? this.attemptAt(prefix, mesId);
+    const epoch = this.epoch;
+    if (source) {
+      if (!await this.confirmRetry(source, source.cursorBefore ?? this.cursorOf(prefix))) {
+        if (!this.host.isGenerating()) this.cancelSwipe = true;
+        return;
+      }
+      this.approvedSwipeCursor = source.cursorBefore ?? this.cursorOf(prefix);
+    } else await this.prepareReplyRetry(true, prefix, false);
+    if (epoch !== this.epoch || this.host.chat()[mesId] !== message) {
+      this.cancelSwipe = true;
+      return;
     }
-    this.refreshResultFooters(mesId, chain);
+    if (this.host.isGenerating()) {
+      this.disarmSkippedSwipe();
+      return;
+    }
+    this.macroUpcomingAttemptId = source?.attemptId ?? null;
+    this.macroUpcomingCursor = null;
     await this.persist();
     this.refreshStatus();
+  }
+  /** Clears what a swipe armed when SillyTavern skipped its generation; a new roll is never dropped silently. */
+  disarmSkippedSwipe() {
+    if (this.explicitRetry) {
+      this.inspect({ kind: "info", attemptId: this.explicitRetry.sourceId, message: "The new decision was not used: another reply started before its swipe." });
+      this.host.toast("warning", "Another reply started, so the new roll was not used.");
+    }
+    this.cancelSwipe = false;
+    this.approvedSwipeCursor = null;
+    this.explicitRetry = null;
+    this.pendingForSwipe = false;
+    this.preparedInputCursor = null;
+    if (this.record?.pending) this.apply({ type: "cancel", attemptId: this.record.pending.attemptId, epoch: this.epoch, reason: "the swipe was not generated" });
+    if (this.status === "Frozen") this.status = "Ready";
+    this.refreshStatus();
+  }
+  async regenerateSelected() {
+    if (this.settings.enabled && this.record && !this.record.paused && this.replyInProgress()) {
+      this.host.toast("warning", "Wait for the current reply to finish.");
+      return;
+    }
+    this.cancelReplyCheck();
+    if (!this.settings.enabled || !this.record || this.record.paused || this.host.isGenerating()) return;
+    try {
+      await this.host.swipeRight(this.attemptSpeakerIndex(this.selectedAttempt()));
+    } finally {
+      this.pendingForSwipe = false;
+      this.explicitRetry = null;
+      this.approvedSwipeCursor = null;
+    }
+  }
+  async retryJudge() {
+    if (this.decisionCommandUnavailable()) return false;
+    this.cancelReplyCheck();
+    const source = this.selectedAttempt();
+    if (source && !(source.judgeFailedStages?.some((s) => ["move", "route", "ruling"].includes(s)) || source.judgeFailedStages === void 0 && source.judgeErrors?.length && !source.resolutionId)) return false;
+    return this.prepareReplyRetry(false, void 0, true);
+  }
+  /** Reassess the exchange answered by this reply, including explicit Next turns. */
+  async prepareReplyRetry(nativeSwipePending, suppliedPrefix, replay = false) {
+    if (!this.record || !this.settings.enabled || this.record.paused || this.inFlight) return false;
+    if (!nativeSwipePending && this.host.isGenerating()) return false;
+    const chat = this.host.chat();
+    const reply = suppliedPrefix ? chat[suppliedPrefix.length] : chat.at(-1);
+    let prefix = suppliedPrefix ?? (chat.at(-1)?.is_user ? chat : chat.slice(0, -1));
+    const source = this.attemptAt(prefix, reply ? prefix.length : void 0);
+    if (source && replayIsTrimmed(this.record, source)) {
+      this.host.toast("info", "This turn is too old to reassess.");
+      return false;
+    }
+    if (source?.cursorBefore) {
+      const boundIndex = cursorChain(this.record.seedId, this.host.fingerprintMessages(prefix)).indexOf(source.cursorBefore);
+      if (boundIndex >= 0) prefix = prefix.slice(0, boundIndex);
+    }
+    const last = prefix.at(-1);
+    const nextTurn = source?.turnKind === "director_next" && source.inputText === "";
+    const text2 = nextTurn ? "" : source?.inputText ?? (last?.is_user ? last.mes ?? "" : "");
+    if (!nextTurn && (!text2.trim() || text2.trim().startsWith("/"))) return false;
+    const reactionSettings = structuredClone(this.settings.reactions);
+    const modules = { ...this.settings.modules, reactions: reactionSettings.enabled };
+    if (!Object.values(modules).some(Boolean)) return false;
+    const actors = this.bindActors();
+    const candidates = actors.order.map((actorId) => ({ actorId, exclusions: actors.byId[actorId].disabled ? ["disabled"] : [] }));
+    const eligible = candidates.filter((candidate) => candidate.exclusions.length === 0).map((candidate) => candidate.actorId);
+    const names = Object.fromEntries(actors.order.map((id) => [id, actors.byId[id].name]));
+    names[PLAYER_ACTOR_ID] = this.host.playerName();
+    const selectedActor = source?.actorId ?? (reply?.original_avatar ? actors.byAvatar[reply.original_avatar] ?? null : eligible[0] ?? null);
+    const epoch = this.epoch;
+    const chatKey = this.chatKey;
+    const cursor = this.cursorOf(prefix);
+    this.status = "Deciding";
+    this.decidingMessage = last ?? null;
+    this.notify();
+    try {
+      await this.stagedTurn({
+        kind: nextTurn ? "director_next" : "director_send",
+        composerText: text2,
+        epoch,
+        chatKey,
+        actors,
+        isGroup: this.host.isGroup(),
+        candidates,
+        eligible,
+        names,
+        explicit: selectedActor,
+        nativeSpeaker: !selectedActor,
+        lastSpeakerActorId: selectedActor,
+        modules,
+        reactionSettings,
+        transcriptPrefix: nextTurn ? prefix : prefix.slice(0, -1),
+        boundPrefix: prefix,
+        swipe: true,
+        nativeSwipePending,
+        retrySource: source ?? void 0,
+        replay,
+        changed: () => this.cursorOf(this.host.chat().slice(0, prefix.length)) !== cursor
+      });
+      return epoch === this.epoch && chatKey === this.chatKey;
+    } finally {
+      this.decidingMessage = null;
+      if (!nativeSwipePending) {
+        this.pendingForSwipe = false;
+        this.preparedDeadline = null;
+      }
+    }
+  }
+  /**
+   * SillyTavern spliced a swipe out: every later swipe of that message moved down
+   * one place. Their attempts follow them (a badge matches its swipe by index),
+   * and a rewrite's "original reply" index follows its original.
+   */
+  onSwipeDeleted(details) {
+    const { messageId, swipeId } = details ?? {};
+    const message = typeof messageId === "number" ? this.host.chat()[messageId] : void 0;
+    if (!this.record || !message || typeof swipeId !== "number" || !Array.isArray(message.swipe_info)) return;
+    for (let index = swipeId; index < message.swipe_info.length; index++) {
+      const marker2 = message.swipe_info[index]?.extra?.[VARIANT_MARKER_KEY];
+      const attempt = typeof marker2?.a === "string" ? this.record.attempts[marker2.a] : void 0;
+      if (!attempt || attempt.variantId !== marker2.v) continue;
+      attempt.hostVariantRef = index;
+      if (typeof attempt.replyOriginalSwipe === "number" && attempt.replyOriginalSwipe >= 0) {
+        if (attempt.replyOriginalSwipe > swipeId) attempt.replyOriginalSwipe -= 1;
+        else if (attempt.replyOriginalSwipe === swipeId) attempt.replyOriginalSwipe = -1;
+      }
+    }
   }
   async onHeadChanged(reason, mesId) {
+    const automatic = this.automaticReply;
+    if (automatic && reason === "edit" && mesId !== null && automatic.message === this.host.chat()[mesId]) automatic.preserveUserChanges = true;
+    this.cancelReplyCheck();
     if (!this.record) return;
+    if (reason === "edit") this.record = rebaseRecordCursors(this.record, this.host.chat(), this.host.fingerprintMessages(this.host.chat()), true);
+    if (!this.decidingNewSend && this.decidingMessage && (!this.host.chat().includes(this.decidingMessage) || mesId !== null && this.host.chat()[mesId] === this.decidingMessage)) this.inFlight?.abort(new Error("message being decided changed"));
     const chain = this.chainNow();
-    const head = chain.at(-1);
-    if (reason === "edit" && mesId !== null && mesId === this.host.chat().length - 1 && this.record.checkpoints[head]) {
-      this.apply({ type: "head_changed", cursor: head, chain, reason: "load" });
-    } else {
-      this.apply({ type: "head_changed", cursor: head, chain, reason });
-    }
-    if (this.record.projection.status === "stale") {
-      this.inspect({ kind: "restore", networkCalls: 0, message: `Transcript changed (${reason}); tracked state is stale. Set a baseline to continue, or swipe/undo back to a known variant.` });
-    } else {
-      this.inspect({ kind: "restore", networkCalls: 0, message: `Transcript changed (${reason}); projection ${this.record.projection.status} at ${head}.` });
-    }
-    this.refreshResultFooters(mesId ?? 0, chain);
-    await this.persist();
-    this.refreshStatus();
-  }
-  // ---- acceptance -------------------------------------------------------------
-  provisional() {
-    if (!this.record) return null;
-    const a = provisionalAttempts(this.record)[0];
-    if (!a) return null;
-    const r = a.resolutionId ? this.record.resolutions[a.resolutionId] ?? null : null;
-    return { attemptId: a.attemptId, resolution: r, outcome: r?.outcome ?? null };
-  }
-  async accept() {
-    await this.commitReply();
-  }
-  async prepareAdoptedSwipe(source, isCurrent) {
-    if (!this.record || !isCurrent()) return false;
-    const predecessor = this.record.checkpoints[source.baseCursor]?.stateAfter;
-    if (!predecessor) {
-      this.fail("The swipe predecessor has no saved state. Repair the selected branch or restore a tracked swipe first.");
-      await this.persist();
-      return false;
-    }
-    const priorState = structuredClone(predecessor);
-    const prefix = this.host.chat().slice(0, source.index);
-    const latestUser = [...prefix].reverse().find((message) => message.is_user);
-    let action = this.buildAutomaticAction(latestUser?.mes ?? "", priorState.sceneId);
-    if (!action) return true;
-    const actors = this.bindActors();
-    const built = buildState({
-      scopeId: "shared-public",
-      actors: this.record.actors,
-      eligibleActorIds: actors.order,
-      publicCards: {},
-      facts: jsonSafe(priorState.variables),
-      action,
-      latestInput: latestUser?.mes ?? "",
-      recentMessages: prefix.filter((message) => !message.is_system).slice(-this.profile.budgets.maxRecentMessages).map((message) => ({
-        actorId: message.is_user ? PLAYER_ACTOR_ID : actors.byAvatar[message.original_avatar ?? ""] ?? `name:${message.name}`,
-        role: message.is_user ? "user" : "assistant",
-        text: message.is_user ? message.mes : stripResultFooter(message.mes)
-      })),
-      sceneId: priorState.sceneId,
-      acceptedReplyCount: priorState.sceneReplyCount,
-      maxRecentMessages: this.profile.budgets.maxRecentMessages,
-      maxSerializedCharacters: this.profile.budgets.maxSerializedCharacters
-    });
-    if (!this.checkDecisionContext(built)) {
-      await this.persist();
-      return false;
-    }
-    const snapshot = {
-      chatId: this.chatKey,
-      cursorBefore: source.baseCursor,
-      stateRevision: priorState.revision,
-      scopeId: "shared-public",
-      profileRevision: this.profile.revision,
-      catalogRevision: "",
-      actorBindingRevision: actors.order.join(","),
-      state: built.state
-    };
-    const id = this.profile.drivingQuestionId;
-    const questions = { attempt_gate: autoAttemptGateQuestion(), attempt_family: autoAttemptFamilyQuestion(), [id]: autoAttemptNoulQuestion() };
-    const abort = new AbortController();
-    this.inFlight = abort;
-    try {
-      const result = await this.provider().evaluate({ requestId: newId("req"), phase: "guide", snapshot, questions }, abort.signal);
-      if (!isCurrent() || this.profile.revision !== snapshot.profileRevision) return false;
-      if (this.record.checkpoints[source.baseCursor]?.stateAfter.revision !== priorState.revision) {
-        this.host.toast("warning", "The swipe predecessor changed while Director was deciding. Try the swipe again.");
-        return false;
+    if (reason === "edit" && mesId !== null && !this.host.chat()[mesId]?.is_user) {
+      const source = this.attemptAt(this.host.chat().slice(0, mesId), mesId);
+      if (source && source.storyAfter === void 0 && source.variantId) {
+        const savedCursor = this.record.variants[source.variantId]?.cursorAfter;
+        const saved = savedCursor ? snapshotAt(this.record.story, [savedCursor]) : null;
+        if (saved) source.storyAfter = structuredClone(saved);
       }
-      const interpreted = interpretAutomaticAttempt(action, result.answers, result.errors);
-      if (!interpreted.ok) throw new Error(interpreted.error);
-      action = interpreted.action;
-      if (!action || this.profile.mode !== "binding") return true;
-      const signal = normaliseSignal(result.answers[id]);
-      if (!signal.ok) throw new Error(signal.error);
-      const resolved = resolveOutcome({
-        bands: this.profile.bands,
-        outcomes: this.profile.outcomes,
-        method: this.profile.resolutionMethod,
-        signal: signal.signal,
-        draw: this.profile.resolutionMethod === "sample" ? randomDraw().u : null
-      });
-      if (!resolved.ok) throw new Error(resolved.error);
-      const resolution = freeze({
-        resolutionId: newId("res"),
-        previousResolutionId: null,
-        action,
-        snapshot,
-        assessment: result.answers[id],
-        decisionSource: "provider",
-        policyRevision: this.profile.revision,
-        band: resolved.value.band,
-        method: resolved.value.method,
-        draw: resolved.value.draw,
-        outcome: resolved.value.outcome,
-        def: resolved.value.def,
-        cursorBefore: source.baseCursor,
-        generation: 1,
-        providerKind: result.provider,
-        requestedModel: result.requestedModel,
-        returnedModel: result.returnedModel,
-        now: Date.now()
-      });
-      this.apply({ type: "store_resolution", resolution });
-      source.resolutionId = resolution.resolutionId;
-      this.inspect({
-        kind: "wording_regeneration",
-        resolutionId: resolution.resolutionId,
-        questions,
-        answers: result.answers,
-        stateSent: built.state,
-        outcome: resolution.outcome,
-        networkCalls: this.isNetworkProvider() ? 1 : 0,
-        message: "Adopted native swipe: adjudicated the preceding user attempt before generation."
-      });
-      await this.persist();
-      return true;
-    } catch (error) {
-      if (isCurrent()) this.host.toast("error", `Swipe decision failed: ${error.message}`);
-      return false;
-    } finally {
-      if (this.inFlight === abort) this.inFlight = null;
+      if (source?.storyAfter) this.record.story = withSnapshot(this.record.story, chain[mesId + 1], structuredClone(source.storyAfter));
+      const marker2 = this.host.readMarker(mesId);
+      const variant = marker2 ? this.record.variants[marker2.v] : null;
+      if (source && variant?.attemptId === source.attemptId) variant.cursorAfter = chain[mesId + 1];
     }
-  }
-  async reviewStoredPermit(previous, isCurrent) {
-    const profile = previous.profile;
-    if (!profile) return false;
-    const names = Object.fromEntries(Object.values(this.record?.actors ?? {}).map((actor) => [actor.actorId, actor.name]));
-    const abort = new AbortController();
-    this.inFlight = abort;
-    const redraw = async (permit) => {
-      if (profile.resolutionMethod === "sample") return rerollPermit(permit, profile, names, this.host.playerName());
-      if (!previous.proposal || !previous.snapshot) throw new Error("Stored permit has no proposal for reassessment.");
-      return (await adjudicateTurnProposal({ proposal: previous.proposal, snapshot: previous.snapshot, profile, provider: this.planningProvider(this.provider()), actorNames: names, playerName: this.host.playerName(), signal: abort.signal })).permit;
-    };
-    try {
-      const initial = await redraw(previous);
-      const permit = await reviewPermit({
-        initial,
-        method: profile.resolutionMethod,
-        signal: abort.signal,
-        isCurrent,
-        choose: (permit2) => this.host.reviewRolls(permit2, names, profile.resolutionMethod, abort.signal),
-        reroll: redraw
-      });
-      if (!permit || !isCurrent()) return false;
-      permit.previousPermitId = previous.permitId;
-      this.apply({ type: "store_permit", permit });
-      if (this.swipeSource) this.swipeSource.permitId = permit.permitId;
-      await this.persist();
-      return true;
-    } catch (error) {
-      if (isCurrent()) this.host.toast("error", `Roll review failed: ${error.message}`);
-      return false;
-    } finally {
-      if (this.inFlight === abort) this.inFlight = null;
-    }
-  }
-  async reject() {
-    const p = this.provisional();
-    if (!p || !this.record) return;
-    this.apply({ type: "reject", attemptId: p.attemptId });
-    this.inspect({ kind: "acceptance", attemptId: p.attemptId, resolutionId: p.resolution?.resolutionId ?? null, outcome: p.outcome, networkCalls: 0, message: "Rejected: no effects committed. Swipe for a wording retry with the same ruling, or Reroll." });
-    this.status = "Ready";
-    this.host.toast("info", "Rejected. Swipe to regenerate the wording under the same ruling, or press Reroll for a new resolution.");
+    this.apply({ type: "head_changed", cursor: chain.at(-1), chain, reason });
+    this.refreshWorkflowBadges(mesId ?? 0);
     await this.persist();
     this.refreshStatus();
   }
-  /** Explicit reroll: a new linked resolution for the same action at the same prefix, then a wording swipe. */
+  /** Only these explicit actions may replace a frozen decision. */
   async reroll(generateSwipe = true) {
-    if (!this.record) return false;
-    if (this.host.isGenerating()) {
-      this.host.toast("warning", "Wait for the current generation to finish.");
+    if (this.decisionCommandUnavailable()) return false;
+    if (!this.canRerollSelected()) {
+      this.host.toast("warning", "There is no ruling to roll again.");
       return false;
     }
-    const chat = this.host.chat();
-    const last = chat.length - 1;
-    const marker = this.host.readMarker(last);
-    const attempt = marker ? this.record.attempts[marker.a] : null;
-    const cursor = attempt?.cursorBefore ?? this.cursorOf(chat.slice(0, -1));
-    const resolutionId = this.swipeSource?.resolutionId ?? this.selectedVariantRecord()?.resolutionId;
-    const previous = resolutionId ? this.record.resolutions[resolutionId] ?? null : null;
-    if (!previous) {
-      this.host.toast("warning", "The selected reply has no active Director ruling to reroll.");
+    return this.changeDecision(false, generateSwipe);
+  }
+  async reassess(generateSwipe = true) {
+    if (this.decisionCommandUnavailable()) return false;
+    if (!this.canRerollSelected()) {
+      if (!this.host.chat().some((message) => message.is_user)) {
+        this.host.toast("warning", "There is no message to reassess.");
+        return false;
+      }
+      return generateSwipe ? this.prepareReplyRetry(false) : false;
+    }
+    return this.changeDecision(true, generateSwipe);
+  }
+  decisionCommandUnavailable() {
+    const message = !this.record ? "Open a chat first." : !this.settings.enabled ? "The Director is off." : this.record.paused ? "The Director is paused in this chat." : !this.settings.modules.decisions ? "Director decisions are off." : this.replyInProgress() ? "Wait for the current reply to finish." : "";
+    if (message) this.host.toast("warning", message);
+    return Boolean(message);
+  }
+  /**
+   * A reply, swipe or automatic rewrite is still being written or saved. During
+   * a swipe's animation is_send_press is still false, and our own swipes bypass
+   * SillyTavern's one-swipe-at-a-time guard, so both are checked here.
+   */
+  replyInProgress() {
+    return this.host.isGenerating() || Boolean(this.inFlight) || Boolean(this.automaticReply) || this.host.swipeState() !== "none";
+  }
+  /** `quietFailure`: the caller tells the user itself (a native regenerate keeps its result). */
+  async changeDecision(reassess, generateSwipe, suppliedSource, quietFailure = false) {
+    this.cancelReplyCheck();
+    if (!this.record || !this.settings.enabled || !this.settings.modules.decisions || this.record.paused || !suppliedSource && this.host.isGenerating() || this.inFlight) return false;
+    const source = suppliedSource ?? this.selectedAttempt();
+    if (!source) return false;
+    const previous = source.resolutionId ? this.record.resolutions[source.resolutionId] : null;
+    const previousPermit = source.permitId ? this.record.permits[source.permitId] : null;
+    if ((reassess || previous && previous.method !== "sample" || previousPermit && (previousPermit.profile ?? this.profile).resolutionMethod !== "sample") && replayIsTrimmed(this.record, source)) {
+      if (!quietFailure) this.host.toast("info", "This turn is too old to reassess.");
       return false;
     }
-    const rerollEpoch = this.epoch;
-    const rerollCursor = this.cursorOf(chat);
-    let next;
+    if (!previous && !previousPermit) return false;
+    const epoch = this.epoch;
+    const chatKey = this.chatKey;
+    const cursor = this.cursorOf(this.host.chat());
+    const marker2 = this.host.readMarker(this.host.chat().length - 1);
+    const idle = () => !generateSwipe || !this.automaticReply && this.host.swipeState() === "none";
+    const current = () => epoch === this.epoch && chatKey === this.chatKey && cursor === this.cursorOf(this.host.chat()) && marker2?.v === this.host.readMarker(this.host.chat().length - 1)?.v && this.settings.enabled && !this.record?.paused && idle();
+    const abort = new AbortController();
+    this.inFlight = abort;
+    const timer = setTimeout(() => abort.abort(new JudgeWaitBudget()), Math.max(0, this.settings.waitForJudgeSeconds) * 1e3);
+    let next = null;
+    let permit = null;
     let networkCalls = 0;
-    let answers = null;
-    if (previous.method === "sample" && previous.assessment && previous.policyBand && defOfResolution(previous)) {
-      const signal = normaliseSignal(previous.assessment);
-      if (!signal.ok) return false;
-      const resolved = resolveOutcome({ bands: this.profile.bands, outcomes: this.profile.outcomes, method: "sample", signal: signal.signal, draw: randomDraw().u });
-      if (!resolved.ok) return false;
-      next = freeze({
-        ...previous,
-        resolutionId: newId("res"),
-        previousResolutionId: previous.resolutionId,
-        generation: previous.generation + 1,
-        band: resolved.value.band,
-        def: resolved.value.def,
-        outcome: resolved.value.outcome,
-        draw: resolved.value.draw,
-        now: Date.now()
-      });
-    } else if (previous.decisionSource === "provider") {
-      const questionId = this.profile.drivingQuestionId;
-      const questions = { [questionId]: previous.action.pipeline === "staged" && previous.action.move ? this.stagedRulingQuestion(previous.action.move) : questionId === "gain_score" ? attemptScoreQuestion(previous.action) : attemptNoulQuestion(previous.action) };
-      let provider;
-      try {
-        provider = this.provider();
-      } catch (e) {
-        this.fail(`Connection error: ${e.message}`);
-        return false;
-      }
-      if (this.isNetworkProvider()) networkCalls = 1;
-      this.status = "Deciding";
-      this.notify();
-      const abort = new AbortController();
-      this.inFlight = abort;
-      const epoch = this.epoch;
-      const chatKey = this.chatKey;
-      let result;
-      try {
-        result = await provider.evaluate({ requestId: newId("req"), phase: "guide", snapshot: previous.snapshot, questions }, abort.signal);
-      } catch (e) {
-        this.inFlight = null;
-        if (epoch !== this.epoch || this.chatKey !== chatKey) return false;
-        this.status = "Paused";
-        const msg = e instanceof ProviderError ? `${e.code}: ${e.message}` : e.message;
-        this.inspect({ kind: "error", message: `Reroll provider failed; previous resolution kept. ${msg}`, networkCalls, providerKind: provider.kind });
-        this.host.toast("error", `Reroll failed: ${msg}. The previous ruling stands.`);
-        await this.persist();
-        this.notify();
-        return false;
-      }
-      this.inFlight = null;
-      if (epoch !== this.epoch || this.chatKey !== chatKey) return false;
-      answers = result.answers;
-      const answer = result.answers[questionId];
-      if (!answer) {
-        this.status = "Paused";
-        this.fail(`Reroll got no valid assessment (${result.errors[questionId] ?? "missing"}); previous ruling kept.`, { networkCalls });
-        return false;
-      }
-      const sig = normaliseSignal(answer);
-      if (!sig.ok) {
-        this.status = "Paused";
-        this.fail(`Reroll assessment invalid: ${sig.error}`, { networkCalls });
-        return false;
-      }
-      const draw = this.profile.resolutionMethod === "sample" ? randomDraw().u : null;
-      const resolved = resolveOutcome({ bands: this.profile.bands, outcomes: this.profile.outcomes, method: this.profile.resolutionMethod, signal: sig.signal, draw });
-      if (!resolved.ok) {
-        this.status = "Paused";
-        this.fail(`Reroll could not resolve: ${resolved.error}`, { networkCalls });
-        return false;
-      }
-      next = freeze({
-        resolutionId: newId("res"),
-        previousResolutionId: previous.resolutionId,
-        action: previous.action,
-        snapshot: previous.snapshot,
-        assessment: answer,
-        decisionSource: "provider",
-        policyRevision: this.profile.revision,
-        band: resolved.value.band,
-        method: resolved.value.method,
-        draw: resolved.value.draw,
-        outcome: resolved.value.outcome,
-        def: resolved.value.def,
-        cursorBefore: previous.cursorBefore,
-        generation: previous.generation + 1,
-        providerKind: result.provider,
-        requestedModel: result.requestedModel,
-        returnedModel: result.returnedModel,
-        now: Date.now()
-      });
-    } else {
-      next = freeze({ ...previous, resolutionId: newId("res"), previousResolutionId: previous.resolutionId, generation: previous.generation + 1, now: Date.now(), band: previous.policyBand, def: defOfResolution(previous), outcomeTier: previous.outcomeTier, outcomeNote: previous.outcomeNote });
-    }
-    if (rerollEpoch !== this.epoch || rerollCursor !== this.cursorOf(this.host.chat())) return false;
-    const preview = {
-      schemaVersion: 1,
-      permitId: next.resolutionId,
-      attemptId: attempt?.attemptId ?? "preview",
-      speakerActorId: attempt?.actorId ?? "",
-      baseCursor: cursor,
-      stateRevision: next.snapshot.stateRevision,
-      compactState: { sceneId: next.action.sceneId ?? 1, revision: next.snapshot.stateRevision },
-      constraints: [],
-      createdAt: Date.now(),
-      actions: [{
-        proposalId: next.actionId,
-        resolutionId: next.resolutionId,
-        actingActorId: next.action.actingActorId ?? next.action.playerActorId,
-        targetActorIds: next.action.targetActorIds,
-        family: "acquire_secure",
-        method: next.action.attemptedAction,
-        boundedResult: next.action.requestedGain,
-        failureStake: next.action.failureStake ?? { kind: "other", detail: "" },
-        opposed: next.action.opposed ?? false,
-        outcome: next.outcome,
-        instruction: this.filledInstruction(next, attempt?.actorId ?? null),
-        recordedValue: next.outcomeRecords ?? "",
-        finalForScope: next.outcomeFinal ?? false,
-        scope: "attempt",
-        assessment: next.assessment ?? void 0,
-        draw: next.draw
-      }]
-    };
-    const abortReview = new AbortController();
-    this.inFlight = abortReview;
-    const names = Object.fromEntries(Object.values(this.record.actors).map((actor) => [actor.actorId, actor.name]));
-    const choice = await this.host.reviewRolls(preview, names, previous.method === "sample" ? "sample" : "threshold", abortReview.signal);
-    if (this.inFlight === abortReview) this.inFlight = null;
-    if (choice === "cancel" || abortReview.signal.aborted || rerollEpoch !== this.epoch || rerollCursor !== this.cursorOf(this.host.chat())) return false;
-    if (choice === "reroll") return this.reroll(generateSwipe);
-    this.apply({ type: "reroll", previousResolutionId: previous.resolutionId, resolution: next, now: Date.now() });
-    if (this.swipeSource) this.swipeSource.resolutionId = next.resolutionId;
-    this.inspect({ kind: "reroll", resolutionId: next.resolutionId, actionId: next.actionId, outcome: next.outcome, policyBandId: next.policyBand?.id ?? null, draw: next.draw, answers, networkCalls, providerKind: next.providerKind, message: `Reroll: ${previous.outcome} \u2192 ${next.outcome} (${next.method}${next.outcome === previous.outcome ? ", unchanged result" : ""}); linked to ${previous.resolutionId}.` });
-    this.status = "Frozen";
-    await this.persist();
-    this.host.toast("info", `Rerolled: ${next.outcome}${next.outcome === previous.outcome ? " (same result)" : ""}.${generateSwipe ? " Generating a new swipe\u2026" : ""}`);
-    if (generateSwipe) {
-      try {
-        await this.host.swipeRight();
-      } catch (e) {
-        console.warn("[RP Director] swipe failed", e);
-      }
-    }
-    this.refreshStatus();
-    return true;
-  }
-  async setBaseline() {
-    if (!this.record) return;
-    const chain = this.chainNow();
-    this.apply({ type: "set_baseline", cursor: chain.at(-1), state: this.record.projection.state, reason: "user set the current state as a new baseline" });
-    this.inspect({ kind: "info", networkCalls: 0, message: "Baseline set at the current head by the user; earlier state was not reconstructed." });
-    this.status = "Ready";
-    await this.persist();
-    this.refreshStatus();
-  }
-  async startNewScene() {
-    if (!this.record || this.nativeTurnBusy || this.host.nativeSendBlocked()) return;
-    this.nativeTurnBusy = true;
+    const receipts = [];
+    let usageRecorded = false;
     try {
-      await this.newSceneAndContinue();
+      if (previous) {
+        let answer = previous.assessment;
+        let result = null;
+        const shouldAssess = reassess || previous.method !== "sample";
+        if (shouldAssess) {
+          const questionId = previous.action.move ? "ruling" : this.profile.drivingQuestionId;
+          const question = previous.action.move ? this.stagedRulingQuestion(previous.action.move) : questionId === "gain_score" ? attemptScoreQuestion(previous.action) : attemptNoulQuestion(previous.action);
+          const questions = { [questionId]: question };
+          result = await withinBudget(this.usageProvider(this.provider(), "reassess", receipts).evaluate({ requestId: newId("req"), phase: "guide", snapshot: { ...previous.snapshot, state: visibleJudgeData(previous.snapshot.state) }, questions: visibleJudgeData(questions) }, abort.signal), abort.signal);
+          networkCalls = receipts.length;
+          const checked = validateStageAnswers("ruling", questions, result);
+          answer = checked.result.answers[questionId] ?? null;
+          if (!answer) throw new StagedError("ruling", checked.errors[0]?.message ?? "No valid reassessment", checked.errors[0]?.type ?? "invalid_answers");
+        }
+        if (!answer) throw new StagedError("ruling", "This reply has no saved assessment", "invalid_answers");
+        const signal = normaliseSignal(answer);
+        if (!signal.ok) throw new StagedError("ruling", signal.error, "invalid_answers");
+        const method = shouldAssess ? this.profile.resolutionMethod : "sample";
+        const resolved = resolveOutcome({
+          bands: this.profile.bands,
+          outcomes: this.profile.outcomes,
+          method,
+          signal: signal.signal,
+          draw: method === "sample" ? randomDraw().u : null
+        });
+        if (!resolved.ok) throw new StagedError("ruling", resolved.error, "invalid_answers");
+        next = freeze({
+          ...previous,
+          resolutionId: newId("res"),
+          previousResolutionId: previous.resolutionId,
+          generation: previous.generation + 1,
+          assessment: answer,
+          decisionSource: "provider",
+          method,
+          band: resolved.value.band,
+          def: resolved.value.def,
+          outcome: resolved.value.outcome,
+          draw: resolved.value.draw,
+          requestedModel: result?.requestedModel ?? previous.requestedModel,
+          returnedModel: result?.returnedModel ?? previous.returnedModel,
+          now: Date.now()
+        });
+        if (previous.replayTrimmed) next.replayTrimmed = true;
+      }
+      if (previousPermit) {
+        const profile = previousPermit.profile ?? this.profile;
+        const names = Object.fromEntries(Object.values(this.record.actors).map((a) => [a.actorId, a.name]));
+        if (reassess || profile.resolutionMethod !== "sample") {
+          if (!previousPermit.proposal || !previousPermit.snapshot) throw new Error("This NPC result has no saved question");
+          const result = await withinBudget(adjudicateTurnProposal({
+            proposal: previousPermit.proposal,
+            snapshot: previousPermit.snapshot,
+            profile,
+            provider: this.usageProvider(this.planningProvider(this.provider()), "npc_reassess", receipts),
+            actorNames: names,
+            playerName: this.host.playerName(),
+            signal: abort.signal
+          }), abort.signal);
+          permit = result.permit;
+          permit.previousPermitId = previousPermit.permitId;
+          networkCalls = receipts.length;
+        } else permit = rerollPermit(previousPermit, profile, names, this.host.playerName());
+      }
+      if (!current() || abort.signal.aborted) return false;
+      if (reassess || previous && previous.method !== "sample" || previousPermit && (previousPermit.profile ?? this.profile).resolutionMethod !== "sample") this.recoverJudgeStage("reassess");
+      if (next && previous) this.apply({ type: "reroll", previousResolutionId: previous.resolutionId, resolution: next, now: Date.now() });
+      if (permit) this.apply({ type: "store_permit", permit });
+      const inspectorId = newId("ins");
+      this.explicitRetry = { sourceId: source.attemptId, resolutionId: next?.resolutionId ?? source.resolutionId, permitId: permit?.permitId ?? source.permitId ?? null, inspectorId };
+      this.inspect({
+        id: inspectorId,
+        kind: "reroll",
+        resolutionId: next?.resolutionId ?? null,
+        outcome: next?.outcome ?? null,
+        draw: next?.draw ?? null,
+        networkCalls,
+        requestUsage: mergeRequestUsage(receipts),
+        message: `${reassess ? "Reassessed" : "Rerolled"} the selected reply; the new decision will be used on a new swipe.`
+      });
+      usageRecorded = true;
+      await this.persist();
+      clearTimeout(timer);
+      if (this.inFlight === abort) this.inFlight = null;
+      if (generateSwipe) {
+        if (!idle() || this.host.isGenerating()) {
+          this.explicitRetry = null;
+          this.inspect({ kind: "info", attemptId: source.attemptId, message: "The new decision was not used: another reply started before its swipe." });
+          this.host.toast("warning", "Wait for the current reply to finish.");
+          return false;
+        }
+        try {
+          await this.host.swipeRight(this.attemptSpeakerIndex(source));
+        } finally {
+          this.explicitRetry = null;
+          this.pendingForSwipe = false;
+        }
+      }
+      return true;
+    } catch (error) {
+      if (current()) {
+        const failure = stageError("ruling", error);
+        this.reportJudgeError(failure.type, `Decision unchanged: ${failure.message}`, {}, "reassess", !quietFailure);
+        await this.persist();
+      }
+      return false;
     } finally {
-      this.nativeTurnBusy = false;
+      clearTimeout(timer);
+      if (this.inFlight === abort) this.inFlight = null;
+      if (!usageRecorded && receipts.length && epoch === this.epoch && chatKey === this.chatKey) {
+        this.inspect({ kind: "info", attemptId: source.attemptId, message: "Reassessment request usage; the decision stayed unchanged.", networkCalls: receipts.length, requestUsage: mergeRequestUsage(receipts) });
+        await this.persist();
+      }
+      this.refreshStatus();
     }
-  }
-  async newSceneAndContinue() {
-    if (!this.record) return;
-    if (this.hasRepairableSelectedFailure()) await this.repairSelectedBranch();
-    if (!await this.commitCurrentVariant("new scene")) return;
-    if (this.host.isGenerating() || this.inFlight) {
-      this.host.toast("warning", "Wait for the current decision or generation to finish.");
-      return;
-    }
-    if (provisionalAttempts(this.record).length > 0) {
-      this.host.toast("warning", "Wait for the reply to finish being checked, then try New scene & continue again.");
-      return;
-    }
-    if (this.record.projection.status !== "current") {
-      this.host.toast("warning", "The tracked state must be current before starting a new scene.");
-      return;
-    }
-    const cursor = this.chainNow().at(-1);
-    this.apply({ type: "start_scene", cursor, reason: "user started a new scene" });
-    this.actionDraft = null;
-    this.actionDraftRevision += 1;
-    this.sceneTransitionPending = true;
-    this.inspect({ kind: "info", networkCalls: 0, message: `Started scene ${this.record.projection.state.sceneId}. Scene-scoped rulings from earlier scenes no longer settle new attempts.` });
-    await this.persist();
-    this.host.toast("success", `Scene ${this.record.projection.state.sceneId} started. Continuing through Director\u2026`);
-    this.refreshStatus();
-    await this.directorTurn(this.host.composerText().trim() ? "director_send" : "director_next");
   }
   // ---- table test -------------------------------------------------------------
   /**
@@ -8503,6 +9295,7 @@ This chosen response is already decided; do not roll or call the tool again for 
     const v = validateTable(table);
     if (!v.ok) return localFailure(v.errors);
     const kind = this.settings.connection.kind;
+    const connectionAtStart = JSON.stringify(this.settings.connection);
     if (kind === "mock" || kind === "rules") return localOnly(kind);
     let provider;
     try {
@@ -8513,21 +9306,24 @@ This chosen response is already decided; do not roll or call the tool again for 
     const request = buildTableTestRequest(table, this.profile.drivingQuestionId, newId("req"));
     const abort = new AbortController();
     const started = Date.now();
+    const receipts = [];
     let report;
     try {
-      const result = await provider.evaluate(request, abort.signal);
+      const result = await this.usageProvider(provider, "table_test", receipts).evaluate(request, abort.signal);
+      this.lastWorkingConnection = connectionAtStart;
       report = evaluateTableTest(table, method, request, result);
-      this.inspect({ kind: "info", message: `Table test: ${report.headline}`, questions: request.questions, stateSent: request.snapshot.state, answers: result.answers, providerKind: result.provider, requestedModel: result.requestedModel, returnedModel: result.returnedModel, durationMs: result.durationMs, inputTokens: result.inputTokens, outputTokens: result.outputTokens, networkCalls: 1 });
+      this.inspect({ kind: "info", message: `Table test: ${report.headline}`, questions: request.questions, stateSent: request.snapshot.state, answers: result.answers, providerKind: result.provider, requestedModel: result.requestedModel, returnedModel: result.returnedModel, durationMs: result.durationMs, inputTokens: result.inputTokens, outputTokens: result.outputTokens, networkCalls: receipts.length, requestUsage: mergeRequestUsage(receipts) });
     } catch (e) {
       const code = e instanceof ProviderError ? e.code : "error";
       report = transportFailure(code, e.message, Date.now() - started);
-      this.inspect({ kind: "error", message: `Table test failed: ${code}: ${e.message}`, questions: request.questions, stateSent: request.snapshot.state, providerKind: provider.kind, networkCalls: 1 });
+      this.inspect({ kind: "error", message: `Table test failed: ${code}: ${e.message}`, questions: request.questions, stateSent: request.snapshot.state, providerKind: provider.kind, networkCalls: receipts.length, requestUsage: mergeRequestUsage(receipts) });
     }
     await this.persist();
     return report;
   }
   // ---- settings ---------------------------------------------------------------
   setEnabled(enabled) {
+    this.cancelReplyCheck();
     this.settings.enabled = enabled;
     this.host.saveSettings();
     if (enabled) {
@@ -8538,11 +9334,8 @@ This chosen response is already decided; do not roll or call the tool again for 
     if (!enabled) {
       this.inFlight?.abort(new Error("disabled"));
       this.inFlight = null;
-      for (const controller2 of this.observerInFlight.values()) controller2.abort(new Error("disabled"));
-      this.observerInFlight.clear();
       this.toolWindow = null;
       this.preparedTool = null;
-      this.pendingSwipeMode = null;
       if (this.record) this.apply({ type: "abort_epoch", epoch: this.epoch, reason: "Director disabled" });
       this.epoch += 1;
       this.currentAttemptId = null;
@@ -8582,7 +9375,7 @@ function el(tag, attrs = {}, children = []) {
   return node;
 }
 function button(id, label, title, onClick, extraClass = "") {
-  const b = el("div", { id, class: `menu_button interactable ${extraClass}`.trim(), title, text: label, tabindex: "0" });
+  const b = el("button", { id, type: "button", class: `menu_button interactable ${extraClass}`.trim(), title, text: label });
   b.addEventListener("click", onClick);
   return b;
 }
@@ -8792,35 +9585,30 @@ async function loadLocalPresets(fetcher = fetch) {
 
 // src/tableui.ts
 var TABLE_HELP = [
-  "The judge answers with one number from 0 (nothing supports the gain) to 1 (clearly justified). Each row is a band of that number.",
-  'Binding: the row the number lands in names the ruling directly, using the "outcome" column.',
-  'Binding + dice: the row gives the odds instead. Each "w:" cell is the chance of that ruling, and one recorded roll picks it.',
-  "Columns are the possible rulings, and every part of a ruling is yours to define: its name, exactly what the writer is told, what gets recorded when you accept the reply, and whether that record settles the matter. A ruling can be a real failure, a cost, a complication, or anything else you write.",
-  "Presets load a ready-made table into the editor. Optional local presets live in gitignored profiles/local/presets.json. Nothing in the table changes in play until you press Apply table; the resolution method applies as soon as you change it.",
-  'The table is applied in code. The judge never reads it during play, so "w:" and "b0" are labels of this extension, not a model format.'
+  "The judge gives a score from 0 to 1, and the matching row sets the result or its odds.",
+  "Threshold uses the named result, while Dice rolls using the odds in that row.",
+  "Edit each result and its writer instruction, then choose Apply table to use your changes."
 ];
 var TIP = {
-  method: "How a row becomes a ruling. threshold: the row's outcome is the ruling. sample: the row's weights are odds and one recorded roll decides. Takes effect as soon as you change it; loading a preset never changes it. Rulings already frozen keep the method they were made with.",
-  id: "Band id. Auto-numbered b0, b1, b2 \u2026 and written into every ruling so you can see which row decided. Not editable; add or remove rows instead.",
-  from: 'Lower edge of this band, included. It always equals the "to" of the row above, so it is filled in for you.',
-  to: 'Upper edge of this band, not included. Editing it moves the "from" of the next row. The last row always ends at 1 and includes it.',
-  toLast: "The last band always ends at 1 and includes it.",
-  threshold: "Binding: the ruling when the judge's number lands in this band. Type the name of one of the outcome columns. Spaces become underscores; other symbols are removed.",
-  prefix: '"w:" means weight. It is a fixed label of this table, not part of the name and not something the model sees.',
-  name: `Name of this outcome. Letters, digits and underscores, starting with a letter, up to ${NAME_MAX_LENGTH} characters. Spaces become underscores and other symbols are removed as you type. Jev accepts any text as an option name; this stricter set also keeps the name safe as a saved variable and for other backends. Renaming updates every row that uses the name.`,
-  instruction: `Exactly what the writer is told when this is the ruling. This is the whole meaning of the outcome, so write it as an order: what happens, what must not happen, what it costs. You can use {{gain}}, {{action}}, {{target}}, {{player}} and {{speaker}}. Example of a real failure: "The attempt fails and {{target}} will not reconsider. Show the door closing." Up to ${INSTRUCTION_MAX_LENGTH} characters.`,
-  records: `What gets written to this gain's variable when you Accept the reply, for example achieved, partial, failed, blocked. Letters, digits and underscores; spaces become underscores. Leave empty to record nothing. It shows in the Inspector and decides what "stands once accepted" matches on.`,
-  final: "On: once you Accept this ruling, it stands for the declaration's scope. Attempt scope never settles a future retry; scene scope lasts until New scene; persistent scope stands until relevant history changes. The frozen meaning survives later table edits. Needs a recorded value. Off: the result can be attempted and judged again.",
-  preset: "A ready-made table for a genre, with its own named rulings, instructions and recorded values. Loading one replaces the table below in the editor only. Review it, edit anything, then press Apply table.",
-  weight: "Binding + dice: chance of this outcome when the judge's number lands in this band. From 0 to 1 in steps of 0.0001. Every row must add up to exactly 1.",
-  sum: "Sum of this row's weights. It must be exactly 1.",
-  removeRow: "Remove this band. Its range goes to the row above (or below, for the first row).",
-  removeCol: `Remove this outcome column. At least ${MIN_OUTCOMES} columns are required.`,
-  addRow: `Add a band by splitting the widest row in half; the new row copies its outcome and weights. Up to ${MAX_BANDS} rows: Jev accepts at most 255 options in one Choice question, and the table test asks one over the band ids.`,
-  addCol: `Add an outcome column. Up to ${MAX_OUTCOMES} columns, for the same 255-option limit.`,
-  apply: "Check the table and start using it. Creates a new profile revision; rulings already frozen keep the table they were made with.",
-  reset: "Discard your table and go back to the profile's built-in one. Your resolution method is kept.",
-  test: "Send this table, as edited, through one call to the selected judge connection. Passes only if every answer comes back in the expected format and resolves to one of your outcome columns. Costs one judge call."
+  method: "Changes apply to new rulings immediately, while existing rulings keep their result.",
+  id: "Rows are numbered automatically.",
+  from: "This score is included and follows the end of the previous row.",
+  to: "This score starts the next row.",
+  toLast: "The last row includes the maximum score of 1.",
+  threshold: "Enter the name of the result used when the score falls in this row.",
+  prefix: "Each number is the chance of this result with Dice.",
+  name: `Use up to ${NAME_MAX_LENGTH} letters, digits or underscores, starting with a letter.`,
+  instruction: `Describe what happens and what it costs in up to ${INSTRUCTION_MAX_LENGTH} characters.`,
+  preset: "Load a starting table, then choose Apply table to use it.",
+  weight: "Enter a chance from 0 to 1, with all chances in the row adding to 1.",
+  sum: "The chances in this row must add to 1.",
+  removeRow: "Remove this row and give its score range to the next available row.",
+  removeCol: `Keep at least ${MIN_OUTCOMES} result columns.`,
+  addRow: `Split the widest row in half, up to ${MAX_BANDS} rows.`,
+  addCol: `Add a result column, up to ${MAX_OUTCOMES} columns.`,
+  apply: "Use this table for new rulings.",
+  reset: "Restore the original table while keeping the selected method.",
+  test: "Check this edited table with one judge request."
 };
 function buildTableEditor(controller2) {
   const host2 = el("div", { id: "rpd-bands" });
@@ -8831,20 +9619,19 @@ function buildTableEditor(controller2) {
   let presetChoice = TABLE_PRESETS[0]?.id ?? "standard";
   let pendingPresetActorPolicy = null;
   let localPresetWarnings = [];
+  let refreshPresetChoices = () => {
+  };
   void loadLocalPresets().then((result) => {
     localPresetWarnings = result.warnings;
-    if (result.loaded.length) {
-      presetChoice = result.loaded[0];
-      controller2.host.toast("success", `Loaded ${result.loaded.length} local-only RP Director preset${result.loaded.length === 1 ? "" : "s"}.`);
-    }
     if (result.warnings.length) console.warn("[RP Director] local presets:", ...result.warnings);
-    render();
+    refreshPresetChoices();
   });
   const names = () => draft.outcomes.map((o) => o.name);
-  const isDirty = () => JSON.stringify({ o: draft.outcomes, b: draft.bands, m: method }) !== JSON.stringify({ o: controller2.profile.outcomes, b: controller2.profile.bands, m: controller2.profile.resolutionMethod });
+  const isDirty = () => JSON.stringify({ o: draft.outcomes, b: draft.bands, m: method }) !== JSON.stringify({ o: controller2.profile.outcomes, b: controller2.profile.bands, m: controller2.profile.resolutionMethod }) || pendingPresetActorPolicy !== null && pendingPresetActorPolicy !== controller2.profile.actorPolicy;
   const reload = () => {
     draft = cloneTable({ outcomes: controller2.profile.outcomes, bands: controller2.profile.bands });
     method = controller2.profile.resolutionMethod;
+    pendingPresetActorPolicy = null;
     render();
   };
   const showReport = (box) => {
@@ -8852,39 +9639,45 @@ function buildTableEditor(controller2) {
     box.dataset.status = report ? report.status : "none";
     if (testing) {
       box.dataset.status = "info";
-      box.append(el("div", { class: "rpd-result-head", text: "Testing\u2026 one judge call in flight." }));
+      box.append(el("div", { class: "rpd-result-head", text: "Testing\u2026 1 judge request." }));
       return;
     }
     if (!report) return;
-    box.append(el("div", { class: "rpd-result-head", text: report.headline }));
-    for (const line of report.lines) box.append(el("div", { class: "rpd-result-line", text: line }));
+    box.append(el("div", { class: "rpd-result-head", text: tableReportText(report.headline) }));
+    for (const line of report.lines) box.append(el("div", { class: "rpd-result-line", text: tableReportText(line) }));
   };
   function render() {
     host2.replaceChildren();
     const outcomeNames = names();
-    const help = el("div", { class: "rpd-help" });
-    for (const line of TABLE_HELP) help.append(el("div", { text: line }));
-    host2.append(help);
     const methodSelect = el("select", { class: "text_pole", title: TIP.method });
-    for (const m of ["threshold", "sample"]) methodSelect.append(el("option", { value: m, text: m === "threshold" ? "threshold (Binding)" : "sample (Binding + dice)" }));
+    for (const m of ["threshold", "sample"]) methodSelect.append(el("option", { value: m, text: m === "threshold" ? "Threshold" : "Dice" }));
     methodSelect.value = method;
     methodSelect.addEventListener("change", () => {
       method = methodSelect.value;
       setResolutionMethod(controller2.settings, controller2.profile.id, method);
       controller2.host.saveSettings();
       controller2.reloadProfile();
-      controller2.host.toast("success", method === "sample" ? "Resolution method: dice (sample)." : "Resolution method: threshold.");
+      controller2.host.toast("success", method === "sample" ? "Method: Dice." : "Method: Threshold.");
       render();
     });
-    const uses = el("span", { class: "rpd-muted", text: method === "threshold" ? 'Using the "outcome" column. Weights are kept but ignored.' : 'Using the "w:" weights. The "outcome" column is kept but ignored.' });
-    host2.append(el("div", { class: "rpd-row" }, [el("label", { text: "Resolution method", title: TIP.method }), methodSelect, uses]));
+    const uses = el("span", { class: "rpd-muted", text: method === "threshold" ? "The score picks the named result." : "The score picks the odds, then one roll picks the result." });
+    host2.append(el("div", { class: "rpd-row" }, [el("label", { text: "Method", title: TIP.method }), methodSelect, uses]));
+    const help = el("details", { class: "rpd-help" }, [el("summary", { text: "Table help" })]);
+    for (const line of TABLE_HELP) help.append(el("div", { text: line }));
+    host2.append(help);
     const presetSelect = el("select", { id: "rpd-preset", class: "text_pole", title: TIP.preset });
-    for (const p of TABLE_PRESETS) presetSelect.append(el("option", { value: p.id, text: p.label, title: p.description }));
+    for (const p of TABLE_PRESETS) presetSelect.append(el("option", { value: p.id, text: p.label, title: presetHint(p.description) }));
     presetSelect.value = presetChoice;
-    const presetHelp = el("span", { class: "rpd-muted", text: TABLE_PRESETS.find((p) => p.id === presetChoice)?.description ?? "" });
+    const presetHelp = el("span", { class: "rpd-muted", text: presetHint(TABLE_PRESETS.find((p) => p.id === presetChoice)?.description ?? "") });
+    const presetWarnings = el("div", { class: "rpd-muted" });
+    refreshPresetChoices = () => {
+      presetSelect.replaceChildren(...TABLE_PRESETS.map((p) => el("option", { value: p.id, text: p.label })));
+      presetSelect.value = presetChoice;
+      presetWarnings.textContent = localPresetWarnings.length ? "Some local presets could not be loaded." : "";
+    };
     presetSelect.addEventListener("change", () => {
       presetChoice = presetSelect.value;
-      presetHelp.textContent = TABLE_PRESETS.find((p) => p.id === presetChoice)?.description ?? "";
+      presetHelp.textContent = presetHint(TABLE_PRESETS.find((p) => p.id === presetChoice)?.description ?? "");
     });
     const loadPreset = button("rpd-preset-load", "Load preset", TIP.preset, () => {
       const preset = presetById(presetSelect.value);
@@ -8892,17 +9685,18 @@ function buildTableEditor(controller2) {
       const loaded = presetDraft(preset, method);
       draft = cloneTable(loaded.table);
       pendingPresetActorPolicy = preset.actorPolicy ?? null;
-      report = { status: "info", headline: `Loaded the "${preset.label}" preset into the editor. Press Apply table to use it.`, lines: loaded.note ? [loaded.note] : [] };
+      report = { status: "info", headline: `Choose Apply table to use "${preset.label}".`, lines: loaded.note ? [loaded.note] : [] };
       render();
     });
-    host2.append(el("div", { class: "rpd-row" }, [el("label", { text: "Preset", title: TIP.preset }), presetSelect, loadPreset]), el("div", { class: "rpd-row" }, [presetHelp]));
+    refreshPresetChoices();
+    host2.append(el("div", { class: "rpd-row" }, [el("label", { text: "Preset", title: TIP.preset }), presetSelect, loadPreset]), el("div", { class: "rpd-row" }, [presetHelp]), presetWarnings);
     const table = el("table", { class: "rpd-bands" });
     const head = el("tr");
     head.append(
-      el("th", { text: "id", title: TIP.id }),
-      el("th", { text: "from \u2265", title: TIP.from }),
-      el("th", { text: "to <", title: TIP.to }),
-      el("th", { text: "outcome", title: TIP.threshold, class: method === "threshold" ? "" : "rpd-dim" })
+      el("th", { text: "Row", title: TIP.id }),
+      el("th", { text: "From \u2265 (0\u20131)", title: TIP.from }),
+      el("th", { text: "To < (0\u20131)", title: TIP.to }),
+      el("th", { text: "Result", title: TIP.threshold, class: method === "threshold" ? "" : "rpd-dim" })
     );
     draft.outcomes.forEach((o, i) => {
       const nameInput = el("input", { type: "text", class: "text_pole rpd-name", value: o.name, title: TIP.name, maxlength: String(NAME_MAX_LENGTH), spellcheck: "false", "data-col": String(i) });
@@ -8919,7 +9713,7 @@ function buildTableEditor(controller2) {
         draft = renameOutcome(draft, i, clean);
         render();
       });
-      const cell = el("div", { class: "rpd-colhead" }, [el("span", { class: "rpd-prefix", text: "w:", title: TIP.prefix }), nameInput]);
+      const cell = el("div", { class: "rpd-colhead" }, [el("span", { class: "rpd-prefix", text: "Chance (0\u20131)", title: TIP.prefix }), nameInput]);
       if (canRemoveOutcome(draft)) {
         const x = el("span", { class: "rpd-x interactable", text: "\xD7", title: TIP.removeCol, tabindex: "0", role: "button", "aria-label": `Remove outcome ${o.name}` });
         x.addEventListener("click", () => {
@@ -8930,7 +9724,7 @@ function buildTableEditor(controller2) {
       }
       head.append(el("th", { class: method === "sample" ? "" : "rpd-dim" }, [cell]));
     });
-    head.append(el("th", { text: "sum", title: TIP.sum, class: method === "sample" ? "" : "rpd-dim" }));
+    head.append(el("th", { text: "Total (0\u20131)", title: TIP.sum, class: method === "sample" ? "" : "rpd-dim" }));
     const addColCell = el("th");
     if (canAddOutcome(draft)) addColCell.append(button("rpd-col-add", "+ column", TIP.addCol, () => {
       draft = addOutcome(draft);
@@ -8939,7 +9733,7 @@ function buildTableEditor(controller2) {
     head.append(addColCell);
     table.append(head);
     const told = el("tr", { class: "rpd-meta" });
-    told.append(el("td", { colspan: "4", class: "rpd-meta-label", text: "what the writer is told \u2192", title: TIP.instruction }));
+    told.append(el("td", { colspan: "4", class: "rpd-meta-label", text: `Writer instruction (max ${INSTRUCTION_MAX_LENGTH} characters)`, title: TIP.instruction }));
     draft.outcomes.forEach((o, i) => {
       const area = el("textarea", { class: "text_pole rpd-instruction", rows: "5", title: TIP.instruction, maxlength: String(INSTRUCTION_MAX_LENGTH), placeholder: "Write the ruling as an order to the writer.", "data-col": String(i) });
       area.value = o.instruction;
@@ -8953,41 +9747,6 @@ function buildTableEditor(controller2) {
     });
     told.append(el("td"), el("td"));
     table.append(told);
-    const recorded = el("tr", { class: "rpd-meta" });
-    recorded.append(el("td", { colspan: "4", class: "rpd-meta-label", text: "records on accept \u2192", title: TIP.records }));
-    draft.outcomes.forEach((o, i) => {
-      const input = el("input", { type: "text", class: "text_pole rpd-records", value: o.records, placeholder: "nothing", title: TIP.records, maxlength: String(NAME_MAX_LENGTH), spellcheck: "false", "data-col": String(i) });
-      input.addEventListener("input", () => {
-        const clean = sanitizeName(input.value);
-        if (clean !== input.value) input.value = clean;
-      });
-      input.addEventListener("change", () => {
-        input.value = sanitizeName(input.value, true);
-        draft.outcomes[i].records = input.value;
-        render();
-      });
-      recorded.append(el("td", {}, [input]));
-    });
-    recorded.append(el("td"), el("td"));
-    table.append(recorded);
-    const stands = el("tr", { class: "rpd-meta" });
-    stands.append(el("td", { colspan: "4", class: "rpd-meta-label", text: "stands once accepted \u2192", title: TIP.final }));
-    draft.outcomes.forEach((o, i) => {
-      const box = el("input", { type: "checkbox", class: "rpd-final", title: TIP.final, "data-col": String(i) });
-      box.checked = o.final;
-      if (!o.records) {
-        box.disabled = true;
-        box.checked = false;
-        draft.outcomes[i].final = false;
-      }
-      box.addEventListener("change", () => {
-        draft.outcomes[i].final = box.checked;
-        refreshDirty();
-      });
-      stands.append(el("td", { title: TIP.final }, [box]));
-    });
-    stands.append(el("td"), el("td"));
-    table.append(stands);
     draft.bands.forEach((band, r) => {
       const isLast = r === draft.bands.length - 1;
       const from = el("input", { type: "number", value: String(band.lowerInclusive), title: TIP.from, readonly: "readonly", tabindex: "-1", class: "rpd-readonly" });
@@ -9036,7 +9795,7 @@ function buildTableEditor(controller2) {
       row2.append(sumCell);
       const removeCell = el("td");
       if (canRemoveBand(draft)) {
-        const x = el("span", { class: "rpd-x interactable", text: "\xD7", title: TIP.removeRow, tabindex: "0", role: "button", "aria-label": `Remove band ${band.id}` });
+        const x = el("span", { class: "rpd-x interactable", text: "\xD7", title: TIP.removeRow, tabindex: "0", role: "button", "aria-label": `Remove row ${r + 1}` });
         x.addEventListener("click", () => {
           draft = removeBand(draft, r);
           render();
@@ -9061,7 +9820,7 @@ function buildTableEditor(controller2) {
       const v = validateTable(draft);
       if (!v.ok) {
         report = { status: "fail", headline: "Table not applied. Fix these first:", lines: v.errors };
-        controller2.host.toast("error", "Table rejected: " + v.errors[0]);
+        controller2.host.toast("error", "Table needs changes: " + tableReportText(v.errors[0] ?? "Check the rows."));
         showReport(result);
         return;
       }
@@ -9070,21 +9829,21 @@ function buildTableEditor(controller2) {
       overrides[id] = { ...overrides[id] ?? {}, outcomes: cloneTable(draft).outcomes, bands: cloneTable(draft).bands, resolutionMethod: method, ...pendingPresetActorPolicy ? { actorPolicy: pendingPresetActorPolicy } : {} };
       controller2.host.saveSettings();
       controller2.reloadProfile();
-      report = { status: "info", headline: `Applied. Profile revision ${controller2.profile.revision}.`, lines: [] };
-      controller2.host.toast("success", "Policy table applied.");
+      report = { status: "info", headline: "Table applied.", lines: [] };
+      controller2.host.toast("success", "Table applied.");
       reload();
     });
-    const reset = button("rpd-bands-reset", "Reset to profile default", TIP.reset, () => {
+    const reset = button("rpd-bands-reset", "Restore defaults", TIP.reset, () => {
       const keptMethod = controller2.profile.resolutionMethod;
       delete controller2.settings.profileOverrides[controller2.profile.id];
       setResolutionMethod(controller2.settings, controller2.profile.id, keptMethod);
       pendingPresetActorPolicy = null;
       controller2.host.saveSettings();
       controller2.reloadProfile();
-      report = { status: "info", headline: "Reset to the profile's built-in table.", lines: [] };
+      report = { status: "info", headline: "Default table restored.", lines: [] };
       reload();
     });
-    const test = button("rpd-bands-test", "Test table", TIP.test, () => {
+    const test = button("rpd-bands-test", "Test table (1 request)", TIP.test, () => {
       if (testing) return;
       testing = true;
       showReport(result);
@@ -9094,55 +9853,59 @@ function buildTableEditor(controller2) {
         report = { status: "fail", headline: "The test could not run.", lines: [String(e?.message ?? e)] };
       }).finally(() => {
         testing = false;
-        const box = document.getElementById("rpd-table-result");
+        const box = host2.querySelector("#rpd-table-result");
         if (box) showReport(box);
       });
     });
     host2.append(el("div", { class: "rpd-row" }, [apply, reset, test, dirty]), result);
-    if (controller2.profileWarnings.length) host2.append(el("div", { class: "rpd-muted", text: controller2.profileWarnings.join(" | ") }));
-    if (localPresetWarnings.length) host2.append(el("div", { class: "rpd-muted", text: `Local preset warnings: ${localPresetWarnings.join(" | ")}` }));
-    host2.append(el("div", { class: "rpd-muted", text: `Profile revision ${controller2.profile.revision}. Connection for the test: ${controller2.settings.connection.kind}${controller2.settings.connection.model ? " / " + controller2.settings.connection.model : ""}.` }));
+    if (controller2.profileWarnings.length) host2.append(el("div", { class: "rpd-muted", text: controller2.profileWarnings.map(tableReportText).join(" | ") }));
     showReport(result);
     refreshDirty();
   }
   function refreshDirty() {
-    const node = document.getElementById("rpd-table-dirty") ?? host2.querySelector("#rpd-table-dirty");
-    if (node) node.textContent = isDirty() ? 'Unsaved changes. "Test table" uses what you see; play uses the applied table.' : "";
+    const node = host2.querySelector("#rpd-table-dirty");
+    if (node) node.textContent = isDirty() ? "Choose Apply table to save these changes." : "";
   }
   reload();
-  return { element: host2, reload };
+  return { element: host2, reload, isDirty };
+}
+function tableReportText(text2) {
+  return text2.replace(/\bbands\b/gi, "rows").replace(/\bband\b/gi, "row").replace(/\btable_signal\b/g, "Judge score").replace(/\btable_outcome\b/g, "Result name").replace(/\btable_band\b/g, "Row").replace(/\bSignal: (?:Noul|Score) [\d.]+ → x = /g, "Score: ").replace(/with a sample roll of ([\d.]+)/g, (_match, value) => `with a roll of ${Math.round(Number(value) * 100)}/100`).replace(/\bOne judge call\b/g, "1 judge request");
+}
+function presetHint(text2) {
+  return text2.match(/^[\s\S]*?[.!?](?=\s|$)/)?.[0] ?? text2;
 }
 
 // src/manual-ui.ts
 function buildActionPanel(controller2) {
   const template = el("select", { id: "rpd-action-template", class: "text_pole" });
-  for (const t of ACTION_TEMPLATES) template.append(el("option", { value: t.id, text: t.label }));
-  const actor = el("select", { id: "rpd-action-actor", class: "text_pole", title: "Character making the attempt; this is independent of who writes the reply" });
-  const target = el("select", { id: "rpd-action-target", class: "text_pole", multiple: "multiple", size: "3", title: "Optional target actors. Ctrl/Cmd-click to select several." });
-  const attempted = el("input", { id: "rpd-action-attempt", type: "text", class: "text_pole", placeholder: "Concrete method: what the acting character tries" });
-  const gain = el("input", { id: "rpd-action-gain", type: "text", class: "text_pole", placeholder: "Bounded intended result \u2014 no bonus success" });
-  const applicability = el("select", { id: "rpd-action-applicability", class: "text_pole", title: "Used by the Player-favorable-only actor policy" });
-  for (const [v, label] of [["favorable", "Good for my character: judge it"], ["not_favorable", "Not a gain: skip the judge"], ["unresolved", "Not sure: pause and ask me"]]) applicability.append(el("option", { value: v, text: label }));
+  const refreshFamilies = () => {
+    const previous = template.value;
+    const families = controller2.chatPack().families;
+    template.replaceChildren(...families.map((family) => el("option", { value: family.key, text: family.label })));
+    template.value = families.some((family) => family.key === previous) ? previous : families[0]?.key ?? "";
+  };
+  refreshFamilies();
+  const actor = el("select", { id: "rpd-action-actor", class: "text_pole", title: "Choose the character making this move." });
+  const target = el("select", { id: "rpd-action-target", class: "text_pole", multiple: "multiple", size: "3", title: "Hold Ctrl or Cmd to select several targets." });
+  const attempted = el("input", { id: "rpd-action-attempt", type: "text", class: "text_pole", placeholder: "What the character tries" });
+  const gain = el("input", { id: "rpd-action-gain", type: "text", class: "text_pole", placeholder: "The exact result they want" });
+  const applicability = el("select", { id: "rpd-action-applicability", class: "text_pole", title: `Choose whether this move benefits ${PLAYER_LABEL}.` });
+  for (const [v, label] of [["favorable", `Benefits ${PLAYER_LABEL}`], ["not_favorable", `No benefit for ${PLAYER_LABEL}`], ["unresolved", "Not sure"]]) applicability.append(el("option", { value: v, text: label }));
   const uncertain = el("input", { id: "rpd-action-uncertain", type: "checkbox" });
   uncertain.checked = true;
   const opposed = el("input", { id: "rpd-action-opposed", type: "checkbox" });
-  const scope = el("select", { id: "rpd-action-scope", class: "text_pole", title: "How long an accepted final ruling may settle the same fact" });
-  for (const [v, label] of [["attempt", "This attempt only"], ["scene", "This scene"], ["persistent", "Persistent fact"]]) scope.append(el("option", { value: v, text: label }));
-  const factKey = el("input", { id: "rpd-action-fact-key", type: "text", class: "text_pole", placeholder: "Optional persistent fact name" });
-  const stake = el("select", { id: "rpd-action-stake", class: "text_pole", title: "Boundary on what failure may cost in prose" });
+  const stake = el("select", { id: "rpd-action-stake", class: "text_pole", title: "Choose what failure may cost." });
   for (const [v, label] of [["delay", "Delay"], ["exposure", "Exposure"], ["injury", "Injury"], ["lost_position", "Lost position"], ["resource_cost", "Resource cost"], ["relationship_friction", "Relationship friction"], ["closed_opportunity", "Closed opportunity"], ["other", "Other"]]) stake.append(el("option", { value: v, text: label }));
-  const stakeDetail = el("input", { id: "rpd-action-stake-detail", type: "text", class: "text_pole", placeholder: "Failure boundary, e.g. \u201Cguard notices the forged seal\u201D" });
-  const evidence = el("input", { id: "rpd-action-evidence", type: "text", class: "text_pole", placeholder: "Relevant evidence; for detection, observer-visible cues only" });
+  const stakeDetail = el("input", { id: "rpd-action-stake-detail", type: "text", class: "text_pole", placeholder: "For example, the guard notices the forged seal" });
+  const evidence = el("input", { id: "rpd-action-evidence", type: "text", class: "text_pole", placeholder: "Relevant facts or visible clues" });
   const armed = el("input", { id: "rpd-action-armed", type: "checkbox" });
-  const armedLabel = el("label", { class: "rpd-arm" }, [armed, " Use once on the next Director turn"]);
+  const armedLabel = el("label", { class: "rpd-arm" }, [armed, " Use on the next Director send"]);
   const refreshTemplateHints = () => {
-    const t = ACTION_TEMPLATES.find((x) => x.id === template.value);
-    if (t) {
-      attempted.placeholder = t.attemptPrompt;
-      gain.placeholder = t.gainPrompt;
-    }
-    evidence.placeholder = template.value === "detect_discover" ? "Required: only cues this observer can actually perceive" : "Optional concise established evidence or conditions";
-    factKey.style.display = scope.value === "persistent" ? "" : "none";
+    const family = controller2.chatPack().families.find((item) => item.key === template.value);
+    attempted.placeholder = family?.kind === "discovery" ? "What the character tries to learn" : "What the character tries";
+    gain.placeholder = "The exact result they want";
+    evidence.placeholder = family?.kind === "discovery" ? "Required: only clues this character can perceive" : "Optional facts or conditions already shown";
   };
   const sync = () => {
     if (!armed.checked || !gain.value.trim() || !attempted.value.trim()) {
@@ -9158,35 +9921,31 @@ function buildActionPanel(controller2) {
       applicability: applicability.value,
       uncertainConsequential: uncertain.checked,
       opposed: opposed.checked,
-      resolutionScope: scope.value,
-      persistentFactKey: factKey.value,
       failureStakeKind: stake.value,
       failureStakeDetail: stakeDetail.value,
       availableEvidence: evidence.value
     };
     controller2.setActionDraft(draft);
   };
-  for (const node of [template, actor, target, attempted, gain, applicability, uncertain, opposed, scope, factKey, stake, stakeDetail, evidence, armed]) node.addEventListener("change", () => {
+  for (const node of [template, actor, target, attempted, gain, applicability, uncertain, opposed, stake, stakeDetail, evidence, armed]) node.addEventListener("change", () => {
     refreshTemplateHints();
     sync();
   });
-  for (const node of [attempted, gain, factKey, stakeDetail, evidence]) node.addEventListener("input", sync);
+  for (const node of [attempted, gain, stakeDetail, evidence]) node.addEventListener("input", sync);
   const panel = el("div", { id: "rpd-action-panel", class: "rpd-manual-attempt" }, [
-    field("Family", template),
-    field("Acting character", actor),
+    field("Kind", template),
+    field("Character", actor),
     field("Targets", target),
-    field("Method", attempted),
-    field("Bounded result", gain),
-    field("Player favor", applicability),
-    el("label", { class: "rpd-check" }, [uncertain, " Uncertain + consequential"]),
-    el("label", { class: "rpd-check" }, [opposed, " Actively opposed"]),
-    field("Resolution scope", scope),
-    factKey,
-    field("Failure stake", stake),
+    field("Move", attempted),
+    field("Intended result", gain),
+    field(`Benefit for ${PLAYER_LABEL}`, applicability),
+    el("label", { class: "rpd-check" }, [uncertain, " Uncertain result with consequences"]),
+    el("label", { class: "rpd-check" }, [opposed, " Opposed"]),
+    field("Risk", stake),
     stakeDetail,
-    field("Evidence / visible cues", evidence),
+    field("Evidence", evidence),
     armedLabel,
-    button("rpd-action-clear", "Clear", "Clear the declared action", () => {
+    button("rpd-action-clear", "Clear", "Clear this move.", () => {
       attempted.value = "";
       gain.value = "";
       armed.checked = false;
@@ -9194,16 +9953,23 @@ function buildActionPanel(controller2) {
     })
   ]);
   panel.addEventListener("rpd-refresh", () => {
+    const previousFamily = template.value;
+    refreshFamilies();
+    if (template.value !== previousFamily) {
+      armed.checked = false;
+      controller2.setActionDraft(null);
+    }
     const actors = controller2.actionActorsForUi();
     const previousActor = actor.value || "player";
     const previousTargets = new Set(Array.from(target.selectedOptions).map((o) => o.value));
     actor.replaceChildren();
     target.replaceChildren();
     for (const a of actors) {
-      const actorOption = el("option", { value: a.actorId, text: a.name + (a.disabled ? " (muted)" : "") });
+      const name = uiActorName(a.actorId, a.name) + (a.disabled ? " (muted)" : "");
+      const actorOption = el("option", { value: a.actorId, text: name });
       actorOption.disabled = a.disabled;
       actor.append(actorOption);
-      const option = el("option", { value: a.actorId, text: a.name + (a.disabled ? " (muted)" : "") });
+      const option = el("option", { value: a.actorId, text: name });
       option.disabled = a.disabled;
       option.selected = previousTargets.has(a.actorId);
       target.append(option);
@@ -9228,9 +9994,9 @@ var MODE_LABELS = {
 };
 var MODE_TIPS = {
   off: "The Director ignores this book.",
-  judge: "Rulings may read the entries the Director picks. The writer keeps SillyTavern's keyword activation only.",
-  assist: "As Rulings only, and the picked entries are also activated for the writer, beside the keyword matches.",
-  managed: "Keyword activation of this book is switched off; the writer gets exactly the entries the Director picks (constant entries stay on)."
+  judge: "The judge reads the picks, while the writer keeps the usual keyword matches.",
+  assist: "The judge and writer both read the picks alongside keyword matches.",
+  managed: "The writer reads the picks and always-on entries instead of keyword matches."
 };
 function modeSelect(value, onChange, id) {
   const select = el("select", { id, class: "text_pole", title: MODE_TIPS[value] });
@@ -9249,6 +10015,12 @@ function buildLorePanel(controller2) {
     controller2.host.saveSettings();
     void refreshLorePanel(controller2, true);
   }, "rpd-lore-default");
+  const nearEnd = el("input", { id: "rpd-lore-near-end", type: "checkbox" });
+  nearEnd.checked = lore.placeNearEnd;
+  nearEnd.addEventListener("change", () => {
+    controller2.settings.lore.placeNearEnd = nearEnd.checked;
+    controller2.host.saveSettings();
+  });
   const number = (id, current, min, max, step, tip, save) => {
     const input = el("input", { id, type: "number", class: "text_pole", min: String(min), max: String(max), step, value: String(current()), title: tip, style: "width: 5em;" });
     input.addEventListener("change", () => {
@@ -9262,60 +10034,67 @@ function buildLorePanel(controller2) {
     });
     return input;
   };
-  const maxEntries = number("rpd-lore-max", () => controller2.settings.lore.maxEntries, 1, 20, "1", "Most entries picked per turn, across all books.", (n) => {
+  const maxEntries = number("rpd-lore-max", () => controller2.settings.lore.maxEntries, 1, 20, "1", "Limit the entries picked across all books.", (n) => {
     controller2.settings.lore.maxEntries = Math.round(n);
   });
-  const width = number("rpd-lore-width", () => controller2.settings.lore.width, 1, 6, "1", "Most sections kept at each level of a book.", (n) => {
+  const width = number("rpd-lore-width", () => controller2.settings.lore.width, 1, 6, "1", "Limit the sections searched at each level of a book.", (n) => {
     controller2.settings.lore.width = Math.round(n);
   });
-  const judgeChars = number("rpd-lore-judge-chars", () => controller2.settings.lore.judgeChars, 1e3, 4e4, "500", "Characters of lore a ruling may read.", (n) => {
+  const judgeChars = number("rpd-lore-judge-chars", () => controller2.settings.lore.judgeChars, 1e3, 4e4, "500", "Limit how much lore the judge reads.", (n) => {
     controller2.settings.lore.judgeChars = Math.round(n);
   });
   return el("div", { id: "rpd-lore" }, [
-    el("div", { class: "rpd-note", text: "Each turn the judge walks the lorebooks of the chat's cast (using TunnelVision's index where you built one) and picks the entries the scene depends on. Rulings read the picks; depending on the mode, the writer gets them too. Swipes and continues reuse the turn's picks. Discovery rulings (search, read someone) only ever see books marked public." }),
-    el("div", { class: "rpd-row" }, [el("label", { text: "Other books", title: "Mode for books without their own setting" }), defaultMode]),
+    el("div", { class: "rpd-note", text: "Choose which books the judge and writer may read." }),
+    el("div", { class: "rpd-note", text: "Moves that uncover information read only books marked Public." }),
+    el("div", { class: "rpd-row" }, [el("label", { text: "Other books", title: "Choose the mode for books without their own setting." }), defaultMode]),
+    el("label", { class: "rpd-inline", title: "Keep new picks near the reply so earlier prompt text stays unchanged." }, [nearEnd, " Place picks near the end"]),
     el("div", { class: "rpd-row" }, [
-      el("label", { class: "rpd-inline" }, ["Entries per turn ", maxEntries]),
-      el("label", { class: "rpd-inline" }, ["Width ", width]),
-      el("label", { class: "rpd-inline" }, ["Ruling characters ", judgeChars])
+      el("label", { class: "rpd-inline" }, ["Picks (entries/turn) ", maxEntries]),
+      el("label", { class: "rpd-inline" }, ["Search (sections/level) ", width]),
+      el("label", { class: "rpd-inline" }, ["Judge limit (characters) ", judgeChars])
     ]),
     el("div", { id: "rpd-lore-books" }, [el("div", { class: "rpd-muted", text: "Open a chat to list its lorebooks." })]),
     el("div", { id: "rpd-lore-status", class: "rpd-note" })
   ]);
 }
-var loreSignature = "";
-var loreSeq = 0;
+var loreRefreshes = /* @__PURE__ */ new WeakMap();
 async function refreshLorePanel(controller2, force = false) {
   const host2 = document.getElementById("rpd-lore-books");
   if (!host2) return;
   const status = document.getElementById("rpd-lore-status");
   if (status) {
-    status.textContent = !controller2.loreHooked ? "This SillyTavern version lacks the World Info hooks, so picks reach rulings only." : !controller2.settings.modules.lore ? "Lore selection is off (Modules)." : "";
+    status.textContent = !controller2.loreHooked ? "This SillyTavern version can share picks with the judge only." : !controller2.settings.modules.lore ? "Turn on Lore in Settings to select entries." : "";
   }
   const activation = controller2.loreActivationForUi();
   const signature = JSON.stringify([controller2.host.chatKey(), controller2.settings.lore, controller2.actorsForUi().map((a) => a.actorId), activation?.at ?? null]);
-  if (!force && signature === loreSignature) return;
-  loreSignature = signature;
-  const seq = ++loreSeq;
+  const refresh = loreRefreshes.get(host2) ?? { signature: "", sequence: 0 };
+  loreRefreshes.set(host2, refresh);
+  if (!force && signature === refresh.signature) return;
+  refresh.signature = signature;
+  const seq = ++refresh.sequence;
+  const isCurrent = () => seq === refresh.sequence && document.getElementById("rpd-lore-books") === host2;
   let books;
   try {
     books = await controller2.loreBooksForUi();
   } catch (error) {
-    if (seq === loreSeq) host2.replaceChildren(el("div", { class: "rpd-muted", text: `Could not list lorebooks: ${error.message}` }));
+    if (isCurrent()) {
+      refresh.signature = "";
+      host2.replaceChildren(el("div", { class: "rpd-muted", text: "Could not list lorebooks; reopen this tab to try again." }));
+    }
     return;
   }
-  if (seq !== loreSeq) return;
+  if (!isCurrent()) return;
   if (!books.length) {
     host2.replaceChildren(el("div", { class: "rpd-muted", text: "This chat has no lorebooks." }));
     return;
   }
   host2.replaceChildren(...books.map((book, index) => {
     const mode = modeSelect(book.mode, (value) => controller2.setLoreBook(book.world, { mode: value }), `rpd-lore-mode-${index}`);
-    const pub = el("input", { id: `rpd-lore-public-${index}`, type: "checkbox", title: "Public: discovery rulings may read this book. Leave off for books that hold secrets, private thoughts or authorial truth." });
+    const pub = el("input", { id: `rpd-lore-public-${index}`, type: "checkbox", title: "Allow moves that uncover information to read this book only if it contains no private information." });
     pub.checked = book.public;
     pub.addEventListener("change", () => controller2.setLoreBook(book.world, { public: pub.checked }));
-    const facts = [book.source, `${book.selectable} of ${book.entries} entries pickable`, book.index === "tunnelvision" ? "TunnelVision index" : "no index (entries listed directly)"];
-    if (book.tunnelVisionManages) facts.push("TunnelVision is managing it, so rulings only");
+    const facts = [book.source, `${book.selectable} of ${book.entries} entries available`, book.index === "tunnelvision" ? "TunnelVision index" : "Entry list"];
+    if (book.tunnelVisionManages) facts.push("TunnelVision controls writer picks");
     const last = activation?.books[book.world];
     const cost = last ? `Last reply: ${last.entries} entr${last.entries === 1 ? "y" : "ies"} in the prompt, about ${Math.round(last.chars / 4).toLocaleString()} tokens${last.picked ? ` (${last.picked} picked by the Director)` : ""}.` : "";
     return el("div", { class: "rpd-lore-book" }, [
@@ -9326,180 +10105,130 @@ async function refreshLorePanel(controller2, force = false) {
   }));
 }
 
-// src/ui.ts
-function mountUi(controller2) {
-  const bar = buildBar(controller2);
-  const sendForm = document.getElementById("send_form");
-  if (sendForm?.parentElement) sendForm.parentElement.insertBefore(bar, sendForm);
-  else document.body.append(bar);
-  const drawer = buildSettings(controller2);
-  const target = document.getElementById("extensions_settings2") ?? document.getElementById("extensions_settings");
-  if (target) target.append(drawer);
-  controller2.onChange(() => {
-    refreshBar(controller2);
-    refreshInspector(controller2);
-    refreshStory(controller2);
-    void refreshLorePanel(controller2);
+// src/ui-panels.ts
+function buildPacingSettings(controller2) {
+  const handBack = el("input", { id: "rpd-hand-back-beats", type: "checkbox" });
+  handBack.checked = controller2.settings.handBackBeats !== false;
+  handBack.disabled = !controller2.settings.modules.pacing;
+  handBack.addEventListener("change", () => {
+    controller2.settings.handBackBeats = handBack.checked;
+    controller2.host.saveSettings();
   });
-  refreshBar(controller2);
-  refreshInspector(controller2);
-  refreshStory(controller2);
-  void refreshLorePanel(controller2);
-}
-var overflowOpen = false;
-function buildBar(controller2) {
-  const status = el("span", { id: "rpd-status", class: "rpd-status", "data-state": "Off", text: "Off" });
-  const overflow = buildOverflow(controller2);
-  const more = button("rpd-more", "\u22EF", "Manual override and recovery controls", () => {
-    overflowOpen = !overflowOpen;
-    overflow.classList.toggle("rpd-hidden", !overflowOpen);
-  });
-  return el("div", { id: "rpd-bar" }, [
-    el("div", { class: "rpd-main" }, [el("b", { text: "Director" }), status, more]),
-    overflow
+  const body = el("div", {}, [
+    el("label", {}, [handBack, " Hand the turn back at beats"]),
+    el("p", { class: "rpd-muted", text: "Stop when {{user}} must respond; show a cue when Dynamic Response is enabled." })
   ]);
-}
-function buildOverflow(controller2) {
-  const speaker = el("select", { id: "rpd-speaker", class: "text_pole", title: "Optional one-turn reply-speaker override" });
-  speaker.addEventListener("change", () => controller2.setSpeakerOverride(speaker.value === "auto" ? null : speaker.value));
-  return el("div", { id: "rpd-overflow", class: "rpd-hidden" }, [
-    el("label", { class: "rpd-inline" }, [el("span", { class: "rpd-muted", text: "Speaker override" }), speaker]),
-    button("rpd-commit", "Commit reply", "Explicitly commit the selected observed reply now; continuing normally commits it automatically", () => void controller2.commitReply()),
-    button("rpd-new-scene", "New scene & continue", "Commit the selected reply, start a new scene identity, and immediately continue through Director", () => void controller2.startNewScene()),
-    button("rpd-baseline", "Repair selected branch", "Repair the selected swipe at its predecessor, then retry observation; imported transcripts fall back to a head baseline", () => void controller2.repairSelectedBranch()),
-    button("rpd-clear-error", "Clear pause", "Clear the current paused/error display after fixing its cause", () => controller2.clearError())
-  ]);
-}
-function refreshBar(controller2) {
-  const bar = document.getElementById("rpd-bar");
-  const status = document.getElementById("rpd-status");
-  if (!bar || !status) return;
-  bar.classList.toggle("rpd-hidden", !controller2.settings.showBar);
-  const provisional = controller2.provisional();
-  let label = controller2.status;
-  if (controller2.status === "Provisional") label = provisional?.outcome ? `Ready: ${provisional.outcome}` : "Ready to continue";
-  if (controller2.status === "Stale") label = "Needs repair";
-  status.textContent = label;
-  status.dataset.state = controller2.status;
-  const tool = controller2.host.writerToolCapability("normal");
-  status.title = controller2.lastError ?? controller2.record?.projection.reason ?? `Native Send and generated swipes route through Director automatically. Scene ${controller2.record?.projection.state.sceneId ?? "\u2014"}. NPC action tool: ${tool.supported ? "available" : tool.reason ?? "unavailable"}.`;
-  const speaker = document.getElementById("rpd-speaker");
-  if (speaker) {
-    const previous = controller2.speakerOverride ?? "auto";
-    speaker.replaceChildren(el("option", { value: "auto", text: "Automatic" }), el("option", { value: "YIELD", text: "Yield to {{user}}" }));
-    for (const actor of controller2.actorsForUi()) {
-      const option = el("option", { value: actor.actorId, text: actor.name + (actor.disabled ? " (muted)" : "") });
-      option.disabled = actor.disabled;
-      speaker.append(option);
-    }
-    speaker.value = Array.from(speaker.options).some((option) => option.value === previous) ? previous : "auto";
+  for (const key of Object.keys(DEFAULT_PACING_TEXTS)) {
+    const text2 = el("textarea", { id: `rpd-pacing-${key}`, class: "text_pole", rows: "3", "aria-label": key });
+    text2.value = controller2.settings.pacingTexts[key];
+    text2.addEventListener("change", () => {
+      controller2.settings.pacingTexts[key] = text2.value;
+      controller2.host.saveSettings();
+    });
+    body.append(el("label", { class: "rpd-field" }, [key[0].toUpperCase() + key.slice(1), text2]));
   }
-  show("rpd-commit", controller2.status === "Provisional");
-  show("rpd-baseline", controller2.canRepairSelected());
-  show("rpd-clear-error", controller2.status === "Error" || controller2.status === "Paused");
-  document.getElementById("rpd-action-panel")?.dispatchEvent(new Event("rpd-refresh"));
+  return body;
 }
-function show(id, visible) {
-  const node = document.getElementById(id);
-  if (node) node.style.display = visible ? "" : "none";
-}
-function buildSettings(controller2) {
-  const settings = controller2.settings;
-  const content = el("div", { class: "inline-drawer-content" });
-  const enabled = el("input", { type: "checkbox" });
-  enabled.checked = settings.enabled;
-  enabled.addEventListener("change", () => controller2.setEnabled(enabled.checked));
-  const showBar = el("input", { type: "checkbox" });
-  showBar.checked = settings.showBar;
-  showBar.addEventListener("change", () => {
-    controller2.settings.showBar = showBar.checked;
-    controller2.host.saveSettings();
-    controller2.refreshStatus();
-  });
-  content.append(
-    el("div", { class: "rpd-row" }, [el("label", {}, [enabled, " Enabled"]), el("label", {}, [showBar, " Show play strip"])]),
-    el("div", { class: "rpd-note", text: "Normal use: type your message and use SillyTavern\u2019s native Send or Enter. New generated swipes are also routed through Director; a choice appears before generation only when reuse, reroll, or explicit bypass are materially different." }),
-    collapsible("Connections", "Decision model and optional observer profile.", buildConnection(controller2)),
-    collapsible("Modules", "Pipeline and which Director suites run.", buildModuleSettings(controller2))
-  );
-  const tableEditor = buildTableEditor(controller2);
-  content.append(collapsible("Outcome table", "All policy rows, outcomes, presets, and test controls.", tableEditor.element));
-  content.append(collapsible("This chat", "Genre pack, judged character state, secrets and lore picks for the open chat.", buildStoryPanel(controller2)));
-  content.append(collapsible("Lore selection", "Which lorebooks the Director reads and how its picks reach the writer.", buildLorePanel(controller2)));
-  content.append(collapsible("NPC reactions", "Relative weights for reactions when no action is ruled.", buildReactionSettings(controller2)));
-  content.append(collapsible("Manual attempt override", "Optional: declare one specific attempt instead of automatic detection.", buildActionPanel(controller2)));
-  const inspector = el("div", { id: "rpd-inspector" });
-  const exportInspector = button("rpd-inspector-export", "Copy inspector JSON", "Copy recorded inputs and decisions; credentials are never stored", () => {
-    void navigator.clipboard?.writeText(JSON.stringify(controller2.record?.inspector ?? [], null, 2)).catch(() => void 0);
-  });
-  const exportState = button("rpd-state-export", "Copy chat record JSON", "Copy the complete automatic Director record", () => {
-    void navigator.clipboard?.writeText(JSON.stringify(controller2.record ?? null, null, 2)).catch(() => void 0);
-  });
-  const resetConfirm = button("rpd-reset-confirm", "Reset binding confirmation", "Ask again before the next binding decision", () => {
-    controller2.settings.bindingConfirmedAt = null;
-    controller2.host.saveSettings();
-    controller2.host.toast("info", "Binding confirmation reset.");
-  });
-  const advanced = el("div", {}, [el("div", { class: "rpd-row" }, [exportInspector, exportState, resetConfirm]), inspector]);
-  content.append(collapsible("Inspector & recovery", "Recorded questions, answers, rulings, and export controls.", advanced));
-  return el("div", { id: "rpd-settings", class: "extension_settings" }, [
-    el("div", { class: "inline-drawer" }, [
-      el("div", { class: "inline-drawer-toggle inline-drawer-header" }, [el("b", { text: "RP Director" }), el("div", { class: "inline-drawer-icon fa-solid fa-circle-chevron-down down" })]),
-      content
-    ])
-  ]);
+function buildReplyCheckSettings(controller2) {
+  const body = el("div", {}, [el("p", { class: "rpd-muted", text: "Check each reply and automatically rewrite at most once per user turn." })]);
+  for (const field2 of REPLY_CHECK_FIELDS) {
+    const input = el("input", { id: `rpd-check-${field2.key}`, type: "number", class: "text_pole", min: "0", max: String(field2.max), step: "0.05", value: String(controller2.settings.replyCheckThresholds[field2.key]) });
+    input.addEventListener("change", () => {
+      const value = input.value.trim() ? Number(input.value) : NaN;
+      if (!Number.isFinite(value) || value < 0 || value > field2.max) {
+        input.value = String(controller2.settings.replyCheckThresholds[field2.key]);
+        return;
+      }
+      controller2.settings.replyCheckThresholds[field2.key] = value;
+      controller2.host.saveSettings();
+    });
+    body.append(row(field2.label, input));
+  }
+  body.append(el("p", { class: "rpd-muted", text: "These thresholds trigger an automatic rewrite or a nudge on the next turn." }));
+  return body;
 }
 function buildModuleSettings(controller2) {
-  const pipelineTip = "Legacy: one judge batch per turn. Staged: select the exact passage of your message that is the move, route it (who acts, on whom, what kind), then rule on that passage with the evidence its kind allows.";
-  const pipeline = el("select", { id: "rpd-pipeline", class: "text_pole", title: pipelineTip });
-  for (const [value, label] of [["legacy", "Legacy (one batch)"], ["staged", "Staged (move, routing, ruling)"]]) pipeline.append(el("option", { value, text: label }));
-  pipeline.value = controller2.settings.pipeline;
-  pipeline.addEventListener("change", () => {
-    controller2.settings.pipeline = pipeline.value === "staged" ? "staged" : "legacy";
+  const askWhenSwiping = el("input", { id: "rpd-ask-swiping", type: "checkbox" });
+  askWhenSwiping.checked = controller2.settings.askWhenSwiping;
+  askWhenSwiping.addEventListener("change", () => {
+    controller2.settings.askWhenSwiping = askWhenSwiping.checked;
     controller2.host.saveSettings();
-    controller2.host.toast("success", `Pipeline: ${controller2.settings.pipeline}.`);
   });
-  const toggle = (id, label, key, tip) => {
+  const reviewNpc = el("input", { id: "rpd-review-npc", type: "checkbox" });
+  reviewNpc.checked = controller2.settings.reviewNpcRolls;
+  reviewNpc.addEventListener("change", () => {
+    controller2.settings.reviewNpcRolls = reviewNpc.checked;
+    controller2.host.saveSettings();
+  });
+  const wait = el("input", { id: "rpd-wait-seconds", type: "number", min: "2", max: "120", step: "1", class: "text_pole", value: String(controller2.settings.waitForJudgeSeconds) });
+  wait.addEventListener("change", () => {
+    const value = Number(wait.value);
+    if (!Number.isFinite(value)) {
+      wait.value = String(controller2.settings.waitForJudgeSeconds);
+      return;
+    }
+    controller2.settings.waitForJudgeSeconds = Math.max(2, Math.min(value, 120));
+    wait.value = String(controller2.settings.waitForJudgeSeconds);
+    controller2.host.saveSettings();
+  });
+  const toggle = (id, label, key, tip, requests) => {
     const input = el("input", { id, type: "checkbox", title: tip });
-    input.checked = controller2.settings.modules[key];
+    input.checked = Boolean(controller2.settings.modules[key]);
     input.addEventListener("change", () => {
       controller2.settings.modules[key] = input.checked;
       controller2.host.saveSettings();
+      if (key === "pacing") {
+        const handBack = document.getElementById("rpd-hand-back-beats");
+        if (handBack) handBack.disabled = !input.checked;
+      }
     });
-    return el("label", { title: tip }, [input, ` ${label}`]);
+    return el("div", { class: "rpd-module" }, [el("label", {}, [input, ` ${label}`]), el("span", { class: "rpd-muted", text: requests }), el("p", { text: tip })]);
   };
   return el("div", { id: "rpd-modules" }, [
-    el("div", { class: "rpd-row" }, [el("label", { text: "Pipeline", title: pipelineTip }), pipeline]),
-    el("div", { class: "rpd-note", text: `Staged rules on your own words and tells apart your attempt, an order to a character, and a hand-off ("go ahead, make me"). A hand-off gets that character's reaction, not a failed check. Legacy stays available.` }),
-    el("div", { class: "rpd-row" }, [
-      toggle("rpd-module-speaker", "Speaker", "speaker", "Choose who replies in group chats. Off: SillyTavern picks."),
-      toggle("rpd-module-decisions", "Decisions", "decisions", "Rule on attempts, freeze outcomes, and offer the NPC-action tool."),
-      toggle("rpd-module-meters", "Meters", "meters", "The judge places each character on the pack scales (regard, loyalty, suspicion) every turn, at most one step at a time. The writer plays them at those levels. Staged only."),
-      toggle("rpd-module-secrets", "Secrets", "secrets", "Tell the writer who knows each secret of this chat, and let the judge record when one is revealed. Staged only."),
-      toggle("rpd-module-lore", "Lore", "lore", "The judge picks the lorebook entries each turn depends on; rulings read them and, per book, the writer gets them too. Staged only.")
+    el("div", {}, [el("label", {}, [askWhenSwiping, " Ask when swiping a ruled reply"])]),
+    el("div", {}, [el("label", {}, [reviewNpc, " Review NPC rolls before the writer continues"])]),
+    row("Wait for the judge (s)", wait),
+    el("div", { class: "rpd-note", text: "When this time runs out, your reply continues with any decisions already completed." }),
+    el("div", {}, [
+      toggle("rpd-module-speaker", "Speaker", "speaker", "Choose who replies in group chats.", "about 1 request per turn, shared"),
+      toggle("rpd-module-decisions", "Decisions", "decisions", "Decide what happens when a character tries a consequential move.", "about 3 requests per turn, plus 1 per NPC request"),
+      toggle("rpd-module-meters", "Meters", "meters", "Set character feelings at most one step per turn.", "about 1 request per turn, shared"),
+      toggle("rpd-module-secrets", "Secrets", "secrets", "Track which characters learn a secret.", "about 1 request per turn, shared"),
+      toggle("rpd-module-lore", "Lore", "lore", "Pick relevant entries from this chat\u2019s lorebooks.", "about 1 request per book level per turn"),
+      toggle("rpd-module-pacing", "Pacing", "pacing", "Keep each reply in the current scene without skipping time.", "about 1 request per turn, shared"),
+      toggle("rpd-module-reply-check", "Reply check", "replyCheck", "Check for writing for {{user}}, ignored input, repetition and broken rulings.", "1 request per reply")
     ]),
-    el("div", { class: "rpd-note", text: "NPC reactions have their own switch below. With every module off, Director stands aside and makes no requests." })
+    el("div", { class: "rpd-note", text: "Shared requests cover several modules; large casts or books can need more requests." })
   ]);
 }
 function buildStoryPanel(controller2) {
-  const packTip = "The genre pack decides what counts as a move, the kinds of move, and the meters. Auto lets the judge pick once for this chat.";
+  const packTip = "The pack sets the kinds of moves and meters for this chat.";
   const pack = el("select", { id: "rpd-pack", class: "text_pole", title: packTip });
   pack.addEventListener("change", () => void controller2.setChatPack(pack.value));
   const packNote = el("div", { id: "rpd-pack-note", class: "rpd-note" });
   const meters = el("div", { id: "rpd-meters" });
   const secrets = el("div", { id: "rpd-secrets-list" });
-  const text2 = el("textarea", { id: "rpd-secret-text", class: "text_pole", rows: "2", placeholder: "A secret, for example: The captain has been skimming the treasury.", title: "What the secret is. The writer is told who knows it; characters who do not know it will not act on it." });
+  const text2 = el("textarea", { id: "rpd-secret-text", class: "text_pole", rows: "2", placeholder: "A secret, for example: The guide has a spare key.", title: "Only the selected characters know this secret." });
   const holders = el("div", { id: "rpd-secret-holders", class: "rpd-row" });
   const add = button("rpd-secret-add", "Add secret", "Add this secret, known from the start by the characters ticked above", () => {
+    if (!controller2.record || !text2.value.trim() || add.disabled) return;
+    const draft = text2.value;
+    const key = controller2.host.chatKey();
+    add.disabled = true;
     const chosen = [...holders.querySelectorAll("input[type=checkbox]:checked")].map((box) => box.value);
-    void controller2.addSecret(text2.value, chosen).then(() => {
-      text2.value = "";
+    void controller2.addSecret(draft, chosen).then(() => {
+      if (controller2.host.chatKey() === key && text2.value === draft) text2.value = "";
+    }).finally(() => {
+      add.disabled = false;
     });
   });
+  const speaker = el("select", { id: "rpd-speaker", class: "text_pole" });
+  speaker.addEventListener("change", () => controller2.setSpeakerOverride(speaker.value === "auto" ? null : speaker.value));
   return el("div", { id: "rpd-story" }, [
+    row("Next speaker", speaker),
     el("div", { class: "rpd-row" }, [el("label", { text: "Genre pack", title: packTip }), pack]),
     packNote,
-    el("div", { class: "rpd-subhead", text: "Character state (judged from play)" }),
+    el("div", { class: "rpd-subhead", text: "Meters" }),
     meters,
     el("div", { class: "rpd-subhead", text: "Lore picked for the latest turn" }),
     el("div", { id: "rpd-lore-last" }),
@@ -9511,34 +10240,50 @@ function buildStoryPanel(controller2) {
     el("div", { class: "rpd-row" }, [add])
   ]);
 }
-var storySignature = "";
+var storySignatures = /* @__PURE__ */ new WeakMap();
 function refreshStory(controller2) {
   const pack = document.getElementById("rpd-pack");
   if (!pack) return;
+  const speaker = document.getElementById("rpd-speaker");
+  if (speaker) {
+    speaker.replaceChildren(
+      el("option", { value: "auto", text: "Automatic" }),
+      el("option", { value: "YIELD", text: "Yield to {{user}}" }),
+      ...controller2.actorsForUi().map((actor) => {
+        const option = el("option", { value: actor.actorId, text: uiActorName(actor.actorId, actor.name) + (actor.disabled ? " (muted)" : "") });
+        option.disabled = actor.disabled;
+        return option;
+      })
+    );
+    speaker.value = controller2.speakerOverride ?? "auto";
+    speaker.disabled = !controller2.record;
+  }
+  const text2 = document.getElementById("rpd-secret-text");
+  if (text2) text2.disabled = !controller2.record;
   const info = controller2.chatPackInfo();
   const packs = controller2.packsForUi();
   const state = controller2.characterStateForUi();
   const secrets = controller2.secretsForUi();
   const actors = controller2.actionActorsForUi();
   const lastLore = controller2.lastLoreForUi();
-  const signature = JSON.stringify([info, packs.map((p) => p.id), state, secrets, actors, lastLore]);
-  if (signature === storySignature) return;
-  storySignature = signature;
-  pack.replaceChildren(el("option", { value: "auto", text: "Auto (the judge picks once)" }), ...packs.map((p) => el("option", { value: p.id, text: p.label })));
+  const signature = JSON.stringify([controller2.host.chatKey(), info, packs.map((p) => p.id), state, secrets, actors, lastLore]);
+  if (signature === storySignatures.get(pack)) return;
+  storySignatures.set(pack, signature);
+  pack.replaceChildren(el("option", { value: "auto", text: "Automatic" }), ...packs.map((p) => el("option", { value: p.id, text: p.label })));
   pack.disabled = !info;
   pack.value = info?.packId ?? "auto";
   const note = document.getElementById("rpd-pack-note");
   if (note) {
     const chosen = packs.find((p) => p.id === info?.packId);
-    note.textContent = !info ? "Open a chat to choose its pack." : chosen ? `${chosen.description}${info.source === "judge" ? " Picked by the judge for this chat." : ""}` : "The judge picks a pack on this chat\u2019s first staged turn. Until then the General pack applies.";
+    note.textContent = !info ? "Open a chat to choose its pack." : chosen ? `Uses ${chosen.label} moves and meters.` : "The judge picks a pack on the first turn.";
   }
   const meters = document.getElementById("rpd-meters");
   if (meters) {
-    meters.replaceChildren(...state.length ? state.map((c) => el("div", { class: "rpd-meter-line", text: `${c.name}: ${c.meters.map((m) => `${m.label} ${m.level} (${m.rank})`).join(" \xB7 ")}` })) : [el("div", { class: "rpd-muted", text: "Not judged yet on this branch. With the staged pipeline and Meters on, the judge places each character on the pack\u2019s scales every turn." })]);
+    meters.replaceChildren(...state.length ? state.map((c) => el("div", { class: "rpd-meter-line", text: `${c.name}: ${c.meters.map((m) => `${m.label}: ${m.level}`).join(" \xB7 ")}` })) : [el("div", { class: "rpd-muted", text: "The judge has not set any meters yet." })]);
   }
   const loreLast = document.getElementById("rpd-lore-last");
   if (loreLast) {
-    loreLast.replaceChildren(...lastLore && lastLore.entries.length ? lastLore.entries.map((e) => el("div", { class: "rpd-meter-line", text: `${e.book} \u203A ${e.title}` })) : [el("div", { class: "rpd-muted", text: lastLore ? "Nothing was needed from the lorebooks." : "No lore picked yet on this branch." })]);
+    loreLast.replaceChildren(...lastLore && lastLore.entries.length ? lastLore.entries.map((e) => el("div", { class: "rpd-meter-line", text: `${e.book} \u203A ${e.title}` })) : [el("div", { class: "rpd-muted", text: lastLore ? "Nothing was needed from the lorebooks." : "No lore picked yet." })]);
   }
   const nameOf = (id) => actors.find((a) => a.actorId === id)?.name ?? id;
   const list = document.getElementById("rpd-secrets-list");
@@ -9569,8 +10314,9 @@ function buildReactionSettings(controller2) {
     controller2.host.saveSettings();
   });
   const body = el("div", { id: "rpd-reactions" }, [
-    el("label", {}, [enabled, " Enable NPC reactions"]),
-    el("div", { class: "rpd-note", text: "Jev identifies the relevant moment. On turns without an action ruling, these relative weights choose the reaction. They are not model confidence. A weight of 0 excludes an option; each group needs at least one positive weight." })
+    el("label", {}, [enabled, " NPC reactions"]),
+    el("div", { class: "rpd-muted", text: "about 0 extra requests per turn, shared with Decisions" }),
+    el("div", { class: "rpd-note", text: "Higher weights make a reaction more likely; zero excludes it." })
   ]);
   for (const group of NPC_REACTION_GROUPS) {
     const titleId = `rpd-reaction-${group.id}-label`;
@@ -9587,7 +10333,7 @@ function buildReactionSettings(controller2) {
       for (const [id, input] of fields) {
         input.setAttribute("aria-invalid", String(!Number.isFinite(weights[id]) || weights[id] < 0 || validNumbers && !validTotal));
       }
-      error.textContent = !validNumbers ? "Not saved: use a finite weight of 0 or greater for every option. The last valid weights are kept." : !validTotal ? "Not saved: the group total must be finite and greater than 0. The last valid weights are kept." : "";
+      error.textContent = !validNumbers ? "Use a weight of zero or greater for every option." : !validTotal ? "Give at least one option a positive weight." : "";
       error.hidden = !error.textContent;
       if (!validNumbers || !validTotal) return;
       controller2.settings.reactions.weights[group.id] = weights;
@@ -9615,70 +10361,65 @@ function buildReactionSettings(controller2) {
 function buildConnection(controller2) {
   const current = controller2.settings.connection;
   const host2 = el("div", { class: "rpd-connection" });
+  const status = el("div", { class: "rpd-note" });
+  const openRouterModel = el("input", { type: "text", class: "text_pole", value: current.kind === "openrouter" ? current.model : "", placeholder: "OpenRouter model id" });
   const kind = el("select", { class: "text_pole" });
-  for (const [value, label] of [
-    ["mock", "Mock (testing only)"],
-    ["jev", "Jev (TypeSafe)"],
-    ["structured", "Structured judge"],
-    ["openrouter", "OpenRouter (Jev or chat model)"]
-  ]) kind.append(el("option", { value, text: label }));
-  kind.value = current.kind === "rules" ? "mock" : current.kind;
-  const scenario = el("select", { class: "text_pole" });
-  for (const name of Object.keys(BUILTIN_MOCK_SCENARIOS)) scenario.append(el("option", { value: name, text: name }));
-  scenario.value = current.mockScenario;
+  for (const [value, label] of [["", "Choose an advanced connection"], ["jev", "Jev (TypeSafe)"], ["structured", "Structured judge"]]) kind.append(el("option", { value, text: label }));
+  kind.value = current.kind === "jev" || current.kind === "structured" ? current.kind : "";
   const baseUrl = el("input", { type: "text", class: "text_pole", value: current.baseUrl, placeholder: "Endpoint / base URL" });
-  const model = el("input", { type: "text", class: "text_pole", value: current.model, placeholder: "Model id" });
+  const model = el("input", { type: "text", class: "text_pole", value: current.kind === "openrouter" ? "" : current.model, placeholder: "Model id" });
   const stProfile = el("select", { class: "text_pole" });
   stProfile.append(el("option", { value: "", text: "Direct endpoint" }));
   for (const p of controller2.host.connectionProfiles()) stProfile.append(el("option", { value: p.id, text: `${p.name}${p.model ? " / " + p.model : ""}` }));
   stProfile.value = current.stProfileId;
-  const observerProfile = el("select", { class: "text_pole" });
-  observerProfile.append(el("option", { value: "", text: "Use judge connection" }));
-  for (const p of controller2.host.connectionProfiles()) observerProfile.append(el("option", { value: p.id, text: `${p.name}${p.model ? " / " + p.model : ""}` }));
-  observerProfile.value = controller2.settings.observerConnection.stProfileId;
   const sessionKey = el("input", { type: "password", class: "text_pole", placeholder: "Session-only key", autocomplete: "off" });
   const keyStorage = () => kind.value === "jev" ? JEV_KEY_STORAGE : STRUCTURED_KEY_STORAGE;
-  sessionKey.value = sessionStorage.getItem(keyStorage()) ?? "";
   sessionKey.addEventListener("change", () => {
     if (sessionKey.value) sessionStorage.setItem(keyStorage(), sessionKey.value);
     else sessionStorage.removeItem(keyStorage());
+    controller2.lastWorkingConnection = null;
+    controller2.refreshStatus();
   });
-  const rowScenario = row("Mock result", scenario);
-  const rowProfile = row("ST profile", stProfile);
+  const rowProfile = row("Connection profile", stProfile);
   const rowUrl = row("Endpoint", baseUrl);
   const rowModel = row("Model", model);
   const rowKey = row("Session key", sessionKey);
-  const rowObserver = row("Reply observer", observerProfile);
+  const advanced = collapsible("Advanced", "Native Jev and structured judge connections.", el("div", {}, [row("Connection", kind), rowProfile, rowUrl, rowModel, rowKey]));
+  advanced.open = Boolean(kind.value);
   const update = () => {
+    const selected = controller2.settings.connection.kind;
+    status.textContent = selected === "openrouter" ? "OpenRouter through the server plugin (recommended)." : selected === "jev" ? "Using native Jev (TypeSafe)." : selected === "structured" ? "Using the structured judge." : "Choose a connection.";
     const value = kind.value;
-    rowScenario.style.display = value === "mock" ? "" : "none";
-    rowProfile.style.display = value === "structured" ? "" : "none";
-    rowUrl.style.display = value === "jev" || value === "structured" && !stProfile.value ? "" : "none";
-    rowModel.style.display = value === "jev" || value === "structured" || value === "openrouter" ? "" : "none";
-    rowKey.style.display = value === "jev" || value === "structured" && !stProfile.value ? "" : "none";
+    rowProfile.hidden = value !== "structured";
+    rowUrl.hidden = value !== "jev" && !(value === "structured" && !stProfile.value);
+    rowModel.hidden = !value;
+    rowKey.hidden = rowUrl.hidden;
     sessionKey.value = sessionStorage.getItem(keyStorage()) ?? "";
   };
-  const save = () => {
-    controller2.settings.connection = { kind: kind.value, baseUrl: baseUrl.value.trim(), model: model.value.trim(), stProfileId: stProfile.value, mockScenario: scenario.value };
+  const saveOpenRouter = () => {
+    controller2.settings.connection = { ...controller2.settings.connection, kind: "openrouter", model: openRouterModel.value.trim() };
+    kind.value = "";
     controller2.host.saveSettings();
     controller2.reloadProfile();
     update();
   };
-  for (const node of [kind, scenario, baseUrl, model, stProfile]) node.addEventListener("change", save);
-  observerProfile.addEventListener("change", () => {
-    controller2.settings.observerConnection = { stProfileId: observerProfile.value };
+  const saveAdvanced = () => {
+    if (kind.value !== "jev" && kind.value !== "structured") {
+      update();
+      return;
+    }
+    controller2.settings.connection = { kind: kind.value, baseUrl: baseUrl.value.trim(), model: model.value.trim(), stProfileId: stProfile.value, mockScenario: current.mockScenario };
     controller2.host.saveSettings();
-    controller2.refreshStatus();
-  });
+    controller2.reloadProfile();
+    update();
+  };
+  for (const node of [kind, baseUrl, model, stProfile]) node.addEventListener("change", saveAdvanced);
+  openRouterModel.addEventListener("change", saveOpenRouter);
   host2.append(
-    row("Judge connection", kind),
-    rowScenario,
-    rowProfile,
-    rowUrl,
-    rowModel,
-    rowKey,
-    rowObserver,
-    el("div", { class: "rpd-note", text: "The observer checks the generated reply. Use the judge connection or choose a separate ST chat-completion profile. Jev only checks whether the reply follows frozen rulings; a structured observer can also track registered facts. Changes commit when you continue from the reply." })
+    status,
+    row("OpenRouter model", openRouterModel),
+    button("rpd-use-openrouter", "Use OpenRouter", "Use the recommended OpenRouter server plugin connection", saveOpenRouter),
+    advanced
   );
   update();
   return host2;
@@ -9689,60 +10430,586 @@ function row(label, control) {
 function collapsible(title, description, body) {
   return el("details", { class: "rpd-section" }, [el("summary", {}, [el("b", { text: title }), el("span", { class: "rpd-muted", text: ` \u2014 ${description}` })]), body]);
 }
-function refreshInspector(controller2) {
-  const host2 = document.getElementById("rpd-inspector");
-  if (!host2) return;
-  const head = el("div", { class: "rpd-muted", text: controller2.record ? `projection ${controller2.record.projection.status} \xB7 scene ${controller2.record.projection.state.sceneId} \xB7 accepted ${controller2.record.projection.state.acceptedResolutionIds.length}` : "no chat" });
-  const tool = controller2.host.writerToolCapability("normal");
-  const toolInfo = el("div", { class: "rpd-note", text: tool.supported ? "Writer tool: RPDirector_AdjudicateTurn. Appears in chat only when the writer calls it for a new consequential NPC action. The Jev pre-pass and observer run in the background; their calls are recorded below." : `Writer tool unavailable: ${tool.reason}. Background decisions are recorded below.` });
-  host2.replaceChildren(head, toolInfo, ...(controller2.record?.inspector ?? []).slice(-30).reverse().map((entry) => renderEntry(entry, entry.speaker ? controller2.record?.actors[entry.speaker.selected]?.name : void 0)));
+
+// src/status-chip.ts
+var ERROR_COPY = {
+  timeout: ["Judge timed out", "Open the reply badge for details"],
+  network: ["Connection error", "Check the judge connection in Settings"],
+  refusal: ["Judge refused", "Try a different judge model in Settings"],
+  invalid: ["Invalid answer", "Open the reply badge for details"],
+  budget: ["Context too large", "Try a shorter message or a judge with more context"],
+  writer: ["Writer error", "Retry the reply to keep the saved result"],
+  auth: ["Access denied", "Check the judge key and model access in Settings"],
+  error: ["Judge unavailable", "Open Activity for details or try the judge again"]
+};
+function errorState(message) {
+  if (/writer|tool request rejected/i.test(message)) return "writer";
+  if (/timed?\s*out|timeout|deadline|wait budget.*expir/i.test(message)) return "timeout";
+  if (/\b(?:401|403)\b|unauthori[sz]ed|forbidden|api.?key|authentication|access denied/i.test(message)) return "auth";
+  if (/context.*(?:budget|large|limit)|(?:budget|limit).*context|too_large|context_budget/i.test(message)) return "budget";
+  if (/refus(?:al|ed|e)/i.test(message)) return "refusal";
+  if (/invalid|malformed|missing.*answer|unresolved|settings changed/i.test(message)) return "invalid";
+  if (/network|fetch|connection|\bhttp\b|unreachable|offline/i.test(message)) return "network";
+  return "error";
 }
-function renderEntry(entry, speakerName) {
-  const item = el("div", { class: "rpd-entry" }, [el("div", {}, [
-    el("span", { class: "rpd-muted", text: new Date(entry.at).toLocaleTimeString() }),
-    " \xB7 ",
-    entry.message
+function buildStatusChip(input) {
+  const chip = (state, label, nextStep, tone = "neutral") => ({ state, label, nextStep, tone });
+  if (!input.enabled) return chip("off", "Off", "Enable Director to use it with your next reply.");
+  if (!input.hasChat) return chip("no-chat", "No chat", "Open a chat to use Director.");
+  if (input.paused) return chip("paused", "Paused", "Turn off Pause for this chat to resume Director.");
+  if (input.status === "Deciding") return chip("deciding", "Deciding", "Wait for the judge to finish choosing this reply\u2019s details.", "active");
+  if (input.status === "Writing") return chip("writing", "Writing", "Wait for the reply to finish.", "active");
+  if (input.lastError || input.status === "Error") {
+    const state = errorState(input.lastError ?? "");
+    const [label, action] = ERROR_COPY[state];
+    return chip(state, label, `${action}. Your chat isn't affected.`, "warning");
+  }
+  if (!input.connectionConfigured) return chip("not-connected", "Not connected", "Choose a judge connection in Settings.", "warning");
+  if (!input.connectionWorking) return chip("ready", "Ready", "Send a message to check the judge connection.");
+  return chip("ready", "Ready", "Send a message when you are ready to continue.", "good");
+}
+
+// src/workspace-state.ts
+var WORKSPACE_TABS = [
+  { id: "chat", label: "This chat" },
+  { id: "activity", label: "Activity" },
+  { id: "outcomes", label: "Outcomes" },
+  { id: "lore", label: "Lore" },
+  { id: "settings", label: "Settings" }
+];
+function normalizeWorkspaceTab(value) {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().replace(/\s+/g, " ").toLowerCase();
+  if (normalized === "this chat") return "chat";
+  return WORKSPACE_TABS.find((tab) => tab.id === normalized)?.id ?? null;
+}
+function createWorkspaceState() {
+  return { open: false, tab: "chat", draftDirty: false, activityMessageId: null };
+}
+function openWorkspace(state, tab, activityMessageId) {
+  if (!state.open) {
+    state.tab = tab ?? "chat";
+    state.activityMessageId = null;
+    state.draftDirty = false;
+  } else if (tab) {
+    state.tab = tab;
+  }
+  if (activityMessageId !== void 0 && Number.isInteger(activityMessageId) && activityMessageId >= 0) {
+    state.activityMessageId = activityMessageId;
+    state.tab = "activity";
+  }
+  state.open = true;
+}
+function selectWorkspaceTab(state, tab) {
+  state.tab = tab;
+}
+function setWorkspaceDraftDirty(state, dirty) {
+  state.draftDirty = dirty;
+}
+function closeWorkspace(state, discard = false) {
+  if (state.draftDirty && !discard) return false;
+  state.open = false;
+  state.draftDirty = false;
+  state.activityMessageId = null;
+  return true;
+}
+
+// src/ui.ts
+var workspaces = /* @__PURE__ */ new WeakMap();
+var connections = /* @__PURE__ */ new WeakMap();
+var activitySignatures = /* @__PURE__ */ new WeakMap();
+function connectionState(controller2) {
+  const signature = JSON.stringify(controller2.settings.connection);
+  let state = connections.get(controller2);
+  if (!state) {
+    state = { signature, chatKey: controller2.record ? controller2.host.chatKey() : null, seen: new Set((controller2.record?.inspector ?? []).map((entry) => entry.id)), working: false, requests: 0, usage: [] };
+    connections.set(controller2, state);
+  }
+  if (signature !== state.signature) {
+    state.signature = signature;
+    state.working = false;
+    for (const entry of controller2.record?.inspector ?? []) state.seen.add(entry.id);
+  }
+  if (controller2.record && state.chatKey !== controller2.host.chatKey()) {
+    state.chatKey = controller2.host.chatKey();
+    for (const entry of controller2.record.inspector) state.seen.add(entry.id);
+  }
+  for (const entry of controller2.record?.inspector ?? []) {
+    if (state.seen.has(entry.id)) continue;
+    state.seen.add(entry.id);
+    state.requests += entry.networkCalls;
+    state.usage = mergeRequestUsage(state.usage, entry.requestUsage);
+  }
+  state.working = controller2.lastWorkingConnection === signature && !controller2.lastError;
+  return state;
+}
+function connectionConfigured(controller2) {
+  const c = controller2.settings.connection;
+  if (c.kind === "openrouter" || c.kind === "jev") return true;
+  if (c.kind === "structured" && c.stProfileId) return true;
+  if (c.kind === "structured") return Boolean(c.baseUrl.trim());
+  return c.kind === "mock" || c.kind === "rules";
+}
+function mountUi(controller2) {
+  connectionState(controller2);
+  const target = document.getElementById("extensions_settings2") ?? document.getElementById("extensions_settings");
+  target?.append(buildDrawer(controller2));
+  const menu = document.getElementById("extensionsMenu");
+  if (menu && !document.getElementById("rpd-open-menu")) {
+    const item = button("rpd-open-menu", "Director", "Open Director", () => {
+      void openDirector(controller2);
+    }, "list-group-item flex-container");
+    menu.append(item);
+  }
+  controller2.host.registerWorkspaceCommand((tab) => openDirector(controller2, tab));
+  const refresh = () => {
+    refreshDrawer(controller2);
+    refreshWorkflowBadges(controller2);
+    workspaces.get(controller2)?.refresh();
+  };
+  controller2.onChange(refresh);
+  for (const event of ["CHARACTER_MESSAGE_RENDERED", "MESSAGE_SWIPED", "MESSAGE_UPDATED", "CHAT_CHANGED"]) controller2.host.on(event, refresh);
+  refresh();
+}
+function buildDrawer(controller2) {
+  const enabled = el("input", { id: "rpd-enabled", type: "checkbox" });
+  enabled.addEventListener("change", () => controller2.setEnabled(enabled.checked));
+  const paused = el("input", { id: "rpd-paused", type: "checkbox" });
+  paused.addEventListener("change", () => void controller2.setPaused(paused.checked));
+  return el("div", { id: "rpd-settings", class: "extension_settings" }, [el("div", { class: "inline-drawer" }, [
+    el("div", { class: "inline-drawer-toggle inline-drawer-header" }, [el("b", { text: "RP Director" }), el("span", { id: "rpd-status", class: "rpd-status", role: "status" }), el("div", { class: "inline-drawer-icon fa-solid fa-circle-chevron-down down" })]),
+    el("div", { class: "inline-drawer-content" }, [
+      el("p", { id: "rpd-next-step", class: "rpd-muted", "aria-live": "polite" }),
+      el("div", { class: "rpd-row" }, [el("label", {}, [enabled, " Enabled"]), el("label", {}, [paused, " Pause for this chat"])]),
+      button("rpd-open", "Open Director", "Open Director", () => {
+        void openDirector(controller2);
+      })
+    ])
   ])]);
-  const summary = [];
-  if (entry.speaker) summary.push(`Speaker: ${speakerName || (entry.speaker.selected === "YIELD" ? "Yield to {{user}}" : entry.speaker.selected)}`);
-  if (entry.outcome) summary.push(`Outcome: ${entry.outcome}`);
-  if (entry.policyBandId) summary.push(`Band: ${entry.policyBandId}`);
-  if (summary.length) item.append(el("div", { text: summary.join(" \xB7 ") }));
-  const network = [entry.networkCalls === 0 ? "No network calls" : `${entry.networkCalls} network ${entry.networkCalls === 1 ? "call" : "calls"}`];
-  if (entry.providerKind) network.push(entry.providerKind);
-  if (entry.returnedModel) network.push(entry.returnedModel);
-  else if (entry.requestedModel) network.push(`requested ${entry.requestedModel}`);
-  if (entry.durationMs !== null) network.push(`${Math.round(entry.durationMs)} ms`);
-  item.append(el("div", { class: "rpd-muted", text: network.join(" \xB7 ") }));
-  const details = el("details", {}, [el("summary", { text: "Details" })]);
-  const lines = [];
-  lines.push(`network calls: ${entry.networkCalls}`);
-  if (entry.providerKind) lines.push(`provider: ${entry.providerKind}; model: ${entry.returnedModel ?? entry.requestedModel ?? "not reported"}`);
-  if (entry.durationMs !== null) lines.push(`decision time: ${Math.round(entry.durationMs)} ms`);
-  if (entry.speaker) lines.push(`speaker: ${entry.speaker.selected} (${entry.speaker.source})`);
-  if (entry.outcome) lines.push(`outcome: ${entry.outcome}${entry.policyBandId ? ` / ${entry.policyBandId}` : ""}`);
-  if (entry.answers) lines.push(`answers: ${JSON.stringify(entry.answers)}`);
-  if (entry.questions) lines.push(`questions: ${JSON.stringify(entry.questions)}`);
-  if (entry.stateSent) lines.push(`state: ${JSON.stringify(entry.stateSent)}`);
-  if (entry.injectedText) lines.push(`injected:
-${entry.injectedText}`);
-  details.append(el("pre", { text: lines.join("\n") }));
-  item.append(details);
-  return item;
 }
+function refreshDrawer(controller2) {
+  const connection = connectionState(controller2);
+  const state = buildStatusChip({
+    enabled: controller2.settings.enabled,
+    paused: Boolean(controller2.record?.paused),
+    hasChat: Boolean(controller2.record),
+    status: controller2.status,
+    lastError: controller2.lastError,
+    connectionConfigured: connectionConfigured(controller2),
+    connectionWorking: connection.working
+  });
+  const chip = document.getElementById("rpd-status");
+  if (chip) {
+    chip.textContent = state.label;
+    chip.dataset.state = state.state;
+    chip.dataset.tone = state.tone;
+  }
+  const hint = document.getElementById("rpd-next-step");
+  if (hint) hint.textContent = state.nextStep;
+  const enabled = document.getElementById("rpd-enabled");
+  if (enabled) enabled.checked = controller2.settings.enabled;
+  const paused = document.getElementById("rpd-paused");
+  if (paused) {
+    paused.checked = Boolean(controller2.record?.paused);
+    paused.disabled = !controller2.record;
+  }
+}
+async function openDirector(controller2, requestedTab, messageId) {
+  const tab = normalizeWorkspaceTab(requestedTab) ?? void 0;
+  if (requestedTab?.trim() && !tab) {
+    controller2.host.toast("info", "Tabs: This chat, Activity, Outcomes, Lore, Settings.");
+    return;
+  }
+  const current = workspaces.get(controller2);
+  if (current) {
+    if (tab || messageId !== void 0) current.select(tab ?? "activity", messageId);
+    return;
+  }
+  const context = controller2.host.ctx();
+  if (!context.callGenericPopup || !context.POPUP_TYPE) return;
+  const state = createWorkspaceState();
+  openWorkspace(state, tab, messageId);
+  const root = el("div", { id: "rpd-workspace", class: "rpd-workspace" });
+  root.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.target?.closest("button, input, select, textarea")) event.stopPropagation();
+  });
+  const tabs = el("div", { class: "rpd-tabs", role: "tablist", "aria-label": "Director" });
+  const body = el("div", { class: "rpd-workspace-body" });
+  const panes = /* @__PURE__ */ new Map();
+  const tabButtons = /* @__PURE__ */ new Map();
+  let table = null;
+  let chatKey = controller2.host.chatKey();
+  const ensurePane = (id) => {
+    const existing = panes.get(id);
+    if (existing) return existing;
+    const pane = el("section", { id: `rpd-pane-${id}`, role: "tabpanel", "aria-labelledby": `rpd-tab-${id}`, tabindex: "0" });
+    if (id === "chat") pane.append(buildStoryPanel(controller2));
+    if (id === "activity") pane.append(el("div", { id: "rpd-activity" }));
+    if (id === "outcomes") {
+      table = buildTableEditor(controller2);
+      pane.append(table.element);
+    }
+    if (id === "lore") pane.append(buildLorePanel(controller2));
+    if (id === "settings") pane.append(buildWorkspaceSettings(controller2));
+    panes.set(id, pane);
+    body.append(pane);
+    return pane;
+  };
+  const refresh = () => {
+    if (controller2.host.chatKey() !== chatKey) {
+      chatKey = controller2.host.chatKey();
+      const chatPane = panes.get("chat");
+      if (chatPane) chatPane.replaceChildren(buildStoryPanel(controller2));
+      state.activityMessageId = null;
+      const activity = document.getElementById("rpd-activity");
+      if (activity) activity.dataset.detailOpen = "false";
+    }
+    if (state.tab === "chat") refreshStory(controller2);
+    if (state.tab === "activity") refreshActivity(controller2, state);
+    if (state.tab === "lore") void refreshLorePanel(controller2);
+    document.getElementById("rpd-action-panel")?.dispatchEvent(new Event("rpd-refresh"));
+    const ask = document.getElementById("rpd-ask-swiping");
+    if (ask) ask.checked = controller2.settings.askWhenSwiping;
+    const rollback = document.getElementById("rpd-remove-rollback");
+    if (rollback) rollback.disabled = !controller2.host.hasLegacyRecordBackup();
+    const session = document.getElementById("rpd-session");
+    if (session) {
+      const state2 = connectionState(controller2), totals = summarizeUsage(controller2.sessionUsage ?? state2.usage);
+      const requests = controller2.sessionUsage ? totals.requests : state2.requests;
+      session.textContent = `Session: ${requests} requests \xB7 ${costLabel(requests === 0 ? 0 : totals.costUsd, totals.unreportedCostRequests + Math.max(0, requests - totals.requests))}`;
+    }
+    const connection = document.getElementById("rpd-connection-section");
+    if (connection) {
+      const working = connectionState(controller2).working;
+      const title = connection.querySelector("summary b");
+      if (title) title.textContent = working ? "Connected" : "Connection";
+      if (connection.dataset.working !== String(working)) connection.open = !working;
+      connection.dataset.working = String(working);
+    }
+  };
+  const select = (id, selectedMessage) => {
+    selectWorkspaceTab(state, id);
+    if (selectedMessage !== void 0) state.activityMessageId = selectedMessage;
+    ensurePane(id);
+    if (selectedMessage !== void 0) {
+      const activity = panes.get("activity")?.querySelector("#rpd-activity");
+      if (activity) {
+        activity.dataset.detailOpen = "true";
+        activitySignatures.delete(activity);
+      }
+    }
+    for (const [key, pane] of panes) pane.hidden = key !== id;
+    for (const [key, control] of tabButtons) {
+      control.setAttribute("aria-selected", String(key === id));
+      control.tabIndex = key === id ? 0 : -1;
+    }
+    refresh();
+  };
+  for (const [index, item] of WORKSPACE_TABS.entries()) {
+    const control = button(`rpd-tab-${item.id}`, item.label, item.label, () => select(item.id));
+    control.setAttribute("role", "tab");
+    control.setAttribute("aria-controls", `rpd-pane-${item.id}`);
+    control.addEventListener("keydown", (event) => {
+      let next = index;
+      if (event.key === "ArrowRight") next = (index + 1) % WORKSPACE_TABS.length;
+      else if (event.key === "ArrowLeft") next = (index + WORKSPACE_TABS.length - 1) % WORKSPACE_TABS.length;
+      else if (event.key === "Home") next = 0;
+      else if (event.key === "End") next = WORKSPACE_TABS.length - 1;
+      else return;
+      event.preventDefault();
+      const id = WORKSPACE_TABS[next].id;
+      select(id);
+      tabButtons.get(id)?.focus();
+    });
+    tabs.append(control);
+    tabButtons.set(item.id, control);
+  }
+  root.append(el("h2", { text: "Director" }), tabs, body);
+  const view = { state, element: root, select, refresh };
+  workspaces.set(controller2, view);
+  select(state.tab, state.activityMessageId ?? void 0);
+  try {
+    await context.callGenericPopup(root, context.POPUP_TYPE.TEXT, "", {
+      wide: true,
+      large: true,
+      allowVerticalScrolling: true,
+      okButton: "Close",
+      onOpen: (popup) => {
+        popup.dlg?.classList.add("rpd-workspace-dialog");
+        refresh();
+      },
+      onClosing: async () => {
+        const secret = root.querySelector("#rpd-secret-text");
+        setWorkspaceDraftDirty(state, Boolean(table?.isDirty() || secret?.value.trim()));
+        if (closeWorkspace(state)) return true;
+        const result = await context.callGenericPopup("Discard the unsaved table or secret?", context.POPUP_TYPE.CONFIRM, "", { okButton: "Discard", cancelButton: "Keep editing" });
+        return result === (context.POPUP_RESULT?.AFFIRMATIVE ?? 1) ? closeWorkspace(state, true) : false;
+      }
+    });
+  } finally {
+    if (workspaces.get(controller2) === view) workspaces.delete(controller2);
+  }
+}
+function buildWorkspaceSettings(controller2) {
+  const connection = collapsible(connectionState(controller2).working ? "Connected" : "Connection", "Choose the judge for your replies.", buildConnection(controller2));
+  connection.id = "rpd-connection-section";
+  connection.open = !connectionState(controller2).working;
+  connection.dataset.working = String(connectionState(controller2).working);
+  const badges = el("input", { id: "rpd-badges", type: "checkbox" });
+  badges.checked = controller2.settings.showBadges;
+  badges.addEventListener("change", () => {
+    controller2.settings.showBadges = badges.checked;
+    controller2.host.saveSettings();
+    refreshWorkflowBadges(controller2);
+  });
+  const copy = (value) => {
+    if (!navigator.clipboard) {
+      controller2.host.toast("warning", "Clipboard unavailable.");
+      return;
+    }
+    void navigator.clipboard.writeText(JSON.stringify(value, null, 2)).then(() => controller2.host.toast("success", "Copied JSON.")).catch(() => controller2.host.toast("warning", "Could not copy JSON."));
+  };
+  const removeBackup = button("rpd-remove-rollback", "Remove the 0.7 rollback copy", "Keep the current Director record and remove its old rollback copy", () => {
+    const chatKey = controller2.host.chatKey();
+    if (!chatKey) return;
+    removeBackup.disabled = true;
+    void controller2.host.removeLegacyRecordBackup(chatKey).then((removed) => {
+      if (removed) controller2.host.toast("success", "Removed the 0.7 rollback copy.");
+      removeBackup.disabled = !controller2.host.hasLegacyRecordBackup();
+    }).catch(() => {
+      removeBackup.disabled = !controller2.host.hasLegacyRecordBackup();
+      controller2.host.toast("warning", "Could not save the removal of the rollback copy.");
+    });
+  });
+  removeBackup.disabled = !controller2.host.hasLegacyRecordBackup();
+  const advanced = el("div", {}, [
+    collapsible("Manual move", "Choose a move for the next reply.", buildActionPanel(controller2)),
+    el("div", { class: "rpd-row" }, [
+      button("rpd-state-export", "Copy chat JSON", "Copy the Director chat record", () => copy(controller2.record)),
+      button("rpd-activity-export", "Copy activity JSON", "Copy the saved activity", () => copy({ turns: activityTurns(controller2.host.chat(), (id) => controller2.host.readWorkflowBadge(id), controller2.record?.inspector ?? []), events: controller2.record?.inspector ?? [] }))
+    ]),
+    el("div", { class: "rpd-row" }, [removeBackup])
+  ]);
+  return el("div", {}, [
+    connection,
+    el("p", { id: "rpd-session", class: "rpd-muted" }),
+    el("h3", { text: "Modules" }),
+    buildModuleSettings(controller2),
+    collapsible("NPC reactions", "Choose how likely each reaction is.", buildReactionSettings(controller2)),
+    collapsible("Pacing texts", "Set the guidance for each scene.", buildPacingSettings(controller2)),
+    collapsible("Reply-check thresholds", "Choose which scores need attention.", buildReplyCheckSettings(controller2)),
+    el("p", {}, [el("label", {}, [badges, " Reply badges"])]),
+    collapsible("Advanced", "Manual moves, JSON exports and rollback storage.", advanced)
+  ]);
+}
+function refreshWorkflowBadges(controller2) {
+  if (typeof document === "undefined") return;
+  for (const messageElement of document.querySelectorAll("#chat .mes[mesid]")) {
+    const id = Number(messageElement.getAttribute("mesid"));
+    if (!Number.isInteger(id)) continue;
+    const badge = controller2.settings.showBadges ? controller2.host.readWorkflowBadge(id) : null;
+    let pill = messageElement.querySelector(".rpd-workflow-badge");
+    if (!badge) {
+      pill?.remove();
+      continue;
+    }
+    const block = messageElement.querySelector(".mes_block");
+    if (!block) continue;
+    if (!pill) {
+      pill = el("button", { type: "button", class: "menu_button rpd-workflow-badge", title: "View Director decisions" });
+      pill.addEventListener("click", () => void openWorkflowBadge(controller2, id));
+      block.append(pill);
+    }
+    pill.textContent = displayText(controller2, workflowBadgeLabel(badge));
+  }
+}
+function displayText(controller2, text2) {
+  return playerUiText(text2, controller2.record?.actors.player?.name ?? controller2.host.ctx().name1);
+}
+function badgeDetails(controller2, badge) {
+  const content = el("div", { class: "rpd-turn-details" });
+  const name = (id) => uiActorName(id, badge.actorNames?.[id] ?? controller2.record?.actors[id]?.name);
+  const paragraph = (text2) => el("p", { text: displayText(controller2, text2) });
+  const section = (title, children) => el("section", {}, [el("h3", { text: title }), ...children]);
+  if (badge.rerolledByCheck) content.append(paragraph(`Rerolled (${badge.rerolledByCheck}). ${badge.replyOriginalSwipe === void 0 ? "The original reply is saved in this message\u2019s swipes." : badge.replyOriginalSwipe < 0 ? "The original reply was deleted." : `The original reply is swipe ${badge.replyOriginalSwipe + 1}.`}`));
+  content.append(section("Move", [
+    paragraph(badge.move ?? badge.results[0]?.action ?? "No move."),
+    ...badge.route ? [paragraph(`${name(badge.route.actorId)} \u2192 ${badge.route.targetActorIds.map(name).join(", ") || "the scene"} \xB7 ${badge.route.kind.replaceAll("_", " ")}`)] : []
+  ]));
+  const rulings = badge.results.map((result) => el("div", {}, [
+    paragraph(`${name(result.actorId)}: ${result.outcome.replaceAll("_", " ")}`),
+    paragraph([result.odds === null ? "Odds: not used" : `Odds: ${Math.round(result.odds * 100)}%`, result.draw === null ? "Roll: not used" : `Roll: ${Math.round(result.draw * 100)}/100`].join(" \xB7 ")),
+    ...result.source === "npc" ? [paragraph(result.action)] : [],
+    paragraph(result.instruction || "No instruction recorded.")
+  ]));
+  if (badge.unavailable) rulings.unshift(paragraph("The judge was unavailable for part of this turn. Your chat isn't affected."));
+  if (badge.toolError) rulings.push(paragraph("The writer's move could not be ruled. Your chat isn't affected."));
+  if (!rulings.length) rulings.push(paragraph("No ruling for this reply."));
+  if (badge.reaction) rulings.push(paragraph(`Reaction: ${name(badge.reaction.actorId)} \xB7 ${badge.reaction.outcome.replaceAll("_", " ")}`));
+  if (badge.speaker) rulings.push(paragraph(`Speaker: ${name(badge.speaker.actorId)}`));
+  content.append(section("Ruling", rulings));
+  if (badge.writerInstruction) content.append(el("details", {}, [
+    el("summary", { text: "Writer instruction" }),
+    el("pre", { text: displayText(controller2, badge.writerInstruction) })
+  ]));
+  const changes = (badge.meterChanges ?? []).map((change) => paragraph(`${name(change.actorId)} \xB7 ${change.label}: ${change.fromLabel} \u2192 ${change.toLabel}`));
+  changes.push(...(badge.reveals ?? []).map((reveal) => paragraph(`${reveal.actorIds.map(name).join(", ")} learned: ${reveal.text}`)));
+  content.append(
+    section("State changes", changes.length ? changes : [paragraph("No changes recorded.")]),
+    section("Lore", badge.lore?.length ? badge.lore.map((pick) => paragraph(`${pick.world} \u203A ${pick.title}`)) : [paragraph("No lore picked.")])
+  );
+  content.append(section("Pacing", [
+    paragraph(badge.pacing?.scene ? `Scene: ${badge.pacing.scene}` : "No scene decision recorded."),
+    paragraph(badge.pacing?.handBack === "HAND_BACK" ? "Hand back at the first beat where {{user}} must respond." : badge.pacing?.handBack === "CONTINUE" ? "Continue the current short beat." : "No hand-back decision recorded.")
+  ]));
+  const check = badge.replyCheck;
+  content.append(section("Reply check", badge.replyCheckError ? [paragraph(`Reply check: unavailable. ${badge.replyCheckError}`)] : check ? [
+    paragraph(check.reason ? `Needs correction: ${check.reason}` : "No automatic rewrite needed."),
+    paragraph(`Writes for {{user}}: ${check.speaksForUser ?? "not reported"} \xB7 Responds: ${check.responds ?? "not reported"} \xB7 Repetition: ${check.repeats ?? "not reported"} \xB7 Follows ruling: ${check.followsRuling ?? "not checked"}`),
+    ...check.nudge ? [paragraph(`Next turn: ${check.nudge}`)] : []
+  ] : [paragraph("No reply check recorded.")]));
+  return content;
+}
+function renderActivityTurn(controller2, turn) {
+  const content = el("div", {}, [el("h3", { text: `Reply ${turn.messageId + 1} \xB7 Swipe ${turn.swipeId + 1}` })]);
+  if (turn.badge) content.append(badgeDetails(controller2, turn.badge));
+  else content.append(el("p", { text: "No Director record for this reply." }));
+  const metrics = activityMetrics(turn.entries);
+  const usage = activityUsage(turn);
+  const duration = summarizeUsage(usage).durationMs ?? metrics.durationMs;
+  content.append(el("p", { class: "rpd-muted", text: `${usageLabel(usage, metrics.requests)} \xB7 Recorded request time (ms): ${duration === null ? "not recorded" : Math.round(duration)}` }));
+  for (const receipt of usage) content.append(el("p", { class: "rpd-request-usage", text: `${receipt.stage.replaceAll("_", " ")} \xB7 ${costLabel(receipt.costUsd)} \xB7 Tokens in/out: ${receipt.inputTokens ?? "not reported"}/${receipt.outputTokens ?? "not reported"} \xB7 Time (ms): ${receipt.durationMs === null ? "not reported" : Math.round(receipt.durationMs)}` }));
+  const raw = el("details", {}, [el("summary", { text: "Raw" }), el("pre", { text: displayText(controller2, JSON.stringify({ errors: turn.badge?.errors ?? [], usage, requests: turn.entries.map((entry) => ({ questions: entry.questions, answers: entry.answers, requests: entry.networkCalls, durationMs: entry.durationMs })) }, null, 2)) })]);
+  if (!turn.entries.length) raw.append(el("p", { text: "Request details are no longer recorded for this reply." }));
+  content.append(raw);
+  return content;
+}
+function refreshActivity(controller2, state) {
+  const host2 = document.getElementById("rpd-activity");
+  if (!host2) return;
+  const turns = activityTurns(controller2.host.chat(), (id) => controller2.host.readWorkflowBadge(id), controller2.record?.inspector ?? []);
+  const requested = state.activityMessageId;
+  let selected = turns.find((turn) => turn.messageId === requested);
+  if (!selected && requested !== null) {
+    const message = controller2.host.chat()[requested];
+    const badge = controller2.host.readWorkflowBadge(requested);
+    if (message && !message.is_user && !message.is_system) selected = {
+      messageId: requested,
+      swipeId: message.swipe_id ?? 0,
+      badge,
+      entries: badge ? (controller2.record?.inspector ?? []).filter((entry) => entry.attemptId === badge.attemptId) : []
+    };
+  }
+  selected ??= turns.at(-1);
+  state.activityMessageId = selected?.messageId ?? null;
+  const notes = (controller2.record?.inspector ?? []).filter((entry) => entry.kind === "info" && /removed .*footer/i.test(entry.message));
+  const signature = () => JSON.stringify([turns, notes, state.activityMessageId, selected]);
+  if (activitySignatures.get(host2) === signature()) return;
+  const list = el("div", { class: "rpd-activity-list", "aria-label": "Last 20 replies" });
+  const detail = el("div", { class: "rpd-activity-detail" });
+  const layout = el("div", { class: "rpd-activity-layout" }, [list, detail]);
+  layout.classList.toggle("rpd-detail-open", host2.dataset.detailOpen === "true");
+  const show = (turn, focus = false) => {
+    state.activityMessageId = turn.messageId;
+    for (const control of list.querySelectorAll("button")) control.setAttribute("aria-pressed", String(Number(control.dataset.messageId) === turn.messageId));
+    const back = button("rpd-activity-back", "Back", "Back to replies", () => {
+      host2.dataset.detailOpen = "false";
+      layout.classList.remove("rpd-detail-open");
+      list.querySelector(`[data-message-id="${turn.messageId}"]`)?.focus();
+    });
+    detail.replaceChildren(back, renderActivityTurn(controller2, turn));
+    if (focus) {
+      host2.dataset.detailOpen = "true";
+      layout.classList.add("rpd-detail-open");
+      back.focus();
+    }
+  };
+  for (const turn of [...turns].reverse()) {
+    const label = turn.badge ? workflowBadgeLabel(turn.badge).replace(/^Director · /, "") : "No Director record";
+    const control = button(`rpd-turn-${turn.messageId}`, `Reply ${turn.messageId + 1} \xB7 ${displayText(controller2, label)}`, "View this reply", () => show(turn, true));
+    control.dataset.messageId = String(turn.messageId);
+    list.append(control);
+  }
+  if (selected) show(selected);
+  else list.append(el("p", { text: "No replies yet." }));
+  host2.replaceChildren(el("p", { class: "rpd-muted", text: "Last 20 replies" }), ...notes.map((entry) => el("p", { text: entry.message })), layout);
+  activitySignatures.set(host2, signature());
+}
+async function openWorkflowBadge(controller2, messageId) {
+  const badge = controller2.host.readWorkflowBadge(messageId);
+  const context = controller2.host.ctx();
+  if (!badge || !context.callGenericPopup || !context.POPUP_TYPE) return;
+  const message = controller2.host.chat()[messageId];
+  const swipeId = message?.swipe_id ?? 0;
+  const chatKey = controller2.host.chatKey();
+  const transcript = JSON.stringify(controller2.host.fingerprintMessages(controller2.host.chat().slice(0, messageId + 1)));
+  const selected = messageId === controller2.host.chat().length - 1;
+  const idle = controller2.settings.enabled && controller2.settings.modules.decisions && !controller2.record?.paused && !controller2.host.isGenerating();
+  const content = el("div", { class: "rpd-workflow-popup" }, [el("h2", { text: "Director" }), badgeDetails(controller2, badge)]);
+  const REROLL = 1001, REASSESS = 1002, RETRY = 1003, ACTIVITY = 1004;
+  const buttons = [];
+  if (selected && idle && controller2.canRerollSelected() && badge.results.some((item) => item.draw !== null)) buttons.push({ text: "Roll again", result: REROLL, icon: "fa-dice" });
+  if (selected && idle && controller2.record?.attempts[badge.attemptId]) buttons.push({ text: "Reassess", result: REASSESS, icon: "fa-rotate" });
+  if (selected && idle && (badge.retryEligible ?? (badge.unavailable && !badge.results.length))) buttons.push({ text: "Try the judge again", result: RETRY, icon: "fa-rotate" });
+  buttons.push({ text: "Open Activity", result: ACTIVITY, icon: "fa-clock" });
+  const entries2 = controller2.record?.inspector.filter((entry) => entry.attemptId === badge.attemptId) ?? [];
+  const metrics = activityMetrics(entries2);
+  const usage = activityUsage({ badge, entries: entries2 });
+  content.append(el("p", { class: "rpd-muted", text: `${usageLabel(usage, metrics.requests)} \xB7 Recorded request time (ms): ${summarizeUsage(usage).durationMs ?? metrics.durationMs ?? "not recorded"}` }));
+  const result = await context.callGenericPopup(content, context.POPUP_TYPE.TEXT, "", { okButton: "Close", customButtons: buttons, allowVerticalScrolling: true });
+  if (chatKey !== controller2.host.chatKey() || controller2.host.chat()[messageId] !== message || (message?.swipe_id ?? 0) !== swipeId || controller2.host.readWorkflowBadge(messageId)?.attemptId !== badge.attemptId || JSON.stringify(controller2.host.fingerprintMessages(controller2.host.chat().slice(0, messageId + 1))) !== transcript) return;
+  if (result === ACTIVITY) {
+    await openDirector(controller2, "activity", messageId);
+    return;
+  }
+  if (messageId !== controller2.host.chat().length - 1) return;
+  if (result === REROLL && buttons.some((button2) => button2.result === REROLL)) await controller2.reroll(true);
+  if (result === REASSESS && buttons.some((button2) => button2.result === REASSESS)) await controller2.reassess(true);
+  if (result === RETRY && buttons.some((button2) => button2.result === RETRY)) await controller2.retryJudge();
+}
+
+// package.json
+var package_default = {
+  name: "rp-director",
+  version: "0.8.0",
+  private: true,
+  description: "RP Director for SillyTavern: native Send and swipes, Jev decisions, reviewed NPC tool results, and a compact interface.",
+  type: "module",
+  scripts: {
+    build: "node build.mjs",
+    watch: "node build.mjs --watch",
+    typecheck: "tsc --noEmit -p tsconfig.json",
+    test: 'node --test --test-timeout=30000 "tests/unit/**/*.test.ts"',
+    verify: "npm run typecheck && npm test && npm run build"
+  },
+  devDependencies: {
+    "@types/node": "^24.13.5",
+    esbuild: "^0.28.2",
+    typescript: "^5.9.3"
+  }
+};
 
 // src/index.ts
 var host = new Host();
 var controller = new Controller(host);
 globalThis.rpDirectorInterceptor = (chat, contextSize, abort, type) => controller.interceptor(chat, contextSize, abort, type);
-globalThis.rpDirector = { controller, host, version: "0.7.0" };
+globalThis.rpDirector = { controller, host, version: package_default.version };
 async function boot() {
   try {
+    host.registerDirectorMacros(() => controller.macroState());
+    host.registerDirectorCommands({
+      pause: (value) => controller.setPaused(value),
+      reroll: () => controller.reroll(true),
+      reassess: () => controller.reassess(true),
+      setPack: (id) => controller.setChatPack(id),
+      setSpeaker: (name) => controller.setSpeakerByName(name),
+      get: (key) => controller.getMacro(key)
+    });
     host.takeOverAuto();
     await controller.init();
     mountUi(controller);
     host.saveSettings();
-    console.log("[RP Director] ready (v0.7.0)");
+    console.log(`[RP Director] ready (v${package_default.version})`);
   } catch (error) {
     console.error("[RP Director] failed to initialise", error);
   }

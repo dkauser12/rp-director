@@ -249,8 +249,8 @@ test('a saved table override is validated as a whole: columns and rows together'
   assert.deepEqual(bad.profile.bands, DEFAULT_BANDS);
 });
 
-test('end to end: accepting a player-defined final failure records it, and the same gain is then refused without a judge call', async () => {
-  const { newRecord, applyEvent, emptyState } = await import('../../src/state.ts');
+test('W6: completing a custom outcome stores its frozen ruling without recording a settled gain', async () => {
+  const { newRecord, applyEvent } = await import('../../src/state.ts');
   const t = custom();
   const action = gateAction_('passage now');
   const low = resolveOutcome({ bands: t.bands, outcomes: t.outcomes, method: 'threshold', signal: { x: 0.05, primitive: 'noul', levels: null }, draw: null });
@@ -258,18 +258,12 @@ test('end to end: accepting a player-defined final failure records it, and the s
   const res = freeze({ resolutionId: 'r1', previousResolutionId: null, action, snapshot, assessment: null, decisionSource: 'provider', policyRevision: 'r', band: low.value.band, method: 'threshold', draw: null, outcome: low.value.outcome, def: low.value.def, cursorBefore: null, generation: 1, providerKind: 'mock', requestedModel: null, returnedModel: null, now: 1 });
   let record = newRecord('seed', 'r');
   for (const event of [
-    { type: 'set_baseline', cursor: 'c0', state: emptyState(), reason: 'test' },
     { type: 'prepare', resolution: res, action, attemptId: 'a1', actorId: 'oren', epoch: 1, composerText: '', now: 1 },
     { type: 'bind', attemptId: 'a1', cursorBefore: 'c0', epoch: 1, injectedText: 'block' },
     { type: 'completed', attemptId: 'a1', epoch: 1, operationId: 'op', variantId: 'v1', hostMessageRef: 1, hostVariantRef: 0, cursorAfter: 'c1', now: 2 },
-  ] as const) record = applyEvent(record, event as never).record;
-  assert.equal(record.projection.state.variables[gainVariableId(action)], undefined, 'nothing is recorded while the reply is provisional');
-  record = applyEvent(record, { type: 'accept', attemptId: 'a1', operationId: 'acc', now: 3 }).record;
-  assert.equal(record.projection.state.variables[gainVariableId(action)], 'failed');
-  const again = gateAction(gateAction_('Passage NOW'), record.projection.state.variables, [
-    { name: 'renamed_later', instruction: 'A later table must not reinterpret history.', records: 'failed', final: false },
-    ...t.outcomes.slice(1),
-  ], { actorPolicy: 'player_favorable', playerActorId: 'player', currentSceneId: 1, settledGains: record.projection.state.settledGains });
-  assert.equal(again.kind, 'rules');
-  if (again.kind === 'rules') assert.equal(again.outcome.name, 'shut_out');
+  ] as const) record = applyEvent(record, event).record;
+  assert.equal(record.resolutions.r1!.outcome, 'shut_out');
+  assert.equal(record.resolutions.r1!.status, 'accepted');
+  assert.equal('projection' in record, false);
+  assert.equal('checkpoints' in record, false);
 });

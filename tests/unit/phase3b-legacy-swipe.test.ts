@@ -1,0 +1,23 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+const ROOT = new URL('../../', import.meta.url).href;
+const { harness, scriptJudge } = await import(ROOT + 'tests/unit/support/test-host.ts');
+const fixture = JSON.parse(readFileSync(new URL('./fixtures/legacy-071-ruled.json', import.meta.url), 'utf8'));
+test('3b/4: a genuine 0.7.1 ruled reply keeps its ruling without judging', async t => {
+const { host, controller } = await harness();
+host.context.chat = structuredClone(fixture.chat);
+host.context.chatMetadata = structuredClone(fixture.metadata);
+controller.settings.modules = { speaker: false, decisions: true, meters: false, secrets: false, lore: false } as any;
+controller.settings.reactions.enabled = false;
+await controller.loadChat();
+const requests = scriptJudge(controller, {});
+const message = host.chat().at(-1)!;
+message.swipe_id = message.swipes!.length;
+await host.emit('MESSAGE_SWIPED', host.chat().length - 1);
+await controller.interceptor([], 4096, () => assert.fail('abort'), 'swipe');
+t.after(() => controller.destroy());
+assert.equal(requests.length, 0);
+assert.match(host.injection, /Director ruling/);
+assert.equal((Object.values(controller.record!.resolutions).at(-1) as any).draw, (Object.values(fixture.metadata.rpDirector.resolutions).at(-1) as any).draw);
+});

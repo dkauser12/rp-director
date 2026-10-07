@@ -1,75 +1,64 @@
-/* RP Director — one compact play control, advanced tools on demand. */
-
-#rpd-bar {
-    display: flex;
-    flex-wrap: wrap;
-    flex-direction: column;
-    align-items: stretch;
-    gap: 4px;
-    padding: 4px 8px;
-    margin: 0 0 4px 0;
-    border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 8px;
-    background-color: var(--SmartThemeBlurTintColor);
-    font-size: calc(var(--mainFontSize) * 0.9);
+/* Director drawer, workspace, and message badges. */
+.rpd-hidden { display: none; }
+.rpd-status { display: inline-block; border: 1px solid var(--SmartThemeBorderColor); border-radius: 999px; padding: 2px 8px; font-size: .85em; margin-inline: 8px; }
+.rpd-status[data-tone="active"] { border-color: var(--SmartThemeQuoteColor); }
+.rpd-status[data-tone="warning"] { border-color: #d5a04b; }
+.rpd-status[data-tone="good"] { border-color: #6aab83; }
+#rpd-next-step { margin-block: 8px; }
+#rpd-open-menu { width: 100%; margin: 0; border: 0; text-align: start; }
+/* ST's wide/large defaults cap the dialog at 50%; own only this popup. */
+dialog.popup.rpd-workspace-dialog {
+  width: min(1100px, calc(100dvw - 2em));
+  height: min(820px, 90dvh);
+  max-width: calc(100dvw - 2em);
+  max-height: 90dvh;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
 }
-
-#rpd-bar.rpd-hidden {
-    display: none;
-}
-
-#rpd-bar .rpd-main,
-#rpd-overflow,
-#rpd-bar .rpd-inline {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex-wrap: wrap;
-}
-
-#rpd-bar select,
-#rpd-bar input[type="text"] {
-    max-width: 180px;
-}
-
-#rpd-bar .menu_button {
-    padding: 2px 8px;
-    margin: 0;
-}
-
-#rpd-bar .rpd-status {
-    padding: 2px 8px;
-    border-radius: 10px;
-    border: 1px solid var(--SmartThemeBorderColor);
-    white-space: nowrap;
-}
-
-#rpd-bar .rpd-status[data-state="Ready"] { opacity: 0.8; }
-#rpd-bar .rpd-status[data-state="Deciding"],
-#rpd-bar .rpd-status[data-state="Writing"] { border-color: var(--SmartThemeQuoteColor); }
-#rpd-bar .rpd-status[data-state="Frozen"] { border-color: var(--SmartThemeQuoteColor); font-weight: bold; }
-#rpd-bar .rpd-status[data-state="Provisional"] { border-color: orange; font-weight: bold; }
-#rpd-bar .rpd-status[data-state="Stale"],
-#rpd-bar .rpd-status[data-state="Error"] { border-color: red; }
-
-#rpd-bar .rpd-accept { border-color: var(--SmartThemeQuoteColor); }
-#rpd-bar .rpd-reject { border-color: red; }
-
-#rpd-overflow {
-    padding-top: 5px;
-    border-top: 1px dashed var(--SmartThemeBorderColor);
-}
-
-.rpd-hidden {
-    display: none;
-}
-
-#rpd-overflow.rpd-hidden {
-    display: none;
+.rpd-workspace-dialog :is(.popup-body, .popup-content) { min-width: 0; max-width: 100%; overflow-x: hidden; }
+.rpd-workspace { text-align: start; min-width: 0; width: 100%; max-width: 100%; box-sizing: border-box; }
+.rpd-workspace h2 { margin: 0 0 12px; }
+.rpd-tabs { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 8px; position: sticky; top: 0; z-index: 1; background: var(--SmartThemeBlurTintColor); }
+.rpd-tabs button { flex: 1 0 auto; white-space: nowrap; margin: 0; }
+.rpd-tabs button[aria-selected="true"] { border-color: var(--SmartThemeQuoteColor); font-weight: bold; }
+.rpd-workspace-body { min-height: 45vh; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.rpd-workspace [role="tabpanel"] { min-width: 0; max-width: 100%; }
+.rpd-workspace [hidden] { display: none !important; }
+.rpd-workspace :is(input, select, textarea, button) { max-width: 100%; }
+/* SillyTavern sizes .menu_button to min-content; under the body's overflow-wrap: anywhere
+   that is one letter wide. Size buttons to their label, and keep table labels whole. */
+.rpd-workspace-body .menu_button { width: fit-content; overflow-wrap: normal; }
+.rpd-workspace-body table :is(th, td) { overflow-wrap: normal; }
+.rpd-workspace button:focus-visible, .rpd-workflow-badge:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 2px; }
+.rpd-workspace pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.rpd-module { padding-block: 8px; border-bottom: 1px solid var(--SmartThemeBorderColor); }
+.rpd-module > span { display: block; font-size: .85em; }
+.rpd-module p { margin: 4px 0; }
+.rpd-activity-layout { display: grid; grid-template-columns: minmax(150px, 28%) minmax(0, 1fr); gap: 16px; }
+.rpd-activity-list { display: flex; flex-direction: column; gap: 5px; max-height: 65vh; overflow-y: auto; }
+.rpd-activity-list button { width: 100%; text-align: start; margin: 0; }
+.rpd-activity-list button[aria-pressed="true"] { border-color: var(--SmartThemeQuoteColor); }
+.rpd-activity-detail { min-width: 0; }
+#rpd-activity-back { display: none; }
+.rpd-turn-details section { border-top: 1px solid var(--SmartThemeBorderColor); padding-block: 8px; }
+.rpd-turn-details h3 { margin: 4px 0; }
+.rpd-turn-details p { margin: 6px 0; white-space: pre-wrap; }
+@media (max-width: 600px) {
+  .rpd-tabs { gap: 4px; }
+  .rpd-tabs button { padding-inline: 8px; }
+  .rpd-activity-layout { display: block; }
+  .rpd-activity-detail { display: none; }
+  .rpd-detail-open .rpd-activity-list { display: none; }
+  .rpd-detail-open .rpd-activity-detail { display: block; }
+  #rpd-activity-back { display: inline-block; }
+  #rpd-workspace .rpd-row { align-items: stretch; }
+  #rpd-workspace .rpd-row > :is(select.text_pole, input.text_pole) { max-width: 100%; }
 }
 
 /* Settings drawer */
-#rpd-settings .rpd-row {
+:is(#rpd-settings, #rpd-workspace) .rpd-row {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -77,20 +66,25 @@
     flex-wrap: wrap;
 }
 
-#rpd-settings .rpd-note {
+:is(#rpd-settings, #rpd-workspace) .rpd-row > button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+:is(#rpd-settings, #rpd-workspace) .rpd-note {
     margin: 6px 0 10px;
     padding: 8px 10px;
     border-left: 3px solid var(--SmartThemeQuoteColor);
     background: var(--black30a);
 }
 
-#rpd-settings .rpd-section {
+:is(#rpd-settings, #rpd-workspace) .rpd-section {
     margin-top: 10px;
     border-top: 1px solid var(--SmartThemeBorderColor);
     padding-top: 6px;
 }
 
-#rpd-settings .rpd-section > summary {
+:is(#rpd-settings, #rpd-workspace) .rpd-section > summary {
     cursor: pointer;
     padding: 4px 0;
 }
@@ -99,33 +93,33 @@
    every select/text input in a .rpd-row fill the whole row and push sibling
    buttons onto their own line. Bound it so labels, controls and buttons can
    share a line (or shrink gracefully) instead of always stacking. */
-#rpd-settings .rpd-row > select.text_pole,
-#rpd-settings .rpd-row > input.text_pole[type="text"],
-#rpd-settings .rpd-row > input.text_pole[type="password"] {
+:is(#rpd-settings, #rpd-workspace) .rpd-row > select.text_pole,
+:is(#rpd-settings, #rpd-workspace) .rpd-row > input.text_pole[type="text"],
+:is(#rpd-settings, #rpd-workspace) .rpd-row > input.text_pole[type="password"] {
     width: auto;
     flex: 1 1 160px;
     min-width: 120px;
     max-width: 260px;
 }
 
-#rpd-settings label {
+:is(#rpd-settings, #rpd-workspace) label {
     min-width: 140px;
 }
 
-#rpd-settings table.rpd-bands {
+:is(#rpd-settings, #rpd-workspace) table.rpd-bands {
     width: 100%;
     border-collapse: collapse;
     font-size: calc(var(--mainFontSize) * 0.85);
 }
 
-#rpd-settings table.rpd-bands td,
-#rpd-settings table.rpd-bands th {
+:is(#rpd-settings, #rpd-workspace) table.rpd-bands td,
+:is(#rpd-settings, #rpd-workspace) table.rpd-bands th {
     border: 1px solid var(--SmartThemeBorderColor);
     padding: 2px 4px;
     text-align: center;
 }
 
-#rpd-settings table.rpd-bands input {
+:is(#rpd-settings, #rpd-workspace) table.rpd-bands input {
     width: 60px;
     /* The "from"/"to"/weight number inputs in tableui.ts carry no class
        (unlike the name/threshold/records .text_pole inputs), so without this
@@ -136,32 +130,6 @@
     color: var(--SmartThemeBodyColor);
     border: 1px solid var(--SmartThemeBorderColor);
     border-radius: 5px;
-}
-
-#rpd-inspector {
-    max-height: 320px;
-    overflow: auto;
-    overflow-wrap: anywhere;
-    font-size: calc(var(--mainFontSize) * 0.8);
-    border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 6px;
-    padding: 6px;
-    background-color: var(--black30a);
-}
-
-#rpd-inspector .rpd-entry {
-    border-bottom: 1px dashed var(--SmartThemeBorderColor);
-    padding: 4px 0;
-}
-
-#rpd-inspector .rpd-entry summary {
-    cursor: pointer;
-}
-
-#rpd-inspector pre {
-    font-family: var(--monoFontFamily);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
 }
 
 .rpd-muted {
@@ -181,12 +149,14 @@
 
 #rpd-bands .rpd-table-scroll {
     overflow-x: auto;
+    min-width: 0;
+    max-width: 100%;
     padding-bottom: 4px;
 }
 
-#rpd-settings table.rpd-bands input[type="number"] { width: 70px; }
-#rpd-settings table.rpd-bands input[type="text"] { width: 120px; min-width: 90px; }
-#rpd-settings table.rpd-bands select { min-width: 110px; }
+:is(#rpd-settings, #rpd-workspace) table.rpd-bands input[type="number"] { width: 70px; }
+:is(#rpd-settings, #rpd-workspace) table.rpd-bands input[type="text"] { width: 120px; min-width: 90px; }
+:is(#rpd-settings, #rpd-workspace) table.rpd-bands select { min-width: 110px; }
 
 #rpd-bands .rpd-colhead {
     display: flex;
@@ -236,7 +206,7 @@
 #rpd-bands .rpd-table-result[data-status="info"] .rpd-result-head { font-weight: bold; }
 #rpd-bands .rpd-result-line { margin-top: 2px; }
 
-#rpd-settings table.rpd-bands textarea.rpd-instruction {
+:is(#rpd-settings, #rpd-workspace) table.rpd-bands textarea.rpd-instruction {
     width: 190px;
     min-width: 160px;
     font-size: calc(var(--mainFontSize) * 0.8);
@@ -245,13 +215,13 @@
 }
 
 #rpd-bands .rpd-meta td { vertical-align: top; }
-#rpd-bands input.rpd-final { width: auto; }
 
 /* Native ST popup content. Text is inserted with textContent, never model HTML. */
-.rpd-roll-review { text-align: left; }
-.rpd-roll-review section { padding: 0.8rem 0; border-top: 1px solid var(--SmartThemeBorderColor, #666); }
-.rpd-roll-review section p { margin: 0.45rem 0; }
-.rpd-manual-attempt { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; padding-block: 8px; }
+.rpd-workflow-popup { text-align: left; overflow-wrap: anywhere; }
+.rpd-workflow-popup section { padding: 0.8rem 0; border-top: 1px solid var(--SmartThemeBorderColor, #666); }
+.rpd-workflow-popup section p { margin: 0.45rem 0; }
+.rpd-workflow-badge { border-radius: 999px; width: fit-content; max-width: 100%; font-size: 0.85em; text-align: left; overflow-wrap: anywhere; }
+.rpd-manual-attempt { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); gap: 8px; padding-block: 8px; }
 .rpd-field { display: flex; flex-direction: column; gap: 4px; }
 
 #rpd-story .rpd-subhead { margin-top: 8px; font-weight: 600; }

@@ -16,7 +16,7 @@ test('OpenRouter Decisions provider sends the exact decision payload and normali
     model: '~typesafe/jev-latest',
     transport: async payload => {
       captured = payload;
-      return { model: 'typesafe/jev-1.13', answers: { gate: { type: 'noul', noul: 0.8 } }, usage: { input_tokens: 10, output_tokens: 2 } };
+      return { model: 'typesafe/jev-1.13', answers: { gate: { type: 'noul', noul: 0.8 } }, usage: { cost: 0.0012, input_tokens: 10, output_tokens: 2 } };
     },
   });
   const result = await provider.evaluate(request, new AbortController().signal);
@@ -25,6 +25,7 @@ test('OpenRouter Decisions provider sends the exact decision payload and normali
   assert.equal(result.returnedModel, 'typesafe/jev-1.13');
   assert.equal(result.answers.gate?.type, 'noul');
   assert.equal(result.inputTokens, 10);
+  assert.equal(result.costUsd, 0.0012);
 });
 
 test('OpenRouter Decisions provider rejects malformed plugin responses without fabricating answers', async () => {

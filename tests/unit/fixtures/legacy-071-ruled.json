@@ -1,0 +1,1470 @@
+{
+ "metadata": {
+  "rpDirector": {
+   "schemaVersion": 1,
+   "seedId": "char:guide.png:staged-test|",
+   "actors": {
+    "player": {
+     "actorId": "player",
+     "avatar": "persona",
+     "name": "Player",
+     "control": "user"
+    },
+    "guide-801abb": {
+     "actorId": "guide-801abb",
+     "avatar": "guide.png",
+     "name": "Guide",
+     "control": "npc"
+    }
+   },
+   "actions": {
+    "act_68282963cd4d4755": {
+     "actionId": "act_68282963cd4d4755",
+     "identityVersion": 2,
+     "templateId": "influence_negotiate",
+     "actingActorId": "player",
+     "playerActorId": "player",
+     "targetActorIds": [
+      "guide-801abb"
+     ],
+     "attemptedAction": "Open the gate for me.",
+     "requestedGain": "Open the gate for me.",
+     "applicability": "favorable",
+     "uncertainConsequential": true,
+     "opposed": false,
+     "resolutionScope": "attempt",
+     "sceneId": 1,
+     "persistentFactKey": "",
+     "failureStake": {
+      "kind": "other",
+      "detail": "Failure must move the scene without erasing established progress or inventing a disproportionate consequence."
+     },
+     "availableEvidence": "",
+     "preconditions": [],
+     "pipeline": "staged",
+     "move": {
+      "packId": "default",
+      "packVersion": 3,
+      "spanId": "s1",
+      "passage": "Open the gate for me.",
+      "antecedent": null,
+      "route": "DIRECT_ATTEMPT",
+      "familyKey": "influence_negotiate",
+      "ownerId": "player",
+      "targetId": "guide-801abb",
+      "specification": "SPECIFIED_HERE",
+      "count": "one"
+     }
+    },
+    "act_717bcdff49184f30": {
+     "actionId": "act_717bcdff49184f30",
+     "identityVersion": 2,
+     "templateId": "influence_negotiate",
+     "actingActorId": "player",
+     "playerActorId": "player",
+     "targetActorIds": [
+      "guide-801abb"
+     ],
+     "attemptedAction": "I push past the guard.",
+     "requestedGain": "I push past the guard.",
+     "applicability": "favorable",
+     "uncertainConsequential": true,
+     "opposed": false,
+     "resolutionScope": "attempt",
+     "sceneId": 1,
+     "persistentFactKey": "",
+     "failureStake": {
+      "kind": "other",
+      "detail": "Failure must move the scene without erasing established progress or inventing a disproportionate consequence."
+     },
+     "availableEvidence": "",
+     "preconditions": [],
+     "pipeline": "staged",
+     "move": {
+      "packId": "default",
+      "packVersion": 3,
+      "spanId": "s1",
+      "passage": "I push past the guard.",
+      "antecedent": null,
+      "route": "DIRECT_ATTEMPT",
+      "familyKey": "influence_negotiate",
+      "ownerId": "player",
+      "targetId": "guide-801abb",
+      "specification": "SPECIFIED_HERE",
+      "count": "one"
+     }
+    }
+   },
+   "resolutions": {
+    "res_a075b37db5214995": {
+     "resolutionId": "res_a075b37db5214995",
+     "previousResolutionId": null,
+     "actionId": "act_68282963cd4d4755",
+     "action": {
+      "actionId": "act_68282963cd4d4755",
+      "identityVersion": 2,
+      "templateId": "influence_negotiate",
+      "actingActorId": "player",
+      "playerActorId": "player",
+      "targetActorIds": [
+       "guide-801abb"
+      ],
+      "attemptedAction": "Open the gate for me.",
+      "requestedGain": "Open the gate for me.",
+      "applicability": "favorable",
+      "uncertainConsequential": true,
+      "opposed": false,
+      "resolutionScope": "attempt",
+      "sceneId": 1,
+      "persistentFactKey": "",
+      "failureStake": {
+       "kind": "other",
+       "detail": "Failure must move the scene without erasing established progress or inventing a disproportionate consequence."
+      },
+      "availableEvidence": "",
+      "preconditions": [],
+      "pipeline": "staged",
+      "move": {
+       "packId": "default",
+       "packVersion": 3,
+       "spanId": "s1",
+       "passage": "Open the gate for me.",
+       "antecedent": null,
+       "route": "DIRECT_ATTEMPT",
+       "familyKey": "influence_negotiate",
+       "ownerId": "player",
+       "targetId": "guide-801abb",
+       "specification": "SPECIFIED_HERE",
+       "count": "one"
+      }
+     },
+     "snapshot": {
+      "chatId": "char:guide.png:staged-test",
+      "cursorBefore": "c_c9e95141e22a08e1",
+      "stateRevision": 0,
+      "scopeId": "shared-public",
+      "profileRevision": "example-3.1.0",
+      "catalogRevision": "pack:default@3",
+      "actorBindingRevision": "guide-801abb",
+      "state": {
+       "actors": {
+        "player": {
+         "name": "Player",
+         "control": "user"
+        },
+        "guide-801abb": {
+         "name": "Guide",
+         "control": "npc",
+         "authorialCharacterContext": "A careful guide. GUIDE-CARD\n\ndry"
+        }
+       },
+       "playerActorId": "player",
+       "move": {
+        "owner": {
+         "id": "player",
+         "name": "Player"
+        },
+        "target": {
+         "id": "guide-801abb",
+         "name": "Guide"
+        },
+        "family": {
+         "key": "influence_negotiate",
+         "label": "Influence / negotiate"
+        },
+        "passage": "Open the gate for me.",
+        "antecedent": null
+       },
+       "latestInput": "Open the gate for me.",
+       "facts": {},
+       "recentAcceptedMessages": [
+        {
+         "actorId": "player",
+         "role": "user",
+         "text": "We reach the gate."
+        },
+        {
+         "actorId": "guide-801abb",
+         "role": "assistant",
+         "text": "The gate remains shut. \"State your business, or wait until dawn.\""
+        }
+       ]
+      }
+     },
+     "assessment": {
+      "type": "noul",
+      "noul": 0.45,
+      "confidence": null,
+      "provenance": "fixture"
+     },
+     "decisionSource": "provider",
+     "policyRevision": "example-3.1.0",
+     "policyBand": {
+      "id": "b1",
+      "lowerInclusive": 0.25,
+      "upper": 0.5,
+      "upperInclusive": false,
+      "thresholdOutcome": "deferred",
+      "sampleWeights": {
+       "deferred": 0.7,
+       "progress_only": 0.25,
+       "achieved": 0.05
+      }
+     },
+     "method": "threshold",
+     "draw": null,
+     "outcome": "deferred",
+     "status": "accepted",
+     "cursorBefore": "c_561eaff389757cb6",
+     "generation": 1,
+     "providerKind": "mock",
+     "requestedModel": null,
+     "returnedModel": "fixture",
+     "createdAt": 1790674307909,
+     "outcomeInstruction": "This attempt does not deliver the requested gain in this reply. Do not grant it, imply it was granted, or hand it over in an aside. Questioning, waiting, conditions, a price, or pointing to another route are all fine. Everything {{player}} had already earned stays intact; only this new request is not fulfilled now.",
+     "outcomeRecords": "",
+     "outcomeFinal": false
+    },
+    "res_349c6fe3fe024c28": {
+     "resolutionId": "res_349c6fe3fe024c28",
+     "previousResolutionId": null,
+     "actionId": "act_717bcdff49184f30",
+     "action": {
+      "actionId": "act_717bcdff49184f30",
+      "identityVersion": 2,
+      "templateId": "influence_negotiate",
+      "actingActorId": "player",
+      "playerActorId": "player",
+      "targetActorIds": [
+       "guide-801abb"
+      ],
+      "attemptedAction": "I push past the guard.",
+      "requestedGain": "I push past the guard.",
+      "applicability": "favorable",
+      "uncertainConsequential": true,
+      "opposed": false,
+      "resolutionScope": "attempt",
+      "sceneId": 1,
+      "persistentFactKey": "",
+      "failureStake": {
+       "kind": "other",
+       "detail": "Failure must move the scene without erasing established progress or inventing a disproportionate consequence."
+      },
+      "availableEvidence": "",
+      "preconditions": [],
+      "pipeline": "staged",
+      "move": {
+       "packId": "default",
+       "packVersion": 3,
+       "spanId": "s1",
+       "passage": "I push past the guard.",
+       "antecedent": null,
+       "route": "DIRECT_ATTEMPT",
+       "familyKey": "influence_negotiate",
+       "ownerId": "player",
+       "targetId": "guide-801abb",
+       "specification": "SPECIFIED_HERE",
+       "count": "one"
+      }
+     },
+     "snapshot": {
+      "chatId": "char:guide.png:staged-test",
+      "cursorBefore": "c_7010c453f98e0f9d",
+      "stateRevision": 1,
+      "scopeId": "shared-public",
+      "profileRevision": "example-3.1.0",
+      "catalogRevision": "pack:default@3",
+      "actorBindingRevision": "guide-801abb",
+      "state": {
+       "actors": {
+        "player": {
+         "name": "Player",
+         "control": "user"
+        },
+        "guide-801abb": {
+         "name": "Guide",
+         "control": "npc",
+         "authorialCharacterContext": "A careful guide. GUIDE-CARD\n\ndry"
+        }
+       },
+       "playerActorId": "player",
+       "move": {
+        "owner": {
+         "id": "player",
+         "name": "Player"
+        },
+        "target": {
+         "id": "guide-801abb",
+         "name": "Guide"
+        },
+        "family": {
+         "key": "influence_negotiate",
+         "label": "Influence / negotiate"
+        },
+        "passage": "I push past the guard.",
+        "antecedent": null
+       },
+       "latestInput": "I push past the guard.",
+       "facts": {},
+       "recentAcceptedMessages": [
+        {
+         "actorId": "player",
+         "role": "user",
+         "text": "We reach the gate."
+        },
+        {
+         "actorId": "guide-801abb",
+         "role": "assistant",
+         "text": "The gate remains shut. \"State your business, or wait until dawn.\""
+        },
+        {
+         "actorId": "player",
+         "role": "user",
+         "text": "Open the gate for me."
+        },
+        {
+         "actorId": "guide-801abb",
+         "role": "assistant",
+         "text": "Reply 1."
+        }
+       ]
+      }
+     },
+     "assessment": {
+      "type": "noul",
+      "noul": 0.45,
+      "confidence": null,
+      "provenance": "fixture"
+     },
+     "decisionSource": "provider",
+     "policyRevision": "example-3.1.0",
+     "policyBand": {
+      "id": "b1",
+      "lowerInclusive": 0.25,
+      "upper": 0.5,
+      "upperInclusive": false,
+      "thresholdOutcome": "deferred",
+      "sampleWeights": {
+       "deferred": 0.7,
+       "progress_only": 0.25,
+       "achieved": 0.05
+      }
+     },
+     "method": "threshold",
+     "draw": null,
+     "outcome": "deferred",
+     "status": "prepared",
+     "cursorBefore": "c_e95ef4ab28ace1c2",
+     "generation": 1,
+     "providerKind": "mock",
+     "requestedModel": null,
+     "returnedModel": "fixture",
+     "createdAt": 1790674307922,
+     "outcomeInstruction": "This attempt does not deliver the requested gain in this reply. Do not grant it, imply it was granted, or hand it over in an aside. Questioning, waiting, conditions, a price, or pointing to another route are all fine. Everything {{player}} had already earned stays intact; only this new request is not fulfilled now.",
+     "outcomeRecords": "",
+     "outcomeFinal": false
+    }
+   },
+   "permits": {},
+   "attempts": {
+    "att_742f55e396a74fe1": {
+     "attemptId": "att_742f55e396a74fe1",
+     "resolutionId": "res_a075b37db5214995",
+     "permitId": null,
+     "reaction": null,
+     "actorId": "guide-801abb",
+     "cursorBefore": "c_561eaff389757cb6",
+     "status": "accepted",
+     "generationType": "normal",
+     "hostMessageRef": 3,
+     "hostVariantRef": 0,
+     "variantId": "var_6d675370180c4364",
+     "injectedText": "[Director ruling — binding for this reply]\nThis declared exchange is already adjudicated. Do not roll dice or run another check for it; other dice systems apply only to separate, undeclared actions.\nActing character: Player.\nAttempt (influence negotiate): Open the gate for me.\nBounded intended result: Open the gate for me.\nFailure-stakes boundary: other — Failure must move the scene without erasing established progress or inventing a disproportionate consequence. Do not invent a larger consequence than this boundary permits.\nResolution scope: attempt.\nRuling: deferred.\nThis attempt does not deliver the requested gain in this reply. Do not grant it, imply it was granted, or hand it over in an aside. Questioning, waiting, conditions, a price, or pointing to another route are all fine. Everything Player had already earned stays intact; only this new request is not fulfilled now.\nDo not invent and resolve a new uncertain consequential NPC skill action in this same reply. NPCs may react, apply already-established capabilities, create pressure, or set up a later contest, but a new uncertain NPC attempt must remain unresolved for a future turn.\nReply as Guide. Do not write voluntary actions, speech, thoughts, feelings, consent, or decisions for Player; when an NPC acts against the player, describe only what reaches or is imposed on the player's body and leave the player's reaction open.\n\n[Director NPC-action boundary]\nFunction tools are unavailable on this writer backend. Write the final prose directly. You may react, apply established capabilities, or set up pressure, but leave any newly invented uncertain consequential NPC action unresolved.",
+     "epoch": 0,
+     "unadjudicated": false,
+     "toolStatus": "not_offered",
+     "toolError": null,
+     "createdAt": 1790674307909,
+     "loreCursor": null
+    },
+    "att_1c498d36e5fe4490": {
+     "attemptId": "att_1c498d36e5fe4490",
+     "resolutionId": "res_349c6fe3fe024c28",
+     "permitId": null,
+     "reaction": null,
+     "actorId": "guide-801abb",
+     "cursorBefore": "c_e95ef4ab28ace1c2",
+     "status": "provisional",
+     "generationType": "normal",
+     "hostMessageRef": 5,
+     "hostVariantRef": 0,
+     "variantId": "var_3b64641bfcc541e0",
+     "injectedText": "[Director ruling — binding for this reply]\nThis declared exchange is already adjudicated. Do not roll dice or run another check for it; other dice systems apply only to separate, undeclared actions.\nActing character: Player.\nAttempt (influence negotiate): I push past the guard.\nBounded intended result: I push past the guard.\nFailure-stakes boundary: other — Failure must move the scene without erasing established progress or inventing a disproportionate consequence. Do not invent a larger consequence than this boundary permits.\nResolution scope: attempt.\nRuling: deferred.\nThis attempt does not deliver the requested gain in this reply. Do not grant it, imply it was granted, or hand it over in an aside. Questioning, waiting, conditions, a price, or pointing to another route are all fine. Everything Player had already earned stays intact; only this new request is not fulfilled now.\nDo not invent and resolve a new uncertain consequential NPC skill action in this same reply. NPCs may react, apply already-established capabilities, create pressure, or set up a later contest, but a new uncertain NPC attempt must remain unresolved for a future turn.\nReply as Guide. Do not write voluntary actions, speech, thoughts, feelings, consent, or decisions for Player; when an NPC acts against the player, describe only what reaches or is imposed on the player's body and leave the player's reaction open.\n\n[Director NPC-action boundary]\nFunction tools are unavailable on this writer backend. Write the final prose directly. You may react, apply established capabilities, or set up pressure, but leave any newly invented uncertain consequential NPC action unresolved.",
+     "epoch": 0,
+     "unadjudicated": false,
+     "toolStatus": "not_offered",
+     "toolError": null,
+     "createdAt": 1790674307922,
+     "loreCursor": null
+    }
+   },
+   "variants": {
+    "var_6d675370180c4364": {
+     "variantId": "var_6d675370180c4364",
+     "attemptId": "att_742f55e396a74fe1",
+     "resolutionId": "res_a075b37db5214995",
+     "permitId": null,
+     "actorId": "guide-801abb",
+     "cursorBefore": "c_561eaff389757cb6",
+     "cursorAfter": "c_7010c453f98e0f9d",
+     "acceptance": "accepted",
+     "observerStatus": "ready",
+     "observation": {
+      "schemaVersion": 1,
+      "requestId": "obsreq_d879e8785c4f4e0c",
+      "attemptId": "att_742f55e396a74fe1",
+      "variantId": "var_6d675370180c4364",
+      "baseCursor": "c_561eaff389757cb6",
+      "cursorAfter": "c_7010c453f98e0f9d",
+      "stateRevision": 0,
+      "realizedResolutionIds": [
+       "res_a075b37db5214995"
+      ],
+      "operations": [],
+      "unresolved": [],
+      "providerKind": "local",
+      "requestedModel": null,
+      "returnedModel": null,
+      "durationMs": 0,
+      "inputTokens": null,
+      "outputTokens": null
+     },
+     "observerError": null
+    },
+    "var_3b64641bfcc541e0": {
+     "variantId": "var_3b64641bfcc541e0",
+     "attemptId": "att_1c498d36e5fe4490",
+     "resolutionId": "res_349c6fe3fe024c28",
+     "permitId": null,
+     "actorId": "guide-801abb",
+     "cursorBefore": "c_e95ef4ab28ace1c2",
+     "cursorAfter": "c_7b39477ee6b670c0",
+     "acceptance": "pending",
+     "observerStatus": "ready",
+     "observation": {
+      "schemaVersion": 1,
+      "requestId": "obsreq_1d0490bf5ce94e12",
+      "attemptId": "att_1c498d36e5fe4490",
+      "variantId": "var_3b64641bfcc541e0",
+      "baseCursor": "c_e95ef4ab28ace1c2",
+      "cursorAfter": "c_7b39477ee6b670c0",
+      "stateRevision": 1,
+      "realizedResolutionIds": [
+       "res_349c6fe3fe024c28"
+      ],
+      "operations": [],
+      "unresolved": [],
+      "providerKind": "local",
+      "requestedModel": null,
+      "returnedModel": null,
+      "durationMs": 0,
+      "inputTokens": null,
+      "outputTokens": null
+     },
+     "observerError": null
+    }
+   },
+   "checkpoints": {
+    "c_c9e95141e22a08e1": {
+     "cursor": "c_c9e95141e22a08e1",
+     "parentCursor": null,
+     "stateAfter": {
+      "revision": 0,
+      "variables": {},
+      "settledGains": {},
+      "unresolvedVariableIds": [],
+      "elapsedSeconds": 0,
+      "timeQuality": "unresolved",
+      "sceneId": 1,
+      "sceneReplyCount": 0,
+      "positions": {},
+      "notifiedDeadlineIds": [],
+      "acceptedResolutionIds": [],
+      "acceptedPermitIds": [],
+      "itemOwners": {},
+      "conditions": {},
+      "knownFacts": {},
+      "revealedSecrets": {},
+      "lastObservedCursor": "",
+      "trackingStatus": "current"
+     },
+     "variantId": null,
+     "acceptedResolutionId": null,
+     "observationOperationIds": []
+    },
+    "c_561eaff389757cb6": {
+     "cursor": "c_561eaff389757cb6",
+     "parentCursor": "c_c9e95141e22a08e1",
+     "stateAfter": {
+      "revision": 0,
+      "variables": {},
+      "settledGains": {},
+      "unresolvedVariableIds": [],
+      "elapsedSeconds": 0,
+      "timeQuality": "unresolved",
+      "sceneId": 1,
+      "sceneReplyCount": 0,
+      "positions": {},
+      "notifiedDeadlineIds": [],
+      "acceptedResolutionIds": [],
+      "acceptedPermitIds": [],
+      "itemOwners": {},
+      "conditions": {},
+      "knownFacts": {},
+      "revealedSecrets": {},
+      "lastObservedCursor": "",
+      "trackingStatus": "current"
+     },
+     "variantId": null,
+     "acceptedResolutionId": null,
+     "observationOperationIds": []
+    },
+    "c_7010c453f98e0f9d": {
+     "cursor": "c_7010c453f98e0f9d",
+     "parentCursor": "c_561eaff389757cb6",
+     "stateAfter": {
+      "revision": 1,
+      "variables": {},
+      "settledGains": {},
+      "unresolvedVariableIds": [],
+      "elapsedSeconds": 0,
+      "timeQuality": "unresolved",
+      "sceneId": 1,
+      "sceneReplyCount": 1,
+      "positions": {},
+      "notifiedDeadlineIds": [],
+      "acceptedResolutionIds": [
+       "res_a075b37db5214995"
+      ],
+      "acceptedPermitIds": [],
+      "itemOwners": {},
+      "conditions": {},
+      "knownFacts": {},
+      "revealedSecrets": {},
+      "lastObservedCursor": "c_7010c453f98e0f9d",
+      "trackingStatus": "current"
+     },
+     "variantId": "var_6d675370180c4364",
+     "acceptedResolutionId": "res_a075b37db5214995",
+     "observationOperationIds": []
+    },
+    "c_e95ef4ab28ace1c2": {
+     "cursor": "c_e95ef4ab28ace1c2",
+     "parentCursor": "c_7010c453f98e0f9d",
+     "stateAfter": {
+      "revision": 1,
+      "variables": {},
+      "settledGains": {},
+      "unresolvedVariableIds": [],
+      "elapsedSeconds": 0,
+      "timeQuality": "unresolved",
+      "sceneId": 1,
+      "sceneReplyCount": 1,
+      "positions": {},
+      "notifiedDeadlineIds": [],
+      "acceptedResolutionIds": [
+       "res_a075b37db5214995"
+      ],
+      "acceptedPermitIds": [],
+      "itemOwners": {},
+      "conditions": {},
+      "knownFacts": {},
+      "revealedSecrets": {},
+      "lastObservedCursor": "c_7010c453f98e0f9d",
+      "trackingStatus": "current"
+     },
+     "variantId": null,
+     "acceptedResolutionId": null,
+     "observationOperationIds": []
+    }
+   },
+   "appliedOperationIds": [
+    "complete:att_742f55e396a74fe1:3:0",
+    "commit-observation:var_6d675370180c4364",
+    "complete:att_1c498d36e5fe4490:5:0"
+   ],
+   "pending": null,
+   "projection": {
+    "cursor": "c_7b39477ee6b670c0",
+    "state": {
+     "revision": 1,
+     "variables": {},
+     "settledGains": {},
+     "unresolvedVariableIds": [],
+     "elapsedSeconds": 0,
+     "timeQuality": "unresolved",
+     "sceneId": 1,
+     "sceneReplyCount": 1,
+     "positions": {},
+     "notifiedDeadlineIds": [],
+     "acceptedResolutionIds": [
+      "res_a075b37db5214995"
+     ],
+     "acceptedPermitIds": [],
+     "itemOwners": {},
+     "conditions": {},
+     "knownFacts": {},
+     "revealedSecrets": {},
+     "lastObservedCursor": "c_7010c453f98e0f9d",
+     "trackingStatus": "current"
+    },
+    "status": "provisional",
+    "reason": "variant var_3b64641bfcc541e0 is observed and awaits implicit acceptance"
+   },
+   "inspector": [
+    {
+     "id": "ins_913ee90e59b34413",
+     "at": 1790674307907,
+     "epoch": 0,
+     "attemptId": null,
+     "resolutionId": null,
+     "actionId": null,
+     "applicability": null,
+     "questions": null,
+     "stateSent": null,
+     "answers": null,
+     "speaker": null,
+     "policyBandId": null,
+     "draw": null,
+     "outcome": null,
+     "injectedText": null,
+     "providerKind": null,
+     "requestedModel": null,
+     "returnedModel": null,
+     "durationMs": null,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "info",
+     "message": "Baseline set at the current transcript head. Earlier state was not reconstructed."
+    },
+    {
+     "id": "ins_0f2ec99f62f2469b",
+     "at": 1790674307909,
+     "epoch": 0,
+     "attemptId": "att_742f55e396a74fe1",
+     "resolutionId": "res_a075b37db5214995",
+     "actionId": "act_68282963cd4d4755",
+     "applicability": "favorable",
+     "questions": {
+      "move": {
+       "type": "choice",
+       "instructions": "Using state.latestInput and the public exchange in state.recentAcceptedMessages, select the passage of the player's latest message that states the FIRST move to rule on. A move to rule on is: An attempt to change the situation where failure is genuinely possible and would materially change what happens: overcoming an obstacle, contesting opposition, evading, concealing or deceiving, discovering a hidden fact, pressing someone for specific conduct, or securing access, information, possession or a commitment. An explicit hand-off: the player invites, orders or dares a character to act, or gives them the initiative. It is not: Ordinary conversation, the player's own feelings, wants or decisions, observation, out-of-character remarks, trivial activity, and anything the scene has already settled. Actions that are routine or effectively certain for whoever performs them, such as a ruler's everyday command to their own servants or a practised task done in calm conditions. Prefer the shortest passage that states the whole move; choose a longer one only when the move runs across it. Choose ROUTINE when the message only contains actions that are routine or effectively certain for whoever performs them, and NONE when it contains no attempt at all. Do not invent a goal the passage does not state.",
+       "criteria": {
+        "s1": "Open the gate for me.",
+        "ROUTINE": "The message does act, but everything in it is routine or effectively certain for whoever performs it; nothing needs a ruling.",
+        "NONE": "No passage of the latest message contains a move to rule on."
+       }
+      },
+      "move_count": {
+       "type": "choice",
+       "instructions": "How many separate moves to rule on does the player's latest message (state.latestInput) contain? A move to rule on is: An attempt to change the situation where failure is genuinely possible and would materially change what happens: overcoming an obstacle, contesting opposition, evading, concealing or deceiving, discovering a hidden fact, pressing someone for specific conduct, or securing access, information, possession or a commitment. An explicit hand-off: the player invites, orders or dares a character to act, or gives them the initiative. It is not: Ordinary conversation, the player's own feelings, wants or decisions, observation, out-of-character remarks, trivial activity, and anything the scene has already settled. Actions that are routine or effectively certain for whoever performs them, such as a ruler's everyday command to their own servants or a practised task done in calm conditions. Steps toward one goal, and routine or certain actions along the way, are part of one move. Count multiple only when two or more moves would each need their own ruling.",
+       "criteria": {
+        "one": "At most one such move.",
+        "multiple": "Two or more separate moves, each of which would need its own ruling."
+       }
+      },
+      "owner": {
+       "type": "choice",
+       "instructions": "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange. Who is making this move? For a request, persuasion, pressure, a bargain or a threat, the owner is whoever is asking or pressing (usually the player), and the target is the one being asked. A character is the owner only when the player gives that character a task to carry out with their own abilities (an order or a dare, such as \"pick that lock\") or hands them the initiative (such as \"go ahead, make me\"). Choose UNRESOLVED if the passage and the public exchange do not show it.",
+       "criteria": {
+        "player": "Player (the player)",
+        "guide-801abb": "Guide",
+        "UNRESOLVED": "The owner cannot be told from the passage and the public exchange."
+       }
+      },
+      "target": {
+       "type": "choice",
+       "instructions": "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange. Whom does the proposed action act on, or seek something from? SELF means the owner themselves. SEVERAL means more than one of these characters at once. SCENE means the surroundings, an object, someone not listed, or no one in particular. Choose UNRESOLVED if it cannot be told.",
+       "criteria": {
+        "player": "Player (the player)",
+        "guide-801abb": "Guide",
+        "SELF": "The owner themselves.",
+        "SEVERAL": "More than one of these characters at once.",
+        "SCENE": "The surroundings, an object, someone not listed, or no one in particular.",
+        "UNRESOLVED": "The target cannot be told."
+       }
+      },
+      "family": {
+       "type": "choice",
+       "instructions": "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange. Which kind of move is it? Choose by what the move tries to change, not by its tone.",
+       "criteria": {
+        "overcome_operate": "Overcome / operate: Overcome an obstacle, or operate, repair, treat, craft, break or create something.",
+        "contest_impose": "Contest / impose: Actively overcome opposition: attack, grapple, restrain, seize, interrupt, force or outmanoeuvre.",
+        "evade_resist": "Evade / resist: Escape, dodge, withstand, keep control, or avoid an imposed consequence.",
+        "conceal_deceive": "Conceal / deceive: Lie, hide, sneak, take something unnoticed, disguise, misdirect or keep up an alibi.",
+        "detect_discover": "Detect / discover: Notice, search, investigate, read a tell, catch a lie, or establish a hidden fact from visible cues.",
+        "influence_negotiate": "Influence / negotiate: Seek one specific, immediate conduct from someone through a request, bargain, argument, threat or pressure.",
+        "acquire_secure": "Acquire / secure: Secure bounded access, information, possession, permission or a commitment.",
+        "UNSUPPORTED": "None of these kinds of move fits the passage."
+       }
+      },
+      "action_specification": {
+       "type": "choice",
+       "instructions": "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange. Does the passage say what the owner should do or achieve?",
+       "criteria": {
+        "SPECIFIED_HERE": "The passage itself states the action or result.",
+        "SPECIFIED_BY_PUBLIC_REFERENCE": "The passage points to an action already stated in the public exchange, such as terms, an offer, a plan or a condition someone set.",
+        "UNSPECIFIED_INITIATIVE": "The passage hands the owner the initiative without saying what to do, such as \"go ahead\", \"make me\" or \"your call\".",
+        "UNRESOLVED": "It cannot be told."
+       }
+      },
+      "antecedent": {
+       "type": "choice",
+       "instructions": "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange. If the passage refers back to something said or offered earlier in the public exchange (for example \"the terms you set\" or \"what you offered\"), select that earlier passage. Choose NONE if it refers to nothing earlier.",
+       "criteria": {
+        "a1": "The gate remains shut.",
+        "a2": "\"State your business, or wait until dawn.\"",
+        "NONE": "The passage does not refer back to an earlier passage.",
+        "UNRESOLVED": "It refers back, but the earlier passage cannot be identified."
+       }
+      },
+      "ruling": {
+       "type": "noul",
+       "instructions": "Using only the admissible evidence in state, will the owner (state.move.owner), attempting the change proposed in state.move.passage on the target (state.move.target), achieve that specified change within this exchange? The target chooses the specified conduct now, given their established interests, boundaries and leverage; what the player says or offers is evidence about how the target may respond. Speech is evidence when it changes the target's options or the ruled situation. Do not infer success from the attempt being declared. Do not substitute a different goal or a later opportunity. The player's voluntary speech, actions, feelings, consent and decisions are the player's own; never decide them. Do not assume feelings, attraction, trust or willingness beyond what the supplied evidence shows.",
+       "criteria": {
+        "true": "The specified change happens within this exchange.",
+        "false": "The specified change does not happen within this exchange."
+       }
+      }
+     },
+     "stateSent": {
+      "actors": {
+       "player": {
+        "name": "Player",
+        "control": "user"
+       },
+       "guide-801abb": {
+        "name": "Guide",
+        "control": "npc",
+        "authorialCharacterContext": "A careful guide. GUIDE-CARD\n\ndry"
+       }
+      },
+      "playerActorId": "player",
+      "move": {
+       "owner": {
+        "id": "player",
+        "name": "Player"
+       },
+       "target": {
+        "id": "guide-801abb",
+        "name": "Guide"
+       },
+       "family": {
+        "key": "influence_negotiate",
+        "label": "Influence / negotiate"
+       },
+       "passage": "Open the gate for me.",
+       "antecedent": null
+      },
+      "latestInput": "Open the gate for me.",
+      "facts": {},
+      "recentAcceptedMessages": [
+       {
+        "actorId": "player",
+        "role": "user",
+        "text": "We reach the gate."
+       },
+       {
+        "actorId": "guide-801abb",
+        "role": "assistant",
+        "text": "The gate remains shut. \"State your business, or wait until dawn.\""
+       }
+      ]
+     },
+     "answers": {
+      "move": {
+       "type": "choice",
+       "choice": "s1",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "move_count": {
+       "type": "choice",
+       "choice": "one",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "owner": {
+       "type": "choice",
+       "choice": "player",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "target": {
+       "type": "choice",
+       "choice": "guide-801abb",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "family": {
+       "type": "choice",
+       "choice": "influence_negotiate",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "action_specification": {
+       "type": "choice",
+       "choice": "SPECIFIED_HERE",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "antecedent": {
+       "type": "choice",
+       "choice": "NONE",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "ruling": {
+       "type": "noul",
+       "noul": 0.45,
+       "confidence": null,
+       "provenance": "fixture"
+      }
+     },
+     "speaker": {
+      "questionId": null,
+      "eligibleActorIds": [
+       "guide-801abb"
+      ],
+      "raw": null,
+      "adjusted": null,
+      "selected": "guide-801abb",
+      "source": "single",
+      "tieBroken": false
+     },
+     "policyBandId": "b1",
+     "draw": null,
+     "outcome": "deferred",
+     "injectedText": "[Director ruling — binding for this reply]\nThis declared exchange is already adjudicated. Do not roll dice or run another check for it; other dice systems apply only to separate, undeclared actions.\nActing character: Player.\nAttempt (influence negotiate): Open the gate for me.\nBounded intended result: Open the gate for me.\nFailure-stakes boundary: other — Failure must move the scene without erasing established progress or inventing a disproportionate consequence. Do not invent a larger consequence than this boundary permits.\nResolution scope: attempt.\nRuling: deferred.\nThis attempt does not deliver the requested gain in this reply. Do not grant it, imply it was granted, or hand it over in an aside. Questioning, waiting, conditions, a price, or pointing to another route are all fine. Everything Player had already earned stays intact; only this new request is not fulfilled now.\nDo not invent and resolve a new uncertain consequential NPC skill action in this same reply. NPCs may react, apply already-established capabilities, create pressure, or set up a later contest, but a new uncertain NPC attempt must remain unresolved for a future turn.\nReply as Guide. Do not write voluntary actions, speech, thoughts, feelings, consent, or decisions for Player; when an NPC acts against the player, describe only what reaches or is imposed on the player's body and leave the player's reaction open.\n\n[Director NPC-action boundary]\nFunction tools are unavailable on this writer backend. Write the final prose directly. You may react, apply established capabilities, or set up pressure, but leave any newly invented uncertain consequential NPC action unresolved.",
+     "providerKind": "mock",
+     "requestedModel": null,
+     "returnedModel": "fixture",
+     "durationMs": 1,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "director_send",
+     "message": "Frozen deferred (threshold, band b1) for Player; reply speaker Guide. Staged: \"Open the gate for me.\" (direct attempt, influence_negotiate, owner Player, target Guide, P=0.45); 3 requests."
+    },
+    {
+     "id": "ins_9dda8410f82c4381",
+     "at": 1790674307921,
+     "epoch": 0,
+     "attemptId": "att_742f55e396a74fe1",
+     "resolutionId": "res_a075b37db5214995",
+     "actionId": null,
+     "applicability": null,
+     "questions": null,
+     "stateSent": {
+      "schemaVersion": 1,
+      "requestId": "obsreq_d879e8785c4f4e0c",
+      "attemptId": "att_742f55e396a74fe1",
+      "variantId": "var_6d675370180c4364",
+      "baseCursor": "c_561eaff389757cb6",
+      "cursorAfter": "c_7010c453f98e0f9d",
+      "stateRevision": 0,
+      "acceptedSpan": {
+       "id": "span:var_6d675370180c4364",
+       "actorId": "guide-801abb",
+       "role": "assistant",
+       "text": "Reply 1.",
+       "accepted": true
+      },
+      "expectedResolutionIds": [
+       "res_a075b37db5214995"
+      ],
+      "expectedRulings": [
+       {
+        "resolutionId": "res_a075b37db5214995",
+        "actingActorId": "player",
+        "boundedResult": "Open the gate for me.",
+        "outcome": "deferred",
+        "instruction": "This attempt does not deliver the requested gain in this reply. Do not grant it, imply it was granted, or hand it over in an aside. Questioning, waiting, conditions, a price, or pointing to another route are all fine. Everything Player had already earned stays intact; only this new request is not fulfilled now."
+       }
+      ],
+      "permit": null,
+      "priorState": {
+       "revision": 0,
+       "variables": {},
+       "settledGains": {},
+       "unresolvedVariableIds": [],
+       "elapsedSeconds": 0,
+       "timeQuality": "unresolved",
+       "sceneId": 1,
+       "sceneReplyCount": 0,
+       "positions": {},
+       "notifiedDeadlineIds": [],
+       "acceptedResolutionIds": [],
+       "acceptedPermitIds": [],
+       "itemOwners": {},
+       "conditions": {},
+       "knownFacts": {},
+       "revealedSecrets": {},
+       "lastObservedCursor": "",
+       "trackingStatus": "current"
+      },
+      "registry": {
+       "actorIds": [
+        "guide-801abb",
+        "player"
+       ],
+       "placeIds": [],
+       "itemIds": [],
+       "conditionIds": [
+        "exposed",
+        "hidden",
+        "injured",
+        "restrained",
+        "unconscious"
+       ],
+       "factIds": [
+        "res_a075b37db5214995"
+       ],
+       "secretIds": []
+      }
+     },
+     "answers": null,
+     "speaker": null,
+     "policyBandId": null,
+     "draw": null,
+     "outcome": null,
+     "injectedText": null,
+     "providerKind": null,
+     "requestedModel": null,
+     "returnedModel": null,
+     "durationMs": 0,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "observer",
+     "message": "Observed reply: 1 realized ruling, 0 factual operations."
+    },
+    {
+     "id": "ins_23eaaa0edcb7422b",
+     "at": 1790674307921,
+     "epoch": 0,
+     "attemptId": "att_742f55e396a74fe1",
+     "resolutionId": "res_a075b37db5214995",
+     "actionId": null,
+     "applicability": null,
+     "questions": null,
+     "stateSent": null,
+     "answers": null,
+     "speaker": null,
+     "policyBandId": null,
+     "draw": null,
+     "outcome": null,
+     "injectedText": null,
+     "providerKind": null,
+     "requestedModel": null,
+     "returnedModel": null,
+     "durationMs": null,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "acceptance",
+     "message": "Implicitly accepted selected reply on next Director turn; observer deltas committed once."
+    },
+    {
+     "id": "ins_a04b28c222ce4462",
+     "at": 1790674307922,
+     "epoch": 0,
+     "attemptId": "att_1c498d36e5fe4490",
+     "resolutionId": "res_349c6fe3fe024c28",
+     "actionId": "act_717bcdff49184f30",
+     "applicability": "favorable",
+     "questions": {
+      "move": {
+       "type": "choice",
+       "instructions": "Using state.latestInput and the public exchange in state.recentAcceptedMessages, select the passage of the player's latest message that states the FIRST move to rule on. A move to rule on is: An attempt to change the situation where failure is genuinely possible and would materially change what happens: overcoming an obstacle, contesting opposition, evading, concealing or deceiving, discovering a hidden fact, pressing someone for specific conduct, or securing access, information, possession or a commitment. An explicit hand-off: the player invites, orders or dares a character to act, or gives them the initiative. It is not: Ordinary conversation, the player's own feelings, wants or decisions, observation, out-of-character remarks, trivial activity, and anything the scene has already settled. Actions that are routine or effectively certain for whoever performs them, such as a ruler's everyday command to their own servants or a practised task done in calm conditions. Prefer the shortest passage that states the whole move; choose a longer one only when the move runs across it. Choose ROUTINE when the message only contains actions that are routine or effectively certain for whoever performs them, and NONE when it contains no attempt at all. Do not invent a goal the passage does not state.",
+       "criteria": {
+        "s1": "I push past the guard.",
+        "ROUTINE": "The message does act, but everything in it is routine or effectively certain for whoever performs it; nothing needs a ruling.",
+        "NONE": "No passage of the latest message contains a move to rule on."
+       }
+      },
+      "move_count": {
+       "type": "choice",
+       "instructions": "How many separate moves to rule on does the player's latest message (state.latestInput) contain? A move to rule on is: An attempt to change the situation where failure is genuinely possible and would materially change what happens: overcoming an obstacle, contesting opposition, evading, concealing or deceiving, discovering a hidden fact, pressing someone for specific conduct, or securing access, information, possession or a commitment. An explicit hand-off: the player invites, orders or dares a character to act, or gives them the initiative. It is not: Ordinary conversation, the player's own feelings, wants or decisions, observation, out-of-character remarks, trivial activity, and anything the scene has already settled. Actions that are routine or effectively certain for whoever performs them, such as a ruler's everyday command to their own servants or a practised task done in calm conditions. Steps toward one goal, and routine or certain actions along the way, are part of one move. Count multiple only when two or more moves would each need their own ruling.",
+       "criteria": {
+        "one": "At most one such move.",
+        "multiple": "Two or more separate moves, each of which would need its own ruling."
+       }
+      },
+      "owner": {
+       "type": "choice",
+       "instructions": "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange. Who is making this move? For a request, persuasion, pressure, a bargain or a threat, the owner is whoever is asking or pressing (usually the player), and the target is the one being asked. A character is the owner only when the player gives that character a task to carry out with their own abilities (an order or a dare, such as \"pick that lock\") or hands them the initiative (such as \"go ahead, make me\"). Choose UNRESOLVED if the passage and the public exchange do not show it.",
+       "criteria": {
+        "player": "Player (the player)",
+        "guide-801abb": "Guide",
+        "UNRESOLVED": "The owner cannot be told from the passage and the public exchange."
+       }
+      },
+      "target": {
+       "type": "choice",
+       "instructions": "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange. Whom does the proposed action act on, or seek something from? SELF means the owner themselves. SEVERAL means more than one of these characters at once. SCENE means the surroundings, an object, someone not listed, or no one in particular. Choose UNRESOLVED if it cannot be told.",
+       "criteria": {
+        "player": "Player (the player)",
+        "guide-801abb": "Guide",
+        "SELF": "The owner themselves.",
+        "SEVERAL": "More than one of these characters at once.",
+        "SCENE": "The surroundings, an object, someone not listed, or no one in particular.",
+        "UNRESOLVED": "The target cannot be told."
+       }
+      },
+      "family": {
+       "type": "choice",
+       "instructions": "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange. Which kind of move is it? Choose by what the move tries to change, not by its tone.",
+       "criteria": {
+        "overcome_operate": "Overcome / operate: Overcome an obstacle, or operate, repair, treat, craft, break or create something.",
+        "contest_impose": "Contest / impose: Actively overcome opposition: attack, grapple, restrain, seize, interrupt, force or outmanoeuvre.",
+        "evade_resist": "Evade / resist: Escape, dodge, withstand, keep control, or avoid an imposed consequence.",
+        "conceal_deceive": "Conceal / deceive: Lie, hide, sneak, take something unnoticed, disguise, misdirect or keep up an alibi.",
+        "detect_discover": "Detect / discover: Notice, search, investigate, read a tell, catch a lie, or establish a hidden fact from visible cues.",
+        "influence_negotiate": "Influence / negotiate: Seek one specific, immediate conduct from someone through a request, bargain, argument, threat or pressure.",
+        "acquire_secure": "Acquire / secure: Secure bounded access, information, possession, permission or a commitment.",
+        "UNSUPPORTED": "None of these kinds of move fits the passage."
+       }
+      },
+      "action_specification": {
+       "type": "choice",
+       "instructions": "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange. Does the passage say what the owner should do or achieve?",
+       "criteria": {
+        "SPECIFIED_HERE": "The passage itself states the action or result.",
+        "SPECIFIED_BY_PUBLIC_REFERENCE": "The passage points to an action already stated in the public exchange, such as terms, an offer, a plan or a condition someone set.",
+        "UNSPECIFIED_INITIATIVE": "The passage hands the owner the initiative without saying what to do, such as \"go ahead\", \"make me\" or \"your call\".",
+        "UNRESOLVED": "It cannot be told."
+       }
+      },
+      "antecedent": {
+       "type": "choice",
+       "instructions": "The selected passage of the player's latest message is state.move.passage; read it within state.latestInput and the public exchange. If the passage refers back to something said or offered earlier in the public exchange (for example \"the terms you set\" or \"what you offered\"), select that earlier passage. Choose NONE if it refers to nothing earlier.",
+       "criteria": {
+        "a1": "Reply 1.",
+        "NONE": "The passage does not refer back to an earlier passage.",
+        "UNRESOLVED": "It refers back, but the earlier passage cannot be identified."
+       }
+      },
+      "ruling": {
+       "type": "noul",
+       "instructions": "Using only the admissible evidence in state, will the owner (state.move.owner), attempting the change proposed in state.move.passage on the target (state.move.target), achieve that specified change within this exchange? The target chooses the specified conduct now, given their established interests, boundaries and leverage; what the player says or offers is evidence about how the target may respond. Speech is evidence when it changes the target's options or the ruled situation. Do not infer success from the attempt being declared. Do not substitute a different goal or a later opportunity. The player's voluntary speech, actions, feelings, consent and decisions are the player's own; never decide them. Do not assume feelings, attraction, trust or willingness beyond what the supplied evidence shows.",
+       "criteria": {
+        "true": "The specified change happens within this exchange.",
+        "false": "The specified change does not happen within this exchange."
+       }
+      }
+     },
+     "stateSent": {
+      "actors": {
+       "player": {
+        "name": "Player",
+        "control": "user"
+       },
+       "guide-801abb": {
+        "name": "Guide",
+        "control": "npc",
+        "authorialCharacterContext": "A careful guide. GUIDE-CARD\n\ndry"
+       }
+      },
+      "playerActorId": "player",
+      "move": {
+       "owner": {
+        "id": "player",
+        "name": "Player"
+       },
+       "target": {
+        "id": "guide-801abb",
+        "name": "Guide"
+       },
+       "family": {
+        "key": "influence_negotiate",
+        "label": "Influence / negotiate"
+       },
+       "passage": "I push past the guard.",
+       "antecedent": null
+      },
+      "latestInput": "I push past the guard.",
+      "facts": {},
+      "recentAcceptedMessages": [
+       {
+        "actorId": "player",
+        "role": "user",
+        "text": "We reach the gate."
+       },
+       {
+        "actorId": "guide-801abb",
+        "role": "assistant",
+        "text": "The gate remains shut. \"State your business, or wait until dawn.\""
+       },
+       {
+        "actorId": "player",
+        "role": "user",
+        "text": "Open the gate for me."
+       },
+       {
+        "actorId": "guide-801abb",
+        "role": "assistant",
+        "text": "Reply 1."
+       }
+      ]
+     },
+     "answers": {
+      "move": {
+       "type": "choice",
+       "choice": "s1",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "move_count": {
+       "type": "choice",
+       "choice": "one",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "owner": {
+       "type": "choice",
+       "choice": "player",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "target": {
+       "type": "choice",
+       "choice": "guide-801abb",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "family": {
+       "type": "choice",
+       "choice": "influence_negotiate",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "action_specification": {
+       "type": "choice",
+       "choice": "SPECIFIED_HERE",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "antecedent": {
+       "type": "choice",
+       "choice": "NONE",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "ruling": {
+       "type": "noul",
+       "noul": 0.45,
+       "confidence": null,
+       "provenance": "fixture"
+      }
+     },
+     "speaker": {
+      "questionId": null,
+      "eligibleActorIds": [
+       "guide-801abb"
+      ],
+      "raw": null,
+      "adjusted": null,
+      "selected": "guide-801abb",
+      "source": "single",
+      "tieBroken": false
+     },
+     "policyBandId": "b1",
+     "draw": null,
+     "outcome": "deferred",
+     "injectedText": "[Director ruling — binding for this reply]\nThis declared exchange is already adjudicated. Do not roll dice or run another check for it; other dice systems apply only to separate, undeclared actions.\nActing character: Player.\nAttempt (influence negotiate): I push past the guard.\nBounded intended result: I push past the guard.\nFailure-stakes boundary: other — Failure must move the scene without erasing established progress or inventing a disproportionate consequence. Do not invent a larger consequence than this boundary permits.\nResolution scope: attempt.\nRuling: deferred.\nThis attempt does not deliver the requested gain in this reply. Do not grant it, imply it was granted, or hand it over in an aside. Questioning, waiting, conditions, a price, or pointing to another route are all fine. Everything Player had already earned stays intact; only this new request is not fulfilled now.\nDo not invent and resolve a new uncertain consequential NPC skill action in this same reply. NPCs may react, apply already-established capabilities, create pressure, or set up a later contest, but a new uncertain NPC attempt must remain unresolved for a future turn.\nReply as Guide. Do not write voluntary actions, speech, thoughts, feelings, consent, or decisions for Player; when an NPC acts against the player, describe only what reaches or is imposed on the player's body and leave the player's reaction open.\n\n[Director NPC-action boundary]\nFunction tools are unavailable on this writer backend. Write the final prose directly. You may react, apply established capabilities, or set up pressure, but leave any newly invented uncertain consequential NPC action unresolved.",
+     "providerKind": "mock",
+     "requestedModel": null,
+     "returnedModel": "fixture",
+     "durationMs": 1,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "director_send",
+     "message": "Frozen deferred (threshold, band b1) for Player; reply speaker Guide. Staged: \"I push past the guard.\" (direct attempt, influence_negotiate, owner Player, target Guide, P=0.45); 3 requests."
+    },
+    {
+     "id": "ins_96d3666351fa4c39",
+     "at": 1790674307937,
+     "epoch": 0,
+     "attemptId": "att_1c498d36e5fe4490",
+     "resolutionId": "res_349c6fe3fe024c28",
+     "actionId": null,
+     "applicability": null,
+     "questions": null,
+     "stateSent": {
+      "schemaVersion": 1,
+      "requestId": "obsreq_1d0490bf5ce94e12",
+      "attemptId": "att_1c498d36e5fe4490",
+      "variantId": "var_3b64641bfcc541e0",
+      "baseCursor": "c_e95ef4ab28ace1c2",
+      "cursorAfter": "c_7b39477ee6b670c0",
+      "stateRevision": 1,
+      "acceptedSpan": {
+       "id": "span:var_3b64641bfcc541e0",
+       "actorId": "guide-801abb",
+       "role": "assistant",
+       "text": "Reply 2.",
+       "accepted": true
+      },
+      "expectedResolutionIds": [
+       "res_349c6fe3fe024c28"
+      ],
+      "expectedRulings": [
+       {
+        "resolutionId": "res_349c6fe3fe024c28",
+        "actingActorId": "player",
+        "boundedResult": "I push past the guard.",
+        "outcome": "deferred",
+        "instruction": "This attempt does not deliver the requested gain in this reply. Do not grant it, imply it was granted, or hand it over in an aside. Questioning, waiting, conditions, a price, or pointing to another route are all fine. Everything Player had already earned stays intact; only this new request is not fulfilled now."
+       }
+      ],
+      "permit": null,
+      "priorState": {
+       "revision": 1,
+       "variables": {},
+       "settledGains": {},
+       "unresolvedVariableIds": [],
+       "elapsedSeconds": 0,
+       "timeQuality": "unresolved",
+       "sceneId": 1,
+       "sceneReplyCount": 1,
+       "positions": {},
+       "notifiedDeadlineIds": [],
+       "acceptedResolutionIds": [
+        "res_a075b37db5214995"
+       ],
+       "acceptedPermitIds": [],
+       "itemOwners": {},
+       "conditions": {},
+       "knownFacts": {},
+       "revealedSecrets": {},
+       "lastObservedCursor": "c_7010c453f98e0f9d",
+       "trackingStatus": "current"
+      },
+      "registry": {
+       "actorIds": [
+        "guide-801abb",
+        "player"
+       ],
+       "placeIds": [],
+       "itemIds": [],
+       "conditionIds": [
+        "exposed",
+        "hidden",
+        "injured",
+        "restrained",
+        "unconscious"
+       ],
+       "factIds": [
+        "res_349c6fe3fe024c28"
+       ],
+       "secretIds": []
+      }
+     },
+     "answers": null,
+     "speaker": null,
+     "policyBandId": null,
+     "draw": null,
+     "outcome": null,
+     "injectedText": null,
+     "providerKind": null,
+     "requestedModel": null,
+     "returnedModel": null,
+     "durationMs": 0,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "observer",
+     "message": "Observed reply: 1 realized ruling, 0 factual operations."
+    }
+   ],
+   "profileRevision": "example-3.1.0",
+   "story": {
+    "packId": "default",
+    "packSource": "user",
+    "secrets": [],
+    "history": {},
+    "lore": {}
+   }
+  }
+ },
+ "chat": [
+  {
+   "name": "Player",
+   "is_user": true,
+   "is_system": false,
+   "mes": "We reach the gate."
+  },
+  {
+   "name": "Guide",
+   "is_user": false,
+   "is_system": false,
+   "mes": "The gate remains shut. \"State your business, or wait until dawn.\"",
+   "original_avatar": "guide.png",
+   "swipe_id": 0,
+   "swipes": [
+    "The gate remains shut. \"State your business, or wait until dawn.\""
+   ],
+   "extra": {}
+  },
+  {
+   "name": "Player",
+   "is_user": true,
+   "is_system": false,
+   "mes": "Open the gate for me."
+  },
+  {
+   "name": "Guide",
+   "original_avatar": "guide.png",
+   "is_user": false,
+   "is_system": false,
+   "mes": "Reply 1.\n\n[RP_DIRECTOR]\n{\"status\":\"ruled\",\"results\":[{\"kind\":\"action\",\"actor\":\"Player\",\"action\":\"Open the gate for me.\",\"outcome\":\"deferred\",\"method\":\"threshold\",\"support\":0.45,\"roll\":null}]}\n[/RP_DIRECTOR]",
+   "swipe_id": 0,
+   "swipes": [
+    "Reply 1.\n\n[RP_DIRECTOR]\n{\"status\":\"ruled\",\"results\":[{\"kind\":\"action\",\"actor\":\"Player\",\"action\":\"Open the gate for me.\",\"outcome\":\"deferred\",\"method\":\"threshold\",\"support\":0.45,\"roll\":null}]}\n[/RP_DIRECTOR]"
+   ],
+   "swipe_info": [
+    {
+     "extra": {
+      "rpd": {
+       "v": "var_6d675370180c4364",
+       "a": "att_742f55e396a74fe1",
+       "r": "res_a075b37db5214995"
+      }
+     }
+    }
+   ],
+   "extra": {
+    "rpd": {
+     "v": "var_6d675370180c4364",
+     "a": "att_742f55e396a74fe1",
+     "r": "res_a075b37db5214995"
+    }
+   }
+  },
+  {
+   "name": "Player",
+   "is_user": true,
+   "is_system": false,
+   "mes": "I push past the guard."
+  },
+  {
+   "name": "Guide",
+   "original_avatar": "guide.png",
+   "is_user": false,
+   "is_system": false,
+   "mes": "Reply 2.\n\n[RP_DIRECTOR]\n{\"status\":\"ruled\",\"results\":[{\"kind\":\"action\",\"actor\":\"Player\",\"action\":\"I push past the guard.\",\"outcome\":\"deferred\",\"method\":\"threshold\",\"support\":0.45,\"roll\":null}]}\n[/RP_DIRECTOR]",
+   "swipe_id": 0,
+   "swipes": [
+    "Reply 2.\n\n[RP_DIRECTOR]\n{\"status\":\"ruled\",\"results\":[{\"kind\":\"action\",\"actor\":\"Player\",\"action\":\"I push past the guard.\",\"outcome\":\"deferred\",\"method\":\"threshold\",\"support\":0.45,\"roll\":null}]}\n[/RP_DIRECTOR]"
+   ],
+   "swipe_info": [
+    {
+     "extra": {
+      "rpd": {
+       "v": "var_3b64641bfcc541e0",
+       "a": "att_1c498d36e5fe4490",
+       "r": "res_349c6fe3fe024c28"
+      }
+     }
+    }
+   ],
+   "extra": {
+    "rpd": {
+     "v": "var_3b64641bfcc541e0",
+     "a": "att_1c498d36e5fe4490",
+     "r": "res_349c6fe3fe024c28"
+    }
+   }
+  }
+ ],
+ "settings": {
+  "enabled": true,
+  "profileId": "binding",
+  "bindingConfirmedAt": "confirmed",
+  "connection": {
+   "kind": "mock",
+   "baseUrl": "",
+   "model": "",
+   "stProfileId": "",
+   "mockScenario": "gate-deferred"
+  },
+  "observerConnection": {
+   "stProfileId": ""
+  },
+  "reactions": {
+   "enabled": false,
+   "weights": {
+    "resolve": {
+     "press": 40,
+     "change_tactic": 40,
+     "concede": 15,
+     "withdraw": 5
+    },
+    "secret": {
+     "hold": 75,
+     "slip": 20,
+     "reveal": 5
+    },
+    "exposure": {
+     "unnoticed": 60,
+     "suspicion": 30,
+     "witnessed": 10
+    },
+    "initiative": {
+     "takes_lead": 40,
+     "raises_stakes": 25,
+     "hands_back": 25,
+     "declines": 10
+    }
+   }
+  },
+  "showBar": true,
+  "inspectorOpen": false,
+  "profileOverrides": {},
+  "pipeline": "staged",
+  "settingsRevision": 2,
+  "modules": {
+   "speaker": false,
+   "decisions": true,
+   "meters": false,
+   "secrets": false,
+   "lore": false
+  },
+  "lore": {
+   "books": {},
+   "defaultMode": "assist",
+   "maxEntries": 5,
+   "width": 3,
+   "minProbability": 0.15,
+   "maxDepth": 4,
+   "judgeChars": 12000
+  }
+ }
+}

@@ -3,8 +3,6 @@ import { newId, randomDraw } from './identity.ts';
 import { normaliseSignal, resolveOutcome } from './resolver.ts';
 import { fillPlaceholders } from './prompts.ts';
 
-export type RollReviewChoice = 'keep' | 'reroll' | 'cancel';
-
 /** Resample frozen assessments with the same table; never ask a model for new dice. */
 export function rerollPermit(previous: TurnPermit, profile: DirectorProfile, names: Record<string, string>, playerName: string, draw = () => randomDraw().u): TurnPermit {
   if (profile.resolutionMethod !== 'sample') throw new Error('Threshold outcomes require reassessment, not a random reroll.');
@@ -33,7 +31,10 @@ export function rerollPermit(previous: TurnPermit, profile: DirectorProfile, nam
   return permit;
 }
 
-/** The tool action awaits this gate; only the kept permit can reach ST's next request. */
+
+export type RollReviewChoice = 'keep' | 'reroll' | 'cancel';
+
+/** User review is independent of the judge deadline; Stop/chat changes cancel it. */
 export async function reviewPermit(input: {
   initial: TurnPermit;
   choose: (permit: TurnPermit) => Promise<RollReviewChoice>;
@@ -43,16 +44,11 @@ export async function reviewPermit(input: {
   method: 'sample' | 'threshold';
 }): Promise<TurnPermit | null> {
   let permit = structuredClone(input.initial);
-  const history: NonNullable<TurnPermit['reviewHistory']> = [...(permit.reviewHistory ?? [])];
-  const valid = () => !input.signal.aborted && input.isCurrent();
-  while (valid()) {
+  while (!input.signal.aborted && input.isCurrent()) {
     const choice = await input.choose(structuredClone(permit));
-    if (!valid() || choice === 'cancel') return null;
-    if (choice === 'keep') return { ...permit, reviewHistory: history, reviewedAt: Date.now() };
-    const next = await input.reroll(permit);
-    if (!valid()) return null;
-    history.push({ permitId: permit.permitId, actions: structuredClone(permit.actions), choice: input.method === 'sample' ? 'reroll' : 'reassess', at: Date.now() });
-    permit = { ...next, previousPermitId: permit.permitId };
+    if (choice === 'cancel' || input.signal.aborted || !input.isCurrent()) return null;
+    if (choice === 'keep') return permit;
+    permit = await input.reroll(permit);
   }
   return null;
 }

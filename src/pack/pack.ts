@@ -16,9 +16,9 @@ export type FamilyKind = 'change' | 'discovery';
  * only entries from books the user has declared public ever reach a discovery
  * ruling (the firewall is applied by visibility, see pipeline/evidence.ts).
  */
-export type EvidenceSource = 'transcript' | 'owner_card' | 'target_card' | 'meters' | 'state' | 'lore';
+export type EvidenceSource = 'transcript' | 'owner_card' | 'target_card' | 'meters' | 'lore';
 
-export const EVIDENCE_SOURCES: readonly EvidenceSource[] = ['transcript', 'owner_card', 'target_card', 'meters', 'state', 'lore'];
+export const EVIDENCE_SOURCES: readonly EvidenceSource[] = ['transcript', 'owner_card', 'target_card', 'meters', 'lore'];
 /** Sources that carry authorial truth or inner feelings; never admissible for discovery. */
 export const PRIVATE_SOURCES: readonly EvidenceSource[] = ['owner_card', 'target_card', 'meters'];
 
@@ -87,7 +87,7 @@ export const SMALL_TALK_LINE = 'Ordinary conversation, the player\'s own feeling
 
 export const DEFAULT_PACK: GenrePack = deepFreeze({
   id: 'default',
-  version: 3,
+  version: 4,
   label: 'General',
   description: 'Works for most roleplay. Rules physical, social and stealth attempts with seven broad kinds of move; tracks how each character regards the player.',
   actors: { kinds: ['player', 'npc'], rulableOwners: ['player', 'npc'] },
@@ -100,25 +100,25 @@ export const DEFAULT_PACK: GenrePack = deepFreeze({
   },
   protected: [],
   families: [
-    { key: 'overcome_operate', label: 'Overcome / operate', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'state'],
+    { key: 'overcome_operate', label: 'Overcome / operate', kind: 'change', evidence: ['transcript', 'lore', 'owner_card'],
       definition: 'Overcome an obstacle, or operate, repair, treat, craft, break or create something.',
       successSemantics: 'The concrete method, given the actor\'s established competence, tools and conditions, produces the specified result now.' },
-    { key: 'contest_impose', label: 'Contest / impose', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'contest_impose', label: 'Contest / impose', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Actively overcome opposition: attack, grapple, restrain, seize, interrupt, force or outmanoeuvre.',
       successSemantics: 'The acting side overcomes the active opposition in this one exchange; the same contest is not resolved twice.' },
-    { key: 'evade_resist', label: 'Evade / resist', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'evade_resist', label: 'Evade / resist', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Escape, dodge, withstand, keep control, or avoid an imposed consequence.',
       successSemantics: 'The actor avoids or withstands the specified consequence in this exchange.' },
-    { key: 'conceal_deceive', label: 'Conceal / deceive', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'conceal_deceive', label: 'Conceal / deceive', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Lie, hide, sneak, take something unnoticed, disguise, misdirect or keep up an alibi.',
       successSemantics: 'The concealment or deception holds now against the named observers, judged by what they could perceive or verify.' },
-    { key: 'detect_discover', label: 'Detect / discover', kind: 'discovery', evidence: ['transcript', 'lore', 'state'],
+    { key: 'detect_discover', label: 'Detect / discover', kind: 'discovery', evidence: ['transcript', 'lore'],
       definition: 'Notice, search, investigate, read a tell, catch a lie, or establish a hidden fact from visible cues.',
       successSemantics: 'The observer establishes the specified fact now from cues visible in the scene and their own public capabilities; hidden truth that nothing in the scene has shown is not evidence.' },
-    { key: 'influence_negotiate', label: 'Influence / negotiate', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters', 'state'],
+    { key: 'influence_negotiate', label: 'Influence / negotiate', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters'],
       definition: 'Seek one specific, immediate conduct from someone through a request, bargain, argument, threat or pressure.',
       successSemantics: 'The target chooses the specified conduct now, given their established interests, boundaries and leverage; what the player says or offers is evidence about how the target may respond.' },
-    { key: 'acquire_secure', label: 'Acquire / secure', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'acquire_secure', label: 'Acquire / secure', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Secure bounded access, information, possession, permission or a commitment.',
       successSemantics: 'The specified access, information, possession or commitment is secured now.' },
   ],

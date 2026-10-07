@@ -23,7 +23,7 @@ export interface StateQuestionInput {
   pack: GenrePack;
   npcs: StateNpc[];
   levels: Record<string, Record<string, number>>;
-  assessed: Record<string, boolean>;
+  assessed: Record<string, Record<string, boolean> | boolean>;
   playerName: string;
   secrets: SecretRecord[];
   knownBy: Record<string, string[]>;
@@ -45,7 +45,8 @@ export function stateQuestions(input: StateQuestionInput): { questions: Record<s
     for (const meter of input.pack.meters) {
       if (!room()) return;
       const current = input.levels[npc.id]?.[meter.key] ?? meter.initial;
-      const first = !input.assessed[npc.id];
+      const status = input.assessed[npc.id];
+      const first = !(typeof status === 'boolean' ? status : status?.[meter.key]);
       const allowed = first ? meter.levels : meter.levels.filter((_, i) => Math.abs(i - current) <= 1);
       const label = meterLabel(meter, input.playerName);
       const scale = `Levels, lowest to highest: ${meter.levels.join(', ')}.`;
@@ -90,16 +91,16 @@ export interface StateEvidenceInput {
 export function stateEvidence(input: StateEvidenceInput): Json {
   const characters: Record<string, Json> = {};
   for (const c of input.characters) {
-    const card = String(c.card ?? '');
-    characters[c.id] = { name: c.name, card: card.length > STATE_CARD_CHARS ? `${card.slice(0, STATE_CARD_CHARS)}…` : card };
+    const card = visibleText(String(c.card ?? ''));
+    characters[c.id] = { name: visibleText(c.name), card: card.length > STATE_CARD_CHARS ? `${card.slice(0, STATE_CARD_CHARS)}…` : card };
   }
   const secrets: Record<string, Json> = {};
-  for (const s of input.secrets) secrets[s.id] = { text: s.text };
+  for (const s of input.secrets) secrets[s.id] = { text: visibleText(s.text) };
   const build = (messages: StateEvidenceInput['transcript']): Json => ({
-    playerName: input.playerName,
+    playerName: visibleText(input.playerName),
     characters,
     secrets,
-    latestInput: input.latestInput,
+    latestInput: visibleText(input.latestInput),
     recentAcceptedMessages: messages.map(m => ({ actorId: m.actorId, role: m.role, text: visibleText(m.text) })),
   });
   let messages = input.transcript.slice();
@@ -117,8 +118,10 @@ export function applyStateAnswers(
   answers: Record<string, Answer>,
   previousLevels: Record<string, Record<string, number>>,
   previousKnownBy: Record<string, string[]>,
-): { meters: Record<string, Record<string, number>>; knownBy: Record<string, string[]>; changes: string[] } {
+  previousAssessed?: Record<string, Record<string, boolean>>,
+): { meters: Record<string, Record<string, number>>; assessed: Record<string, Record<string, boolean>>; knownBy: Record<string, string[]>; changes: string[] } {
   const meters = structuredClone(previousLevels);
+  const assessed = structuredClone(previousAssessed ?? Object.fromEntries(Object.entries(previousLevels).map(([npc, values]) => [npc, Object.fromEntries(Object.keys(values).map(key => [key, true]))])));
   const knownBy = structuredClone(previousKnownBy);
   const changes: string[] = [];
   for (const [id, entry] of Object.entries(index)) {
@@ -130,6 +133,7 @@ export function applyStateAnswers(
       if (!chosen || !entry.allowed.includes(chosen)) continue;
       const after = entry.levels.indexOf(chosen);
       meters[entry.npcId]![entry.key] = after;
+      (assessed[entry.npcId] ??= {})[entry.key] = true;
       if (before !== undefined && before !== after) changes.push(`${entry.npcName}: ${entry.key} ${entry.levels[before]} → ${chosen}`);
     } else {
       if (!chosen || chosen === 'KEEP') continue;
@@ -139,12 +143,13 @@ export function applyStateAnswers(
       changes.push(`secret ${entry.secretId} now known to ${learners.join(', ')}`);
     }
   }
-  return { meters, knownBy, changes };
+  return { meters, assessed, knownBy, changes };
 }
 
 export interface StateBlockInput {
   pack: GenrePack;
   levels: Record<string, Record<string, number>>;
+  assessed?: Record<string, Record<string, boolean>>;
   names: Record<string, string>;
   playerName: string;
   secrets: SecretRecord[];
@@ -157,7 +162,7 @@ export interface StateBlockInput {
 export function stateBlock(input: StateBlockInput): string {
   const parts: string[] = [];
   const lines = input.meters ? Object.entries(input.levels).map(([npc, values]) => {
-    const described = input.pack.meters.filter(m => Number.isInteger(values[m.key]))
+    const described = input.pack.meters.filter(m => Number.isInteger(values[m.key]) && (input.assessed === undefined || input.assessed[npc]?.[m.key] === true))
       .map(m => `${meterLabel(m, input.playerName)} ${m.levels[values[m.key]!]} (${rank(values[m.key]!, m.levels.length)})`);
     return described.length ? `${input.names[npc] ?? npc}: ${described.join('; ')}.` : '';
   }).filter(Boolean) : [];
@@ -172,13 +177,13 @@ export function stateBlock(input: StateBlockInput): string {
 }
 
 /** Meter values as evidence for a ruling (change families only). */
-export function meterFacts(pack: GenrePack, levels: Record<string, Record<string, number>>, playerName: string): Record<string, Record<string, string>> {
+export function meterFacts(pack: GenrePack, levels: Record<string, Record<string, number>>, playerName: string, assessed?: Record<string, Record<string, boolean>>): Record<string, Record<string, string>> {
   const facts: Record<string, Record<string, string>> = {};
   for (const [npc, values] of Object.entries(levels)) {
     facts[npc] = {};
     for (const meter of pack.meters) {
       const value = values[meter.key];
-      if (Number.isInteger(value)) facts[npc]![meterLabel(meter, playerName)] = `${meter.levels[value!]} (${rank(value!, meter.levels.length)})`;
+      if (Number.isInteger(value) && (assessed === undefined || assessed[npc]?.[meter.key] === true)) facts[npc]![meterLabel(meter, playerName)] = `${meter.levels[value!]} (${rank(value!, meter.levels.length)})`;
     }
   }
   return facts;

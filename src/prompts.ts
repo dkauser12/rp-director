@@ -40,7 +40,7 @@ export function bindingBlock(input: BindingBlockInput): string {
   const instruction = fillPlaceholders(input.instruction, placeholderValues(action, input.targetNames, input.speakerName, input.playerName)).trim();
   const lines: string[] = [];
   lines.push('[Director ruling — binding for this reply]');
-  lines.push('This declared exchange is already adjudicated. Do not roll dice or run another check for it; other dice systems apply only to separate, undeclared actions.');
+  lines.push('This declared exchange is already adjudicated. Do not roll dice or run another check for it.');
   lines.push(`Acting character: ${input.actorName ?? input.playerName}.`);
   lines.push(`Attempt (${action.templateId.replace(/_/g, ' ')}): ${action.attemptedAction}`);
   lines.push(`Bounded intended result: ${action.requestedGain}`);
@@ -48,7 +48,6 @@ export function bindingBlock(input: BindingBlockInput): string {
     const detail = action.failureStake.detail.trim().replace(/[.!?]+$/, '');
     lines.push(`Failure-stakes boundary: ${action.failureStake.kind.replace(/_/g, ' ')}${detail ? ` — ${detail}` : ''}. Do not invent a larger consequence than this boundary permits.`);
   }
-  lines.push(`Resolution scope: ${action.resolutionScope ?? 'legacy persistent'}.`);
   lines.push(`Ruling: ${outcome}.`);
   if (action.additionalAttemptsPolicy === 'defer_after_first') lines.push('The user bundled multiple consequential attempts. Apply this ruling only to the first primary attempt. Do not complete the later attempts in this reply; leave them pending in the fiction.');
   if (instruction) lines.push(instruction);

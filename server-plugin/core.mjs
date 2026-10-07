@@ -107,6 +107,7 @@ export function createDecisionForwarder({ getApiKey, fetchImpl = fetch, endpoint
                 requestId,
                 model: typeof parsed.model === 'string' ? parsed.model : null,
                 answers: parsed.answers,
+                // Keep OpenRouter's cost and token counts intact; absent usage stays unknown.
                 usage: isObject(parsed.usage) ? parsed.usage : null,
                 provider: typeof parsed.provider === 'string' ? parsed.provider : null,
                 id: typeof parsed.id === 'string' ? parsed.id : null,

@@ -117,52 +117,6 @@ export function gainNoulQuestion(): Question {
   };
 }
 
-export type AutoAttemptGate = 'none' | 'trivial_or_certain' | 'one_consequential' | 'multiple_consequential';
-
-/** Classifies whether the latest user message needs mechanical adjudication. */
-export function autoAttemptGateQuestion(): Question {
-  return {
-    type: 'choice',
-    instructions: 'Using state.latestInput and the accepted scene only, how many uncertain, consequential state-changing attempts does the player make? A check is warranted only when failure is possible and would materially change what happens. Speech, feelings, wants, decisions, trivial activity, and already-established outcomes are not checks.',
-    criteria: {
-      none: 'No attempted state change; ordinary dialogue, observation, OOC, or reaction only.',
-      trivial_or_certain: 'An action occurs, but established facts make it routine/certain or failure has no meaningful consequence.',
-      one_consequential: 'Exactly one primary uncertain and consequential attempt needs a ruling.',
-      multiple_consequential: 'Two or more separate uncertain and consequential attempts are bundled together.',
-    },
-  };
-}
-
-/** Family is guidance for the writer and inspector; it never creates another roll. */
-export function autoAttemptFamilyQuestion(): Question {
-  return {
-    type: 'choice',
-    instructions: 'Classify the first primary uncertain, consequential attempt in state.latestInput. If there is no such attempt, choose none. Choose the closest functional family; do not classify feelings, desires, consent, or relationship meaning as an attempt.',
-    criteria: {
-      none: 'No uncertain consequential attempt.',
-      overcome_operate: 'Overcome an obstacle or operate, repair, treat, craft, break, or create something.',
-      contest_impose: 'Actively overcome opposition: attack, grapple, restrain, seize, interrupt, force, or outmaneuver.',
-      evade_resist: 'Escape, dodge, withstand, retain control, or avoid an imposed consequence.',
-      conceal_deceive: 'Lie, hide, sneak, steal unnoticed, disguise, misdirect, or maintain an alibi.',
-      detect_discover: 'Notice, search, investigate, recognize a tell, catch a lie, or establish a hidden fact from visible cues.',
-      influence_negotiate: 'Seek one specific immediate conduct through a request, bargain, argument, threat, or pressure.',
-      acquire_secure: 'Secure bounded access, information, possession, permission, or commitment.',
-    },
-  };
-}
-
-/** One atomic success proposition that remains valid when the independent family answer is ignored. */
-export function autoAttemptNoulQuestion(): Question {
-  return {
-    type: 'noul',
-    instructions: 'If state.latestInput contains an uncertain consequential attempt, do the established pre-action facts support the FIRST primary intended state change succeeding now? Judge the concrete method against capabilities, opposition, leverage, tools, injuries, positioning, and observer-visible evidence. The attempt itself is not evidence of success. For detection, private card truth or hidden thoughts are not observer knowledge. Judge immediate conduct only; never manufacture feelings, attraction, affection, consent, trust, or permanent attitude change. If there is no qualifying attempt, answer false; code will ignore this answer.',
-    criteria: {
-      true: 'Established pre-action evidence supports the first primary bounded result now.',
-      false: 'Established evidence does not support that bounded result now, or no qualifying attempt exists.',
-    },
-  };
-}
-
 /** One decisive proposition per declared attempt. Family wording narrows what evidence is relevant without creating dependent questions. */
 export function attemptNoulQuestion(action: ActionSpec): Question {
   const common = 'Use established pre-action facts only. The attempted action is not evidence that it succeeded. Respect the bounded result and the declared failure stakes.';

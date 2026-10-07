@@ -215,7 +215,7 @@ test('lore hook: SillyTavern\'s loaded lists are pruned and the chosen objects a
   assert.deepEqual(characterLore, [chosen], 'the chosen entry stays listed so the scan can activate it');
   assert.equal(emitted.length, 1);
   assert.equal(emitted[0]!.name, 'wi_force');
-  assert.deepEqual(emitted[0]!.args[0], [{ world: 'Gatehouse', uid: 0, content: 'The night toll is double. GATE-SECRET', decorators: [], hash: 1000 }], 'the processed entry, with its hash');
+  assert.deepEqual(emitted[0]!.args[0], [{ world: 'Gatehouse', uid: 0, content: 'The night toll is double. GATE-SECRET', decorators: [], hash: 1000, position: 4, depth: 1 }], 'the processed entry retains its hash and moves to chat depth 1');
   await host.emit('wi_loaded', { globalLore: [], characterLore: [keyword, chosen], chatLore: [], personaLore: [] });
   assert.equal(emitted.length, 2, 're-emitted on every scan, since each scan resets external activations');
   await host.emit('wi_activated', [{ world: 'Gatehouse', uid: 0, content: 'The night toll is double.' }, { world: 'Atlas', uid: 5, content: 'x'.repeat(400) }]);
@@ -227,6 +227,79 @@ test('lore hook: SillyTavern\'s loaded lists are pruned and the chosen objects a
   await host.emit('wi_loaded', { globalLore: [], characterLore: untouched, chatLore: [], personaLore: [] });
   assert.deepEqual(untouched, [keyword], 'disarmed: SillyTavern behaves as without the Director');
   controller.destroy();
+});
+
+test('33: lore continuity asks only about the public scene and resets after visibility changes', async () => {
+  const { host, controller } = await loreHarness();
+  controller.settings.lore.books.Atlas = { mode: 'assist', public: true };
+  host.context.generate = async () => {
+    host.chat().push({ name: 'Player', is_user: true, is_system: false, mes: host.composerValue });
+    host.composerValue = '';
+    await controller.interceptor([], 4096, () => assert.fail('unexpected abort'), 'normal');
+    const text = 'The guide answers.';
+    host.chat().push({ name: 'Guide', original_avatar: 'guide.png', is_user: false, is_system: false, mes: text, swipe_id: 0, swipes: [text], swipe_info: [{ extra: {} }] });
+    await host.emit('MESSAGE_RECEIVED', host.chat().length - 1, 'normal');
+    await host.emit('GENERATION_ENDED');
+  };
+  scriptJudge(controller, route('influence_negotiate'));
+  host.composerValue = 'Open the gate and I will pay.';
+  await controller.directorSend();
+  const first = Object.values(controller.record!.story.lore).at(-1)!;
+  assert.ok(first.scene);
+  assert.ok(first.evidenceRefs!.length);
+  const repeated = scriptJudge(controller, { ...route('influence_negotiate'), lore_scene: choice('SAME') });
+  host.composerValue = 'I repeat the same offer.';
+  await controller.directorSend();
+  const loreRequests = repeated.filter(request => Object.keys(request.questions).some(id => id.startsWith('lore')));
+  assert.deepEqual(loreRequests.map(request => Object.keys(request.questions)), [['lore_scene']]);
+  assert.doesNotMatch(JSON.stringify(loreRequests), /Night toll|GATE-SECRET/, 'the continuity gate never sees private pick labels or content');
+  assert.deepEqual(Object.values(controller.record!.story.lore).at(-1)!.refs, first.refs);
+  controller.settings.lore.books.Gatehouse = { mode: 'assist', public: true };
+  const reclassified = scriptJudge(controller, route('influence_negotiate'));
+  host.composerValue = 'The scene continues.';
+  await controller.directorSend();
+  assert.ok(reclassified.some(request => 'lore_public_1_1' in request.questions));
+  assert.ok(!reclassified.some(request => 'lore_scene' in request.questions), 'a visibility change requires independent public selection');
+});
+
+test('5: retrying a failed ruling retains successful lore picks and meter answers with no extra requests', async () => {
+  const { host, controller } = await loreHarness();
+  controller.settings.modules.meters = true;
+  controller.settings.lore.books.Atlas = { mode: 'assist', public: true };
+  const firstAnswers: Record<string, Answer> = { ...route('influence_negotiate'), meter_1_regard: choice('warm') };
+  delete firstAnswers.ruling;
+  scriptJudge(controller, firstAnswers);
+  host.context.generate = async () => {
+    host.chat().push({ name: 'Player', is_user: true, is_system: false, mes: host.composerValue });
+    host.composerValue = '';
+    await controller.interceptor([], 4096, () => assert.fail('unexpected abort'), 'normal');
+    const text = 'The guide answers.';
+    host.chat().push({ name: 'Guide', original_avatar: 'guide.png', is_user: false, is_system: false, mes: text, swipe_id: 0, swipes: [text], swipe_info: [{ extra: {} }] });
+    await host.emit('MESSAGE_RECEIVED', host.chat().length - 1, 'normal');
+    await host.emit('GENERATION_ENDED');
+  };
+  host.composerValue = 'Open the gate and I will pay.';
+  await controller.directorSend();
+  const first = Object.values(controller.record!.attempts).at(-1)!;
+  const frozen = structuredClone(controller.record!.story.lore[first.loreCursor!]!);
+  const meters = structuredClone(first.storyAfter!.meters);
+  const message = host.chat().at(-1)!;
+  host.swipeRight = async () => {
+    message.swipe_id = message.swipes!.length;
+    await host.emit('MESSAGE_SWIPED', host.chat().length - 1);
+    await controller.interceptor([], 4096, () => assert.fail('unexpected abort'), 'swipe');
+    message.mes = 'The guide opens the gate.';
+    message.swipes!.push(message.mes);
+    await host.emit('MESSAGE_RECEIVED', host.chat().length - 1, 'swipe');
+    await host.emit('GENERATION_ENDED');
+  };
+  const retried = scriptJudge(controller, { ruling: noul(0.5) });
+  await controller.retryJudge();
+  assert.deepEqual(retried.map(request => Object.keys(request.questions)), [['ruling']]);
+  const latest = Object.values(controller.record!.attempts).at(-1)!;
+  assert.deepEqual(latest.storyAfter!.meters, meters);
+  assert.deepEqual(controller.record!.story.lore[latest.loreCursor!]!.refs, frozen.refs);
+  assert.deepEqual(controller.record!.story.lore[latest.loreCursor!]!.evidenceRefs, frozen.evidenceRefs);
 });
 
 test('lore binds to the attempt: later generations never re-arm an earlier turn\'s picks', async () => {

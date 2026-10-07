@@ -29,7 +29,7 @@ test('unassessed characters start at each meter\'s initial level; holders know t
   const story = { ...emptyStory(), secrets: [{ id: 's1', text: 'Isla reads his texts.', holders: ['isla'] }] };
   const { levels, assessed } = levelsAt(story, ['c1'], romance, ['isla']);
   assert.deepEqual(levels, { isla: { regard: 2, nerve: 2 } });
-  assert.deepEqual(assessed, { isla: false });
+  assert.deepEqual(assessed, { isla: { regard: false, nerve: false } });
   assert.deepEqual(knownByAt(story, ['c1']), { s1: ['isla'] });
 });
 
@@ -69,6 +69,21 @@ test('the evidence carries cards and secrets for the state request only', () => 
   assert.ok(!json.includes('hidden'));
   assert.ok(json.includes('Isla reads his texts.'));
   assert.ok((state as { characters: Record<string, { card: string }> }).characters.isla!.card.length <= 3001, 'cards are trimmed');
+});
+
+test('state and pack evidence remove collapsed details before card clipping and from the latest input and secrets', () => {
+  const hidden = `<details><summary>Private</summary>STATE-HIDDEN-CANARY ${'x'.repeat(4000)}</details>`;
+  const state = stateEvidence({
+    transcript: [], latestInput: `Hello. ${hidden}`,
+    characters: [{ id: 'npc', name: 'Character', card: `Visible trait. ${hidden} Another visible trait.` }],
+    secrets: [{ id: 'secret', text: `Visible secret text. ${hidden}`, holders: ['npc'] }],
+    playerName: 'Player', maxChars: 60000,
+  });
+  const json = JSON.stringify(state);
+  assert.doesNotMatch(json, /STATE-HIDDEN-CANARY/);
+  assert.match(json, /Another visible trait/);
+  assert.match(json, /Visible secret text/);
+  assert.match(json, /Hello/);
 });
 
 test('the writer block states levels and knowledge boundaries plainly; the judge gets meters as facts', () => {

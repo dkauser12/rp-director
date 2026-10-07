@@ -8,7 +8,7 @@ import { DEFAULT_PACK, HANDOFF_LINE, ROUTINE_LINE, SMALL_TALK_LINE, deepFreeze, 
 
 const ROMANCE: GenrePack = {
   id: 'romance',
-  version: 2,
+  version: 3,
   label: 'Romance & slice of life',
   description: 'Closeness, attraction, teasing and pursuit between people. Rules asks, pressure and resistance; tracks how each character feels about the player and how boldly they pursue it.',
   actors: { kinds: ['player', 'npc'], rulableOwners: ['player', 'npc'] },
@@ -24,22 +24,22 @@ const ROMANCE: GenrePack = {
   },
   protected: [],
   families: [
-    { key: 'ask', label: 'Ask or press', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters', 'state'],
+    { key: 'ask', label: 'Ask or press', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters'],
       definition: 'Ask, invite, bargain for or press someone for one specific thing they might refuse, now.',
       successSemantics: 'The target agrees to the specific thing and does it now, in their own way; the player\'s answer to any counter-offer is not decided.' },
-    { key: 'sway', label: 'Sway', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters', 'state'],
+    { key: 'sway', label: 'Sway', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters'],
       definition: 'Change how someone behaves toward the player in the moment: tease, charm, provoke, reassure, apologise, win them over.',
       successSemantics: 'The target visibly responds the way the player was trying for in this exchange; the moment changes, not a lasting attitude.' },
-    { key: 'hold_out', label: 'Hold out', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'hold_out', label: 'Hold out', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Resist pressure, refuse, keep a boundary, or keep control of a situation someone else is pushing.',
       successSemantics: 'The one resisting holds their ground in this exchange; the pressure does not get what it sought now.' },
-    { key: 'conceal', label: 'Hide or lie', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'conceal', label: 'Hide or lie', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Hide something, lie, cover a slip, or keep up an alibi in front of someone.',
       successSemantics: 'The concealment holds now against the people present, judged by what they could see or check.' },
-    { key: 'read', label: 'Read someone', kind: 'discovery', evidence: ['transcript', 'lore', 'state'],
+    { key: 'read', label: 'Read someone', kind: 'discovery', evidence: ['transcript', 'lore'],
       definition: 'Notice a tell, catch a lie, or work out what someone wants or is hiding from what they show.',
       successSemantics: 'The observer works out the specified thing now from what the person visibly shows; hidden truth that nothing in the scene has shown is not evidence.' },
-    { key: 'act', label: 'Physical action', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'state'],
+    { key: 'act', label: 'Physical action', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card'],
       definition: 'Do something physical or practical whose outcome is uncertain: get somewhere first, move someone, catch, fix, win a game.',
       successSemantics: 'The concrete action produces the stated result now, given the people and conditions present.' },
   ],
@@ -51,7 +51,7 @@ const ROMANCE: GenrePack = {
 
 const ADVENTURE: GenrePack = {
   id: 'adventure',
-  version: 2,
+  version: 3,
   label: 'Adventure & kingdom',
   description: 'Danger, skill, force, magic and rule. Rules physical, magical and social risks, including orders given to followers; tracks loyalty and morale.',
   actors: { kinds: ['player', 'npc'], rulableOwners: ['player', 'npc'] },
@@ -64,25 +64,25 @@ const ADVENTURE: GenrePack = {
   },
   protected: [],
   families: [
-    { key: 'overcome_operate', label: 'Overcome', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'state'],
+    { key: 'overcome_operate', label: 'Overcome', kind: 'change', evidence: ['transcript', 'lore', 'owner_card'],
       definition: 'Overcome danger or an obstacle, cast or channel magic, climb, cross, repair, craft or break something.',
       successSemantics: 'The method, given the actor\'s established skill, power, tools and conditions, produces the specified result now.' },
-    { key: 'contest_impose', label: 'Fight or force', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'contest_impose', label: 'Fight or force', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Attack, grapple, restrain, seize, break through, or outmanoeuvre active opposition.',
       successSemantics: 'The acting side overcomes the opposition in this one exchange; the same fight is not resolved twice.' },
-    { key: 'evade_resist', label: 'Escape or resist', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'evade_resist', label: 'Escape or resist', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Escape, dodge, endure, shake off a spell or poison, or avoid an imposed consequence.',
       successSemantics: 'The actor avoids or withstands the specified consequence in this exchange.' },
-    { key: 'conceal_deceive', label: 'Sneak or deceive', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'conceal_deceive', label: 'Sneak or deceive', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Sneak, hide, disguise, lie, misdirect or steal unnoticed.',
       successSemantics: 'The deception or stealth holds now against those present, judged by what they could perceive or check.' },
-    { key: 'detect_discover', label: 'Search or discover', kind: 'discovery', evidence: ['transcript', 'lore', 'state'],
+    { key: 'detect_discover', label: 'Search or discover', kind: 'discovery', evidence: ['transcript', 'lore'],
       definition: 'Search, track, scout, notice a threat, read a tell, or uncover a hidden fact.',
       successSemantics: 'The searcher establishes the specified fact now from what can actually be seen, heard or found; hidden truth that nothing in the scene has shown is not evidence.' },
-    { key: 'influence_negotiate', label: 'Persuade or command', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters', 'state'],
+    { key: 'influence_negotiate', label: 'Persuade or command', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters'],
       definition: 'Persuade, command, bargain with or intimidate someone into one specific action now.',
       successSemantics: 'The target does the specific thing now; loyalty or a lasting change of heart is not decided.' },
-    { key: 'acquire_secure', label: 'Secure', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'acquire_secure', label: 'Secure', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Seize, claim or secure a place, object, passage, right or commitment.',
       successSemantics: 'The specified place, object, right or commitment is secured now.' },
   ],
@@ -94,7 +94,7 @@ const ADVENTURE: GenrePack = {
 
 const INVESTIGATION: GenrePack = {
   id: 'investigation',
-  version: 2,
+  version: 3,
   label: 'Investigation & intrigue',
   description: 'Clues, lies, surveillance and leverage. Rules searches, interrogations, cover stories and hacks; tracks trust and suspicion of the player.',
   actors: { kinds: ['player', 'npc'], rulableOwners: ['player', 'npc'] },
@@ -107,25 +107,25 @@ const INVESTIGATION: GenrePack = {
   },
   protected: [],
   families: [
-    { key: 'examine', label: 'Examine or trace', kind: 'discovery', evidence: ['transcript', 'lore', 'state'],
+    { key: 'examine', label: 'Examine or trace', kind: 'discovery', evidence: ['transcript', 'lore'],
       definition: 'Examine, search, analyse, trace or read someone or something to establish a hidden fact.',
       successSemantics: 'The investigator establishes the specified fact now from what can actually be observed, measured or traced; hidden truth that nothing in the scene has shown is not evidence.' },
-    { key: 'question', label: 'Question', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters', 'state'],
+    { key: 'question', label: 'Question', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters'],
       definition: 'Question, interrogate or pressure someone into giving a specific answer or piece of information now.',
       successSemantics: 'The target gives the specific answer now; its truth is only what they believe or choose to say.' },
-    { key: 'cover', label: 'Keep a cover', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'cover', label: 'Keep a cover', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Lie, hide, bluff, plant a false trail or keep up a cover in front of someone.',
       successSemantics: 'The cover holds now against the people present, judged by what they could perceive, check or sense with their own abilities.' },
-    { key: 'operate', label: 'Operate or break in', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'state'],
+    { key: 'operate', label: 'Operate or break in', kind: 'change', evidence: ['transcript', 'lore', 'owner_card'],
       definition: 'Hack, bypass, break into, repair or operate a system, device or lock.',
       successSemantics: 'The method, given the actor\'s established skill and tools, produces the specified result now.' },
-    { key: 'confront', label: 'Confront', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'confront', label: 'Confront', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Fight, restrain, seize or outmanoeuvre someone who resists.',
       successSemantics: 'The acting side overcomes the resistance in this one exchange.' },
-    { key: 'evade', label: 'Evade', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'state'],
+    { key: 'evade', label: 'Evade', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card'],
       definition: 'Escape, slip surveillance, withstand an intrusion or avoid an imposed consequence.',
       successSemantics: 'The actor avoids or withstands the specified consequence in this exchange.' },
-    { key: 'persuade', label: 'Persuade', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters', 'state'],
+    { key: 'persuade', label: 'Persuade', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters'],
       definition: 'Persuade, bargain with or pressure someone into one specific action now.',
       successSemantics: 'The target chooses the specified action now, given their interests and leverage.' },
   ],
@@ -137,7 +137,7 @@ const INVESTIGATION: GenrePack = {
 
 const POLITICS: GenrePack = {
   id: 'politics',
-  version: 2,
+  version: 3,
   label: 'Politics & factions',
   description: 'Deals, pressure, law and intelligence between powers. Rules negotiations, coercion, decrees and schemes; tracks each character\'s standing with the player and fear of them.',
   actors: { kinds: ['player', 'npc'], rulableOwners: ['player', 'npc'] },
@@ -150,22 +150,22 @@ const POLITICS: GenrePack = {
   },
   protected: ['Loyalty and long-term allegiance are not decided by a single ruling.'],
   families: [
-    { key: 'negotiate', label: 'Negotiate', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters', 'state'],
+    { key: 'negotiate', label: 'Negotiate', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters'],
       definition: 'Bargain or negotiate with someone for specific terms or a commitment now.',
       successSemantics: 'The counterpart accepts the specific terms now; the player\'s acceptance of altered terms is not decided.' },
-    { key: 'coerce', label: 'Coerce', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters', 'state'],
+    { key: 'coerce', label: 'Coerce', kind: 'change', evidence: ['transcript', 'lore', 'target_card', 'meters'],
       definition: 'Threaten, pressure or blackmail someone into specific compliance now.',
       successSemantics: 'The target complies with the specific demand now.' },
-    { key: 'decree', label: 'Push a measure', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'state'],
+    { key: 'decree', label: 'Push a measure', kind: 'change', evidence: ['transcript', 'lore', 'owner_card'],
       definition: 'Push through a law, order, appointment or policy against institutional resistance.',
       successSemantics: 'The measure takes effect as specified now.' },
-    { key: 'scheme', label: 'Scheme', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters', 'state'],
+    { key: 'scheme', label: 'Scheme', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'meters'],
       definition: 'Hide a plan, plant a story, forge, bribe or manoeuvre without being traced.',
       successSemantics: 'The scheme proceeds untraced now, judged by what the other powers could perceive or check.' },
-    { key: 'intel', label: 'Gather intelligence', kind: 'discovery', evidence: ['transcript', 'lore', 'state'],
+    { key: 'intel', label: 'Gather intelligence', kind: 'discovery', evidence: ['transcript', 'lore'],
       definition: 'Gather intelligence, or uncover what another power is planning or hiding.',
       successSemantics: 'The specified fact is established now through admissible evidence, never through another power\'s hidden truth.' },
-    { key: 'force', label: 'Use force', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card', 'state'],
+    { key: 'force', label: 'Use force', kind: 'change', evidence: ['transcript', 'lore', 'owner_card', 'target_card'],
       definition: 'Use force: arrest, seize, suppress, attack or defend.',
       successSemantics: 'The acting side achieves the specified result against the opposition in this exchange.' },
   ],
@@ -204,8 +204,18 @@ export function registerLocalPacks(raw: unknown): LocalPackLoadResult {
     const pack = structuredClone(candidate) as GenrePack;
     const id = String(pack?.id ?? `#${index + 1}`);
     if (listPacks().some(p => p.id === id)) { warnings.push(`pack ${id}: duplicate id`); continue; }
+    // Old local packs remain usable; remove only the retired observer evidence
+    // on this copy, then validate every other source and detection protection.
+    let removedFacts = false;
+    if (Array.isArray(pack?.families)) for (const family of pack.families) {
+      if (!Array.isArray(family?.evidence)) continue;
+      const evidence = family.evidence.filter(source => String(source) !== 'state');
+      removedFacts ||= evidence.length !== family.evidence.length;
+      family.evidence = evidence;
+    }
     const check = validatePack(pack);
     if (!check.ok) { warnings.push(`pack ${id}: ${check.errors.join('; ')}`); continue; }
+    if (removedFacts) warnings.push(`pack ${id}: removed retired tracked-facts evidence; transcript and other allowed sources remain`);
     localPacks.push(deepFreeze(pack));
     loaded.push(id);
   }

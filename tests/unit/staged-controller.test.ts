@@ -20,36 +20,30 @@ const routing = (owner: string, target: string, family: string, spec: string, an
 });
 
 test('C0: with every module off the Director stands aside: no request, no injection, no attempt', async () => {
-  for (const pipeline of ['legacy', 'staged'] as const) {
-    const { host, controller } = await harness({ group: true });
-    controller.settings.pipeline = pipeline;
-    controller.settings.modules = { speaker: false, decisions: false, meters: false, secrets: false, lore: false };
-    controller.settings.reactions.enabled = false;
-    host.composerValue = 'I knock on the gate.';
-    const requests = scriptJudge(controller, {});
-    await controller.directorSend();
-    assert.equal(requests.length, 0, pipeline);
-    assert.equal(host.generated.length, 1, pipeline);
-    assert.equal(host.injection, '', pipeline);
-    assert.equal(Object.keys(controller.record!.attempts).length, 0, pipeline);
-  }
+  const { host, controller } = await harness({ group: true });
+  controller.settings.modules = { speaker: false, decisions: false, meters: false, secrets: false, lore: false };
+  controller.settings.reactions.enabled = false;
+  host.composerValue = 'I knock on the gate.';
+  const requests = scriptJudge(controller, {});
+  await controller.directorSend();
+  assert.equal(requests.length, 0);
+  assert.equal(host.generated.length, 1);
+  assert.equal(host.injection, '');
+  assert.equal(Object.keys(controller.record!.attempts).length, 0);
 });
 
 test('C0: speaker only is one request with nothing injected, and the chosen member writes', async () => {
-  for (const pipeline of ['legacy', 'staged'] as const) {
-    const { host, controller } = await harness({ group: true });
-    controller.settings.pipeline = pipeline;
-    controller.settings.modules = { speaker: true, decisions: false, meters: false, secrets: false, lore: false };
-    controller.settings.reactions.enabled = false;
-    host.composerValue = 'Mira, what do you think?';
-    const requests = scriptJudge(controller, { speaker: choice(MIRA) });
-    const writer = writerReplies(host, controller, 'Mira', 'mira.png', 'Mira shrugs.');
-    await controller.directorSend();
-    assert.equal(requests.length, 1, pipeline);
-    assert.deepEqual(Object.keys(requests[0]!.questions), ['speaker'], pipeline);
-    assert.equal(writer.injected(), '', `${pipeline}: nothing injected`);
-    assert.equal(host.generated[0]!.force_chid, 1, `${pipeline}: Mira (index 1) writes`);
-  }
+  const { host, controller } = await harness({ group: true });
+  controller.settings.modules = { speaker: true, decisions: false, meters: false, secrets: false, lore: false };
+  controller.settings.reactions.enabled = false;
+  host.composerValue = 'Mira, what do you think?';
+  const requests = scriptJudge(controller, { speaker: choice(MIRA) });
+  const writer = writerReplies(host, controller, 'Mira', 'mira.png', 'Mira shrugs.');
+  await controller.directorSend();
+  assert.equal(requests.length, 1);
+  assert.deepEqual(Object.keys(requests[0]!.questions), ['speaker']);
+  assert.equal(writer.injected(), '', 'nothing injected');
+  assert.equal(host.generated[0]!.force_chid, 1, 'Mira (index 1) writes');
 });
 
 test('staged: the player\'s own attempt runs A, B and E, freezes on the player\'s words, and swipes reuse it for free', async () => {
@@ -164,8 +158,7 @@ test('staged: Reassess asks only the ruling again, on the frozen evidence', asyn
   const frozen = Object.values(controller.record!.resolutions)[0]!;
   const before = requests.length;
   const script = scriptJudge(controller, { [controller.profile.drivingQuestionId]: noul(0.8) });
-  host.swipeResult = async () => 'reuse';
-  await controller.reroll(false);
+  await controller.reassess();
   assert.equal(requests.length, before);
   assert.equal(script.length, 1, 'one request');
   const question = Object.values(script[0]!.questions)[0]!;

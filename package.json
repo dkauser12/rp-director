@@ -1,6 +1,6 @@
 {
   "name": "rp-director",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "description": "RP Director for SillyTavern: native Send and swipes, Jev decisions, reviewed NPC tool results, and a compact interface.",
   "type": "module",

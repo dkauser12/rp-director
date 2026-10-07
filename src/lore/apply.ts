@@ -13,6 +13,12 @@ import type { LorePlan } from './settings.ts';
 
 interface LoadedEntry { world?: unknown; uid?: unknown; constant?: unknown }
 
+/** Change only the processed entry copy used by this prompt, never its book. */
+export function placeLorePick<T extends { position?: unknown; depth?: unknown }>(entry: T, nearEnd = true): T {
+  // SillyTavern world_info_position.atDepth is 4; depth 1 keeps the prefix stable.
+  return nearEnd ? { ...entry, position: 4, depth: 1 } : { ...entry };
+}
+
 export function applyLorePlan(lists: unknown[], plan: LorePlan): number {
   let removed = 0;
   for (const list of lists) {
