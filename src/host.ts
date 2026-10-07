@@ -7,8 +7,7 @@
  * Live generation flags that are not exposed on the context are read through
  * a dynamic import of the host module, with a DOM fallback.
  */
-import type { DirectorSettings, Json, TurnPermit } from './types.ts';
-import type { RollReviewChoice } from './roll-review.ts';
+import type { DirectorChatRecord, DirectorSettings, Json, TurnPermit } from './types.ts';
 import type { FingerprintMessage } from './identity.ts';
 import { uiActorName } from './identity.ts';
 import type { StructuredTransport } from './providers.ts';
@@ -16,22 +15,40 @@ import type { OpenRouterDecisionsTransport } from './providers.ts';
 import { createOpenRouterTransport, ProviderError } from './providers.ts';
 import { DEFAULT_PROFILE_ID } from './profiles.ts';
 import { migrateAutoHistory, normalizeBaseSettings } from './migration.ts';
-import { stripResultFooter, withResultFooter } from './result-footer.ts';
+import { needsLegacyRecordBackup, RECORD_BACKUP_KEY } from './state.ts';
+import { encodeRecordForStorage } from './state-storage.ts';
+import { stripResultFooter, stripChatResultFooters } from './result-footer.ts';
 import { defaultReactionSettings } from './npc-reaction.ts';
 import { defaultLoreSettings } from './lore/settings.ts';
 import type { LorePlan } from './lore/settings.ts';
-import { applyLorePlan, summarizeActivation } from './lore/apply.ts';
+import { applyLorePlan, placeLorePick, summarizeActivation } from './lore/apply.ts';
 import type { LoreActivation } from './lore/apply.ts';
 import type { LoreEntry, TunnelVisionNode } from './lore/tree.ts';
-import { attemptLabel } from './templates.ts';
+import type { WorkflowBadge } from './workflow-badge.ts';
+import { isWorkflowBadge, WORKFLOW_BADGE_KEY } from './workflow-badge.ts';
+import { playerUiText } from './activity.ts';
+import { normalizeUiPreferences } from './ui-preferences.ts';
+import { registerDirectorMacros } from './macros.ts';
+import type { DirectorMacroState, DirectorMacroRegistry } from './macros.ts';
+import { registerDirectorCommands } from './commands.ts';
+import type { DirectorCommandActions } from './commands.ts';
 
 export const INJECTION_KEY = 'rp_director_binding';
 export const SETTINGS_KEY = 'rpDirector';
 export const METADATA_KEY = 'rpDirector';
 export const VARIANT_MARKER_KEY = 'rpd';
 
+/** Public ST command records; unknown properties preserve native argument/help metadata. */
+export interface HostSlashCommand {
+  name: string;
+  aliases?: string[];
+  callback: (named: Record<string, unknown>, unnamed: unknown) => unknown;
+  [key: string]: unknown;
+}
+
 /** Subset of the host context this extension relies on. Everything else is deliberately untyped. */
 export interface StContext {
+  macros?: { registry: DirectorMacroRegistry };
   chat: HostChatMessage[];
   characters: HostCharacter[];
   groups: HostGroup[];
@@ -61,6 +78,8 @@ export interface StContext {
   callGenericPopup?: (content: string | HTMLElement, type: unknown, inputValue?: string, options?: Record<string, unknown>) => Promise<unknown>;
   POPUP_TYPE?: Record<string, unknown>;
   POPUP_RESULT?: Record<string, unknown>;
+  SlashCommandParser?: { addCommandObject: (command: unknown) => unknown; commands?: Record<string, HostSlashCommand> };
+  SlashCommand?: { fromProps: (props: HostSlashCommand) => unknown };
   registerFunctionTool?: (tool: HostFunctionTool) => void;
   unregisterFunctionTool?: (name: string) => void;
   isToolCallingSupported?: () => boolean;
@@ -142,6 +161,8 @@ export interface HostFlags {
   isSendPress: () => boolean;
   /** Host's own user-message path (script.js `sendMessageAsUser`), used when the Director yields with composer text. */
   sendMessageAsUser: ((text: string, bias: string) => Promise<unknown>) | null;
+  setCharacterId?: (index: number) => void;
+  setCharacterName?: (name: string) => void;
 }
 
 const EXTENSION_PROMPT_TYPE_IN_CHAT = 1;
@@ -151,23 +172,37 @@ export function defaultSettings(): DirectorSettings {
   return {
     enabled: true,
     profileId: DEFAULT_PROFILE_ID,
-    bindingConfirmedAt: null,
-    connection: { kind: 'mock', baseUrl: '', model: '', stProfileId: '', mockScenario: 'gate-deferred' },
-    observerConnection: { stProfileId: '' },
+    connection: { kind: 'openrouter', baseUrl: '', model: '', stProfileId: '', mockScenario: 'gate-deferred' },
     reactions: defaultReactionSettings(),
-    showBar: true,
-    inspectorOpen: false,
+    showBadges: true,
+    ...normalizeUiPreferences(),
     profileOverrides: {},
     pipeline: 'staged',
-    settingsRevision: 2,
-    modules: { speaker: true, decisions: true, meters: true, secrets: true, lore: true },
+    settingsRevision: 3,
+    waitForJudgeSeconds: 10,
+    askWhenSwiping: true,
+    reviewNpcRolls: true,
+    modules: { speaker: true, decisions: true, meters: true, secrets: true, lore: true, pacing: true, replyCheck: true },
     lore: defaultLoreSettings(),
   };
 }
 
 export class Host {
+  registerDirectorMacros(getState: () => DirectorMacroState): boolean {
+    return registerDirectorMacros(this.ctx().macros?.registry, getState);
+  }
+
+  registerDirectorCommands(actions: DirectorCommandActions): boolean {
+    return registerDirectorCommands(this.ctx(), actions);
+  }
   private flags: HostFlags | null = null;
+  private extensionLookup: ((name: string) => { enabled: boolean } | null) | null = null;
+
+  protected findHostExtension(name: string): { enabled: boolean } | null {
+    return this.extensionLookup?.(name) ?? null;
+  }
   private ownedTool: HostFunctionTool | null = null;
+  private composerLock: { element: HTMLTextAreaElement; readOnly: boolean } | null = null;
 
   ctx(): StContext {
     const st = (globalThis as unknown as { SillyTavern?: { getContext?: () => StContext } }).SillyTavern;
@@ -179,6 +214,14 @@ export class Host {
   async loadFlags(): Promise<void> {
     if (this.flags) return;
     try {
+      const extensionsUrl = new URL('../../../extensions.js', import.meta.url).href;
+      const extensions = await import(/* @vite-ignore */ extensionsUrl);
+      this.extensionLookup = typeof extensions.findExtension === 'function' ? extensions.findExtension : null;
+    } catch (error) {
+      // Optional integrations stay unavailable without the host registry.
+      console.warn('[RP Director] extensions.js import failed; Dynamic Response is treated as absent', error);
+    }
+    try {
       const groupUrl = new URL('../../../group-chats.js', import.meta.url).href;
       const scriptUrl = new URL('../../../../script.js', import.meta.url).href;
       const [groupModule, scriptModule] = await Promise.all([import(/* @vite-ignore */ groupUrl), import(/* @vite-ignore */ scriptUrl)]);
@@ -187,6 +230,8 @@ export class Host {
         isAutoMode: () => Boolean(groupModule.is_group_automode_enabled),
         isSendPress: () => Boolean(scriptModule.is_send_press),
         sendMessageAsUser: typeof scriptModule.sendMessageAsUser === 'function' ? scriptModule.sendMessageAsUser : null,
+        setCharacterId: scriptModule.setCharacterId,
+        setCharacterName: scriptModule.setCharacterName,
       };
     } catch (error) {
       console.warn('[RP Director] host flag import failed; using DOM fallback', error);
@@ -299,6 +344,23 @@ export class Host {
     return this.ctx().characters.findIndex(c => c.avatar === avatar);
   }
 
+  /** Called at GROUP_MEMBER_DRAFTED, before the host constructs the speaker's prompt. */
+  enforceGroupSpeaker(avatar: string): boolean {
+    if (!this.isGroup()) return true;
+    const index = this.resolveIndex(avatar);
+    if (index < 0 || !this.actors().some(actor => actor.avatar === avatar)) return false;
+    if (Number(this.ctx().characterId) === index) return true;
+    if (!this.flags?.setCharacterId || !this.flags.setCharacterName) return false;
+    this.flags.setCharacterId(index);
+    this.flags.setCharacterName(this.ctx().characters[index]!.name);
+    return true;
+  }
+
+  hasSelectedReply(): boolean {
+    const message = this.chat().at(-1);
+    return Boolean(message && !message.is_user && !message.is_system);
+  }
+
   /** Full authorial card text (description and personality) for rulings whose family admits it. */
   cardText(avatar: string): string {
     const c = this.ctx().characters.find(x => x.avatar === avatar);
@@ -344,11 +406,36 @@ export class Host {
   }
 
   composer(): HTMLTextAreaElement | null {
-    return document.getElementById('send_textarea') as HTMLTextAreaElement | null;
+    return typeof document === 'undefined' ? null : document.getElementById('send_textarea') as HTMLTextAreaElement | null;
   }
 
   composerText(): string {
     return String(this.composer()?.value ?? '');
+  }
+
+  onComposerInput(cancel: () => void): () => void {
+    const element = this.composer();
+    element?.addEventListener('input', cancel);
+    return () => element?.removeEventListener('input', cancel);
+  }
+
+  dynamicResponseEnabled(): boolean {
+    const settings = this.ctx().extensionSettings.dynamic_response as { enabled?: unknown } | undefined;
+    return this.findHostExtension('DynamicResponse')?.enabled === true && settings?.enabled === true;
+  }
+
+  /** Preserve the submitted text while the judge works, without owning ST's generation lock. */
+  setComposerLocked(locked: boolean): void {
+    if (locked) {
+      const element = this.composer();
+      if (element && !this.composerLock) {
+        this.composerLock = { element, readOnly: element.readOnly };
+        element.readOnly = true;
+      }
+    } else if (this.composerLock) {
+      this.composerLock.element.readOnly = this.composerLock.readOnly;
+      this.composerLock = null;
+    }
   }
 
   /** Any visible assistant prose saved after an attempt bound to the transcript. */
@@ -357,28 +444,12 @@ export class Host {
       .map(message => stripResultFooter(String(message.mes ?? '')).trim()).filter(text => !['', '...'].includes(text));
   }
 
-  /** Update the selected swipe only; saveMetadata persists the chat text too. */
-  writeResultFooter(mesId: number, footer: string): boolean {
+  /** Mutate all old storage copies together; the caller saves once with the Activity record. */
+  stripLegacyResultFooters(): { messages: number; copies: number } {
     const ctx = this.ctx();
-    const message = ctx.chat[mesId];
-    if (!message || message.is_user || message.is_system) return false;
-    const next = withResultFooter(message.mes, footer);
-    let changed = next !== message.mes;
-    message.mes = next;
-    const swipe = message.swipe_id ?? 0;
-    if (message.swipes && swipe >= 0 && swipe < message.swipes.length && message.swipes[swipe] !== next) {
-      message.swipes[swipe] = next;
-      changed = true;
-    }
-    if (typeof message.extra?.display_text === 'string') {
-      const display = withResultFooter(message.extra.display_text, footer);
-      changed ||= display !== message.extra.display_text;
-      message.extra.display_text = display;
-      const extra = message.swipe_info?.[swipe]?.extra;
-      if (extra && extra.display_text !== display) { extra.display_text = display; changed = true; }
-    }
-    if (changed) ctx.updateMessageBlock?.(mesId, message);
-    return changed;
+    const result = stripChatResultFooters(ctx.chat);
+    for (const id of result.changedMessageIds) ctx.updateMessageBlock?.(id, ctx.chat[id]!);
+    return { messages: result.messages, copies: result.copies };
   }
 
   // ---- variant markers --------------------------------------------------------
@@ -394,13 +465,118 @@ export class Host {
   writeMarker(mesId: number, marker: VariantMarker): void {
     const m = this.chat()[mesId];
     if (!m) return;
-    m.extra = m.extra && typeof m.extra === 'object' ? m.extra : {};
+    m.extra = m.extra && typeof m.extra === 'object' ? { ...m.extra } : {};
     m.extra[VARIANT_MARKER_KEY] = { ...marker };
+    if (Array.isArray(m.swipes) && !Array.isArray(m.swipe_info)) m.swipe_info = [];
     if (typeof m.swipe_id === 'number' && Array.isArray(m.swipe_info)) {
       const info = m.swipe_info[m.swipe_id] ?? (m.swipe_info[m.swipe_id] = {});
-      info.extra = info.extra && typeof info.extra === 'object' ? info.extra : {};
+      info.extra = info.extra && typeof info.extra === 'object' ? { ...info.extra } : {};
       info.extra[VARIANT_MARKER_KEY] = { ...marker };
     }
+  }
+
+  /** Workflow details belong to this swipe, never to the reply's prose. */
+  writeWorkflowBadge(mesId: number, badge: WorkflowBadge | null): boolean {
+    const message = this.chat()[mesId];
+    if (!message || message.is_user || message.is_system) return false;
+    const swipeId = message.swipe_id ?? 0;
+    if (!badge) {
+      let changed = false;
+      const clear = (extra: Record<string, unknown> | undefined) => {
+        if (extra && typeof extra === 'object' && WORKFLOW_BADGE_KEY in extra) {
+          const next = { ...extra };
+          delete next[WORKFLOW_BADGE_KEY]; changed = true;
+          return next;
+        }
+        return extra;
+      };
+      message.extra = clear(message.extra);
+      const info = message.swipe_info?.[swipeId];
+      if (info) {
+        info.extra = clear(info.extra);
+      }
+      return changed;
+    }
+    message.extra = message.extra && typeof message.extra === 'object' ? { ...message.extra } : {};
+    let changed = JSON.stringify(message.extra[WORKFLOW_BADGE_KEY]) !== JSON.stringify(badge);
+    message.extra[WORKFLOW_BADGE_KEY] = structuredClone(badge);
+    if (Array.isArray(message.swipes) && !Array.isArray(message.swipe_info)) message.swipe_info = [];
+    if (Array.isArray(message.swipe_info)) {
+      const info = message.swipe_info[swipeId] ?? (message.swipe_info[swipeId] = {});
+      info.extra = info.extra && typeof info.extra === 'object' ? { ...info.extra } : {};
+      changed ||= JSON.stringify(info.extra[WORKFLOW_BADGE_KEY]) !== JSON.stringify(badge);
+      info.extra[WORKFLOW_BADGE_KEY] = structuredClone(badge);
+    }
+    return changed;
+  }
+
+  readWorkflowBadge(mesId: number): WorkflowBadge | null {
+    const message = this.chat()[mesId];
+    if (!message || message.is_user || message.is_system) return null;
+    const swipeId = message.swipe_id ?? 0;
+    if (message.swipes && swipeId >= message.swipes.length) return null;
+    const info = message.swipe_info?.[swipeId];
+    // A present swipe slot is authoritative, including an intentionally empty
+    // one; never borrow another swipe's badge while ST restores its extras.
+    const data = info ? info.extra?.[WORKFLOW_BADGE_KEY] : message.extra?.[WORKFLOW_BADGE_KEY];
+    return isWorkflowBadge(data) ? data : null;
+  }
+
+  registerWorkspaceCommand(open: (tab?: string) => Promise<unknown>): boolean {
+    const { SlashCommandParser, SlashCommand } = this.ctx();
+    if (!SlashCommandParser || !SlashCommand) return false;
+    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+      name: 'director',
+      callback: async (_named, tab) => { await open(typeof tab === 'string' ? tab : undefined); return ''; },
+      returns: 'Nothing',
+      helpString: 'Open Director: /director [chat|activity|outcomes|lore|settings].',
+    }));
+    return true;
+  }
+
+  /** Route managed /regenerate and its native aliases through the same wording-swipe path. */
+  interceptRegenerateCommand(shouldIntercept: () => boolean, regenerate: () => Promise<unknown>): () => void {
+    const { SlashCommandParser: parser, SlashCommand } = this.ctx();
+    const registry = parser?.commands;
+    const original = registry?.regenerate;
+    if (!parser || !SlashCommand || !registry || original?.name !== 'regenerate' || typeof original.callback !== 'function') return () => {};
+    // Do not overwrite an alias another extension has independently replaced.
+    const aliases = (original.aliases ?? []).filter(alias => registry[alias] === original);
+    const names = ['regenerate', ...aliases];
+    const previous = new Map(names.map(name => [name, registry[name]!]));
+    let active = true;
+    const callback = (named: Record<string, unknown>, unnamed: unknown): unknown => {
+      // The native command owns waiting for an active generation and regenerating
+      // the whole last group round. Its Generate calls still reach our interceptor.
+      if (!active || !shouldIntercept() || !this.hasSelectedReply() || this.isGenerating() || this.isGroup() || !this.swipesEnabled()) return original.callback.call(original, named, unnamed);
+      const chatKey = this.chatKey();
+      const message = this.chat().at(-1);
+      const swipeId = message?.swipe_id ?? 0;
+      // Match ST's delayed command generation, allowing composer command processing to finish.
+      const pending = new Promise<string>(resolve => setTimeout(() => {
+        if (!active || chatKey !== this.chatKey() || this.chat().at(-1) !== message || (message?.swipe_id ?? 0) !== swipeId
+          || !shouldIntercept() || (named._abortController as { signal?: { aborted?: boolean } } | undefined)?.signal?.aborted) { resolve(''); return; }
+        void Promise.resolve().then(() => this.isGenerating() || this.isGroup() || !this.swipesEnabled()
+          ? original.callback.call(original, named, unnamed) : regenerate()).then(() => resolve('')).catch(error => {
+          console.error('[RP Director] /regenerate failed', error);
+          resolve('');
+        });
+      }, 1));
+      const wait = typeof named.await === 'string' && ['on', 'true', '1'].includes(named.await.trim().toLowerCase());
+      return wait ? pending : '';
+    };
+    const wrapped = SlashCommand.fromProps({ ...original, aliases, callback }) as HostSlashCommand;
+    parser.addCommandObject(wrapped);
+    // Registration infers provenance from its call stack. This is still ST's
+    // command, so keep its original help categorization and source.
+    for (const key of ['isExtension', 'isThirdParty', 'source']) {
+      if (Object.prototype.hasOwnProperty.call(original, key)) wrapped[key] = original[key];
+      else delete wrapped[key];
+    }
+    return () => {
+      active = false;
+      for (const name of names) if (registry[name] === wrapped) registry[name] = previous.get(name)!;
+    };
   }
 
   // ---- metadata ---------------------------------------------------------------
@@ -423,13 +599,33 @@ export class Host {
    * Re-acquires the live metadata reference and verifies the chat before
    * writing; a stale reference from another chat cannot commit (M1-11).
    */
-  async writeRecord(record: unknown, expectedChatKey: string): Promise<boolean> {
+  async writeRecord(record: DirectorChatRecord, expectedChatKey: string): Promise<boolean> {
     const ctx = this.ctx();
     if (this.chatKey() !== expectedChatKey) {
       console.warn('[RP Director] refusing to save metadata: chat changed');
       return false;
     }
-    ctx.chatMetadata[METADATA_KEY] = record;
+    const previous = ctx.chatMetadata[METADATA_KEY];
+    if (!Object.prototype.hasOwnProperty.call(ctx.chatMetadata, RECORD_BACKUP_KEY) && needsLegacyRecordBackup(previous)) {
+      const backup = structuredClone(previous) as Record<string, unknown>;
+      // The 0.7 reader defaults an absent inspector to []; it is diagnostic
+      // history, not state needed to restore meters, rulings or secrets.
+      delete backup.inspector;
+      ctx.chatMetadata[RECORD_BACKUP_KEY] = backup;
+    }
+    ctx.chatMetadata[METADATA_KEY] = encodeRecordForStorage(record);
+    await ctx.saveMetadata();
+    return true;
+  }
+
+  hasLegacyRecordBackup(): boolean {
+    return Object.prototype.hasOwnProperty.call(this.ctx().chatMetadata, RECORD_BACKUP_KEY);
+  }
+
+  async removeLegacyRecordBackup(expectedChatKey: string): Promise<boolean> {
+    if (this.chatKey() !== expectedChatKey || !this.hasLegacyRecordBackup()) return false;
+    const ctx = this.ctx();
+    delete ctx.chatMetadata[RECORD_BACKUP_KEY];
     await ctx.saveMetadata();
     return true;
   }
@@ -454,12 +650,29 @@ export class Host {
 
   // ---- injection --------------------------------------------------------------
 
+  private liveInjection = '';
+  private injectionWrites = 0;
+
   setInjection(text: string, depth: number, role: 'system' | 'user' | 'assistant'): void {
     this.ctx().setExtensionPrompt(INJECTION_KEY, text, EXTENSION_PROMPT_TYPE_IN_CHAT, depth, false, ROLE_NUMBER[role]);
+    this.liveInjection = text;
+    this.injectionWrites += 1;
   }
 
   clearInjection(): void {
     this.ctx().setExtensionPrompt(INJECTION_KEY, '', EXTENSION_PROMPT_TYPE_IN_CHAT, 0, false, ROLE_NUMBER.system);
+    this.liveInjection = '';
+    this.injectionWrites += 1;
+  }
+
+  /** The Director block as last written, including any tool-result lines added after binding. */
+  currentInjection(): string {
+    return this.liveInjection;
+  }
+
+  /** Changes on every write (set or clear), so a caller can tell whether anyone wrote since. */
+  injectionVersion(): number {
+    return this.injectionWrites;
   }
 
   // ---- generation -------------------------------------------------------------
@@ -471,12 +684,64 @@ export class Host {
     return this.ctx().generate('normal', options);
   }
 
-  async swipeRight(): Promise<void> {
+  /** SillyTavern's swipe state; anything but 'none' means a swipe is still animating, generating or saving. */
+  swipeState(): string {
+    return String(this.ctx().swipe?.state?.() ?? 'none');
+  }
+
+  async swipeRight(forceIndex: number | null = null): Promise<void> {
+    // The slash-command source below bypasses SillyTavern's one-swipe-at-a-time
+    // guard; a second swipe would write into the running swipe's slot.
+    if (this.swipeState() !== 'none') throw new Error('another swipe is still running');
+    if (!this.hasSelectedReply()) { await this.generate(forceIndex); return; }
+    if (!this.swipesEnabled()) {
+      const options = this.isGroup() && forceIndex !== null && forceIndex >= 0 ? { force_chid: forceIndex } : undefined;
+      await this.ctx().generate('regenerate', options); return;
+    }
     const message = this.chat().at(-1);
-    const options = { forceMesId: this.chat().length - 1, forceSwipeId: message?.swipes?.length ?? 1 };
+    const options = { source: 'slash_command', forceMesId: this.chat().length - 1, forceSwipeId: message?.swipes?.length ?? 1 };
     const swipe = this.ctx().swipe;
     if (swipe.to) await swipe.to(null, 'right', options);
     else await swipe.right(undefined, options);
+  }
+
+  /**
+   * After an unfinished automatic rewrite, show the wording the user was
+   * answering again. A fragment slot (our newly appended last swipe) is removed
+   * only when `removeFragment`; with no new slot, SillyTavern's endSwipe()
+   * clamped the selection to the last swipe, so the original is reselected.
+   * Returns true when the message changed.
+   */
+  async discardAutomaticSwipe(message: HostChatMessage, cancelledSwipe: number, originalSwipe: number, removeFragment = true): Promise<boolean> {
+    const index = this.chat().indexOf(message);
+    if (index < 0 || !message.swipes || originalSwipe < 0 || originalSwipe >= cancelledSwipe) return false;
+    const fragment = cancelledSwipe === message.swipes.length - 1 && message.swipe_id === cancelledSwipe;
+    if (fragment && removeFragment) {
+      message.swipes.splice(cancelledSwipe, 1);
+      message.swipe_info?.splice(cancelledSwipe, 1);
+      message.swipe_id = originalSwipe;
+      message.mes = message.swipes[originalSwipe]!;
+      message.extra = structuredClone(message.swipe_info?.[originalSwipe]?.extra ?? {});
+      this.ctx().chatMetadata.tainted = true;
+      await this.ctx().eventSource.emit?.(this.ctx().eventTypes.MESSAGE_SWIPE_DELETED ?? 'MESSAGE_SWIPE_DELETED',
+        { messageId: index, swipeId: cancelledSwipe, newSwipeId: originalSwipe });
+    } else if (message.swipes.length > cancelledSwipe || originalSwipe >= message.swipes.length || message.swipe_id === originalSwipe) return false;
+    // Like SillyTavern's own deleteSwipe(): moving to a lower index animates left.
+    if (this.ctx().swipe.to) await this.ctx().swipe.to!(null, 'left', { source: 'delete', forceMesId: index, forceSwipeId: originalSwipe });
+    else {
+      message.swipe_id = originalSwipe;
+      message.mes = message.swipes[originalSwipe]!;
+      message.extra = structuredClone(message.swipe_info?.[originalSwipe]?.extra ?? {});
+      this.ctx().updateMessageBlock?.(index, message);
+    }
+    await this.ctx().saveChat();
+    return true;
+  }
+
+  /** ST's user preference is reflected by this native settings checkbox. */
+  swipesEnabled(): boolean {
+    const checkbox = typeof document === 'undefined' ? null : document.getElementById('swipes-checkbox') as HTMLInputElement | null;
+    return checkbox ? checkbox.checked : true;
   }
 
   stopGeneration(): void {
@@ -615,7 +880,7 @@ export class Host {
     if (!plan || (plan.force.size === 0 && plan.managed.size === 0)) return;
     let forced: Record<string, unknown>[] = [];
     if (plan.force.size) {
-      try { forced = (await this.sortedEntries()).filter(e => plan.force.has(`${String(e.world)}.${String(e.uid)}`)); }
+      try { forced = (await this.sortedEntries()).filter(e => plan.force.has(`${String(e.world)}.${String(e.uid)}`)).map(entry => placeLorePick(entry, plan.nearEnd !== false)); }
       catch (error) { console.warn('[RP Director] could not resolve lore picks; keyword lore only', error); forced = []; }
     }
     if (seq === this.loreArmSeq) this.lorePlanArmed = { ...plan, forced };
@@ -755,72 +1020,11 @@ export class Host {
     return window.confirm(`${title}\n\n${html.replace(/<[^>]+>/g, '')}`);
   }
 
-  async chooseSwipeAction(kind: 'ruled' | 'native', canReroll = true): Promise<'reuse' | 'reroll' | 'manage' | 'bypass' | 'cancel'> {
-    const ctx = this.ctx();
-    if (ctx.callGenericPopup && ctx.POPUP_TYPE && ctx.POPUP_RESULT) {
-      if (kind === 'ruled') {
-        const reroll = 1001;
-        const result = await ctx.callGenericPopup(
-          '<h3>Generate a new swipe</h3><p>This reply has a frozen Director ruling. Choose whether the new wording must keep it or receive a new ruling.</p>',
-          ctx.POPUP_TYPE.CONFIRM,
-          '',
-          { okButton: 'Keep values & swipe', cancelButton: 'Cancel', customButtons: canReroll ? [{ text: 'Review new values & swipe', result: reroll, icon: 'fa-dice' }] : [] },
-        );
-        return result === reroll ? 'reroll' : result === ctx.POPUP_RESULT.AFFIRMATIVE ? 'reuse' : 'cancel';
-      }
-      const bypass = 1002;
-      const result = await ctx.callGenericPopup(
-        '<h3>Generate a new swipe</h3><p>The selected reply predates Director adjudication. Director can adopt this branch and manage the new swipe, or you can explicitly bypass it once.</p>',
-        ctx.POPUP_TYPE.CONFIRM,
-        '',
-        { okButton: 'Director-managed', cancelButton: 'Cancel', customButtons: [{ text: 'Native bypass', result: bypass, icon: 'fa-forward' }] },
-      );
-      return result === bypass ? 'bypass' : result === ctx.POPUP_RESULT.AFFIRMATIVE ? 'manage' : 'cancel';
-    }
-    return 'cancel';
-  }
-
-  async reviewRolls(permit: TurnPermit, names: Record<string, string>, method: 'sample' | 'threshold', signal: AbortSignal): Promise<RollReviewChoice> {
-    const ctx = this.ctx();
-    if (signal.aborted || !ctx.callGenericPopup || !ctx.POPUP_TYPE || !ctx.POPUP_RESULT) return 'cancel';
-    const content = document.createElement('div');
-    content.className = 'rpd-roll-review';
-    const title = document.createElement('h3'); title.textContent = 'Director results'; content.append(title);
-    const hint = document.createElement('p');
-    hint.textContent = 'The writer is waiting. Keep these values to continue, or review new results before the reply is written.';
-    content.append(hint);
-    for (const action of permit.actions) {
-      const section = document.createElement('section');
-      const heading = document.createElement('strong');
-      heading.textContent = `${uiActorName(action.actingActorId, names[action.actingActorId])}: ${attemptLabel(action.boundedResult, action.method)}`;
-      const result = document.createElement('p');
-      result.textContent = `${action.outcome}${typeof action.draw === 'number' ? ` · draw ${action.draw.toFixed(4)}` : ' · threshold assessment (no dice)'}${action.assessment?.type === 'noul' ? ` · support ${action.assessment.noul.toFixed(3)}` : ''}`;
-      const instruction = document.createElement('p'); instruction.textContent = action.instruction;
-      section.append(heading, result, instruction); content.append(section);
-    }
-    const REROLL = 1001;
-    let closePopup: (() => void) | null = null;
-    const abort = () => closePopup?.();
-    signal.addEventListener('abort', abort, { once: true });
-    try {
-      const result = await ctx.callGenericPopup(content, ctx.POPUP_TYPE.CONFIRM, '', {
-        okButton: 'Keep & continue', cancelButton: 'Cancel generation',
-        customButtons: [{ text: method === 'sample' ? 'Reroll' : 'Reassess', result: REROLL, icon: 'fa-dice' }],
-        onOpen: (popup: { complete: (result: unknown) => Promise<unknown> }) => {
-          closePopup = () => { void popup.complete(ctx.POPUP_RESULT!.CANCELLED); };
-          if (signal.aborted) closePopup();
-        },
-      });
-      if (signal.aborted) return 'cancel';
-      return result === REROLL ? 'reroll' : result === ctx.POPUP_RESULT.AFFIRMATIVE ? 'keep' : 'cancel';
-    } finally { signal.removeEventListener('abort', abort); }
-  }
-
   /** Capture native Send/Enter before SillyTavern's handlers and route it through Director. */
   interceptNativeSend(shouldIntercept: () => boolean, send: () => Promise<void>): () => void {
     const button = document.getElementById('send_but');
     const onClick = (event: Event): void => {
-      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith('/') || this.ctx().Popup?.util.isPopupOpen()) return;
+      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith('/') || this.ctx().Popup?.util.isPopupOpen() || (this.ctx().swipe.state?.() ?? 'none') !== 'none') return;
       event.preventDefault();
       event.stopImmediatePropagation();
       void send().catch(error => console.error('[RP Director] native Send interception failed', error));
@@ -830,7 +1034,7 @@ export class Host {
       if (target?.id !== 'send_textarea' || event.key !== 'Enter' || event.isComposing || event.shiftKey || event.altKey || event.metaKey) return;
       const shouldSendOnEnter = this.ctx().shouldSendOnEnter;
       if (shouldSendOnEnter && !shouldSendOnEnter()) return;
-      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith('/') || this.ctx().Popup?.util.isPopupOpen()) return;
+      if (!shouldIntercept() || !this.composerText().trim() || this.composerText().trimStart().startsWith('/') || this.ctx().Popup?.util.isPopupOpen() || (this.ctx().swipe.state?.() ?? 'none') !== 'none') return;
       event.preventDefault();
       event.stopImmediatePropagation();
       void send().catch(error => console.error('[RP Director] native Enter interception failed', error));
@@ -844,7 +1048,96 @@ export class Host {
   }
 
   nativeSendBlocked(): boolean {
-    return this.isGenerating() || (this.ctx().swipe.state?.() ?? 'none') !== 'none';
+    return this.isGenerating();
+  }
+
+  async chooseSwipeAction(kind: 'ruled' | 'native' = 'ruled', canReroll = true, signal?: AbortSignal, settings = this.settings(), canCancel = true): Promise<'reuse' | 'reroll' | 'cancel'> {
+    if (kind !== 'ruled' || !settings.askWhenSwiping) return 'reuse';
+    const ctx = this.ctx();
+    // A host lacking the popup API must still be able to keep a frozen result.
+    if (!ctx.callGenericPopup || !ctx.POPUP_TYPE || !ctx.POPUP_RESULT) return 'reuse';
+    if (signal?.aborted) return 'cancel';
+    const content = document.createElement('div');
+    const title = document.createElement('h3'); title.textContent = 'New wording, same result?';
+    const hint = document.createElement('p'); hint.textContent = canReroll
+      ? 'Keep the result, or roll again before the new reply.'
+      : 'Keep the result while the writer gives it new wording.';
+    const label = document.createElement('label');
+    const remember = document.createElement('input'); remember.type = 'checkbox';
+    label.append(remember, document.createTextNode(" Don't ask again"));
+    content.append(title, hint, label);
+    const REROLL = 1001;
+    let close: (() => void) | null = null;
+    const abort = () => close?.();
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      const result = await ctx.callGenericPopup(content, ctx.POPUP_TYPE.CONFIRM, '', {
+        okButton: 'Keep the result', cancelButton: canCancel ? 'Cancel' : false,
+        customButtons: canReroll ? [{ text: 'Roll again', result: REROLL, icon: 'fa-dice' }] : [],
+        onOpen: (popup: { complete: (result: unknown) => Promise<unknown> }) => {
+          close = () => { void popup.complete(ctx.POPUP_RESULT!.CANCELLED); };
+          if (signal?.aborted) close();
+        },
+      });
+      if (signal?.aborted) return 'cancel';
+      // A native regenerate has already deleted the old reply. Dismissal
+      // therefore keeps its frozen result and lets replacement writing finish.
+      const choice = result === REROLL && canReroll ? 'reroll' : result === ctx.POPUP_RESULT.AFFIRMATIVE || !canCancel ? 'reuse' : 'cancel';
+      if (remember.checked && choice !== 'cancel') { settings.askWhenSwiping = false; this.saveSettings(); }
+      return choice;
+    } finally { signal?.removeEventListener('abort', abort); }
+  }
+
+  async reviewRolls(permit: TurnPermit, names: Record<string, string>, _method: 'sample' | 'threshold', signal: AbortSignal): Promise<'keep' | 'reroll' | 'cancel'> {
+    const ctx = this.ctx();
+    if (signal.aborted) return 'cancel';
+    if (!ctx.callGenericPopup || !ctx.POPUP_TYPE || !ctx.POPUP_RESULT) return 'keep';
+    const content = document.createElement('div');
+    content.className = 'rpd-workflow-popup';
+    const title = document.createElement('h3'); title.textContent = 'NPC results'; content.append(title);
+    const display = (text: string) => playerUiText(text, names.player ?? ctx.name1);
+    for (const action of permit.actions) {
+      const section = document.createElement('section');
+      const heading = document.createElement('strong'); heading.textContent = `${uiActorName(action.actingActorId, names[action.actingActorId])}: ${display(action.method)}`;
+      const line = [action.outcome.replaceAll('_', ' ')];
+      const odds = action.methodUsed === 'sample' ? action.policyBand?.sampleWeights[action.outcome] : undefined;
+      if (typeof odds === 'number') line.push(`${Math.round(odds * 100)}%`);
+      if (typeof action.draw === 'number') line.push(`rolled ${Math.round(action.draw * 100)}`);
+      const result = document.createElement('p'); result.textContent = line.join(' · ');
+      const instruction = document.createElement('p'); instruction.textContent = display(action.instruction);
+      section.append(heading, result, instruction); content.append(section);
+    }
+    const REROLL = 1001;
+    let close: (() => void) | null = null;
+    const abort = () => close?.();
+    signal.addEventListener('abort', abort, { once: true });
+    try {
+      const result = await ctx.callGenericPopup(content, ctx.POPUP_TYPE.CONFIRM, '', {
+        okButton: 'Keep & continue', cancelButton: 'Cancel', customButtons: [{ text: 'Roll again', result: REROLL, icon: 'fa-dice' }],
+        onOpen: (popup: { complete: (result: unknown) => Promise<unknown> }) => {
+          close = () => { void popup.complete(ctx.POPUP_RESULT!.CANCELLED); };
+          if (signal.aborted) close();
+        },
+      });
+      if (signal.aborted) return 'cancel';
+      return result === REROLL ? 'reroll' : result === ctx.POPUP_RESULT.AFFIRMATIVE ? 'keep' : 'cancel';
+    } finally { signal.removeEventListener('abort', abort); }
+  }
+
+  /** Managed Regenerate keeps the selected reply as a swipe, including its speaker. */
+  interceptNativeRegenerate(shouldIntercept: () => boolean, regenerate: () => Promise<unknown>): () => void {
+    if (typeof document === 'undefined') return () => {};
+    const control = document.getElementById('option_regenerate');
+    const onClick = (event: Event): void => {
+      if (!shouldIntercept() || !this.hasSelectedReply() || this.isGroup() || !this.swipesEnabled() || this.isGenerating() || (this.ctx().swipe.state?.() ?? 'none') !== 'none' || this.ctx().Popup?.util.isPopupOpen()) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const menu = document.getElementById('options');
+      if (menu && menu.style.display !== 'none') document.getElementById('options_button')?.click();
+      void regenerate().catch(error => console.error('[RP Director] Regenerate failed', error));
+    };
+    control?.addEventListener('click', onClick, true);
+    return () => control?.removeEventListener('click', onClick, true);
   }
 
   newId(): string {

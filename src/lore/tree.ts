@@ -8,6 +8,7 @@
  * never offers more than `maxOptions` children: larger sets are split into
  * labelled groups, which adds a level instead of a 255-option question.
  */
+import { visibleText } from '../pipeline/spans.ts';
 
 export interface LoreEntry {
   world: string;
@@ -70,17 +71,17 @@ export function selectable(entry: LoreEntry): boolean {
 }
 
 export function excerpt(text: string, max: number): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
+  const flat = visibleText(text).replace(/\s+/g, ' ').trim();
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
 }
 
 /** TunnelVision appends "[Keywords: …]" to summaries; the judge reads the prose, not the key list. */
 function cleanSummary(value: unknown): string {
-  return String(value ?? '').replace(/\n?\[Keywords:[^\]]*\]\s*$/i, '').replace(/\s+/g, ' ').trim();
+  return visibleText(String(value ?? '')).replace(/\n?\[Keywords:[^\]]*\]\s*$/i, '').replace(/\s+/g, ' ').trim();
 }
 
 function entryLeaf(entry: LoreEntry, options: TreeOptions): LoreNode {
-  return { id: `e${entry.uid}`, label: entry.title || `Entry ${entry.uid}`, summary: excerpt(entry.content, options.excerptChars), entryUids: [entry.uid], children: [] };
+  return { id: `e${entry.uid}`, label: visibleText(entry.title) || `Entry ${entry.uid}`, summary: excerpt(entry.content, options.excerptChars), entryUids: [entry.uid], children: [] };
 }
 
 function uidList(value: unknown): number[] {
@@ -95,7 +96,7 @@ function uidList(value: unknown): number[] {
 function fromTunnelVision(raw: TunnelVisionNode, entries: Map<number, LoreEntry>, options: TreeOptions, claimed: Set<number>, path: string): LoreNode | null {
   const own = uidList(raw.entryUids).filter(uid => entries.has(uid) && !claimed.has(uid));
   const rawChildren = Array.isArray(raw.children) ? raw.children as TunnelVisionNode[] : [];
-  const label = String(raw.label ?? '').trim() || 'Untitled section';
+  const label = visibleText(String(raw.label ?? '')) || 'Untitled section';
   const summary = cleanSummary(raw.summary);
   const id = `t${path}`;
   if (rawChildren.length === 0 && own.length <= options.maxLeafEntries) {

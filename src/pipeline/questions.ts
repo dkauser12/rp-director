@@ -18,7 +18,7 @@ export function moveQuestion(spans: Span[], pack: GenrePack): ChoiceQuestion {
   const criteria: Record<string, string> = {};
   for (const span of spans) criteria[span.id] = span.text;
   criteria.ROUTINE = 'The message does act, but everything in it is routine or effectively certain for whoever performs it; nothing needs a ruling.';
-  criteria.NONE = 'No passage of the latest message contains a move to rule on.';
+  criteria.NONE = 'No passage of the latest message contains a move to rule on, including out-of-character discussion or requests to pause roleplay.';
   return {
     type: 'choice',
     instructions: `Using state.latestInput and the public exchange in state.recentAcceptedMessages, select the passage of the player's latest message that states the FIRST move to rule on. ${criteriaText(pack)} Prefer the shortest passage that states the whole move; choose a longer one only when the move runs across it. Choose ROUTINE when the message only contains actions that are routine or effectively certain for whoever performs them, and NONE when it contains no attempt at all. Do not invent a goal the passage does not state.`,

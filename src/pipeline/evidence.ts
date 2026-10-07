@@ -29,7 +29,6 @@ export interface EvidenceInput {
   actors: Record<string, EvidenceActor>;
   transcript: { actorId: string; role: 'user' | 'assistant'; text: string }[];
   latestInput: string;
-  facts: Record<string, Json>;
   move: { passage: string; antecedent: string | null };
   /** Judged meter levels by NPC id (label -> described level); read only by change families that allow meters. */
   meters?: Record<string, Record<string, string>>;
@@ -59,10 +58,11 @@ export function admissibleLore(lore: LoreEvidence[], discovery: boolean, maxChar
   const items: { book: string; title: string; text: string }[] = [];
   for (const item of lore) {
     if (discovery && !item.public) { withheld += 1; continue; }
-    const text = item.text.length > MAX_LORE_ENTRY_CHARS ? `${item.text.slice(0, MAX_LORE_ENTRY_CHARS - 1)}…` : item.text;
+    const visible = visibleText(item.text);
+    const text = visible.length > MAX_LORE_ENTRY_CHARS ? `${visible.slice(0, MAX_LORE_ENTRY_CHARS - 1)}…` : visible;
     if (used + text.length > maxChars) { dropped += 1; continue; }
     used += text.length;
-    items.push({ book: item.book, title: item.title, text });
+    items.push({ book: visibleText(item.book), title: visibleText(item.title), text });
   }
   return { items, withheld, dropped };
 }
@@ -72,6 +72,13 @@ export interface Projection {
   exclusions: string[];
   chars: number;
   overBudget: boolean;
+}
+
+function visibleValues(value: Json): Json {
+  if (typeof value === 'string') return visibleText(value);
+  if (Array.isArray(value)) return value.map(visibleValues);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, visibleValues(item)]));
+  return value;
 }
 
 export function judgeProjection(input: EvidenceInput): Projection {
@@ -92,9 +99,9 @@ export function judgeProjection(input: EvidenceInput): Projection {
   const metersFor = new Set(!discovery && allows('meters') ? involved.filter(id => input.meters?.[id]) : []);
   const actors: Record<string, Json> = {};
   for (const [id, actor] of Object.entries(input.actors)) {
-    const entry: Record<string, Json> = { name: actor.name, control: actor.control };
-    if (cardFor.has(id)) entry.authorialCharacterContext = actor.card!;
-    if (metersFor.has(id)) entry.judgedState = input.meters![id]!;
+    const entry: Record<string, Json> = { name: visibleText(actor.name), control: actor.control };
+    if (cardFor.has(id)) entry.authorialCharacterContext = visibleText(actor.card!);
+    if (metersFor.has(id)) entry.judgedState = visibleValues(input.meters![id]!);
     actors[id] = entry;
   }
   const lore = allows('lore') && input.lore?.length
@@ -106,7 +113,7 @@ export function judgeProjection(input: EvidenceInput): Projection {
   const actorRef = (id: string | null): Json => {
     if (!id) return null;
     if (id === 'SELF' || id === 'SEVERAL' || id === 'SCENE') return { id };
-    return { id, name: input.actors[id]?.name ?? id };
+    return { id, name: visibleText(input.actors[id]?.name ?? id) };
   };
 
   const build = (messages: EvidenceInput['transcript']): Json => ({
@@ -116,11 +123,10 @@ export function judgeProjection(input: EvidenceInput): Projection {
       owner: actorRef(input.ownerId),
       target: actorRef(input.targetId),
       family: { key: input.family.key, label: input.family.label },
-      passage: input.move.passage,
-      antecedent: input.move.antecedent,
+      passage: visibleText(input.move.passage),
+      antecedent: input.move.antecedent === null ? null : visibleText(input.move.antecedent),
     },
-    latestInput: input.latestInput,
-    ...(allows('state') ? { facts: input.facts as Json } : {}),
+    latestInput: visibleText(input.latestInput),
     ...(lore.items.length ? { lore: lore.items as Json } : {}),
     recentAcceptedMessages: messages.map(m => ({ actorId: m.actorId, role: m.role, text: visibleText(m.text) })),
   });

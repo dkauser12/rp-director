@@ -14,7 +14,7 @@
 import type { ReactionResult, ReactionSettings } from './npc-reaction.ts';
 
 export type Primitive = 'choice' | 'score' | 'noul';
-export type Phase = 'guide' | 'observe';
+export type Phase = 'guide';
 export type ProviderKind = 'mock' | 'rules' | 'jev' | 'structured';
 /**
  * Legacy. Before outcomes were fully player-defined, each carried one of three
@@ -110,6 +110,8 @@ export interface EvaluationResult {
   errors: Record<string, string>;
   inputTokens: number | null;
   outputTokens: number | null;
+  /** USD reported by the provider; missing is unknown, never a zero-cost estimate. */
+  costUsd?: number | null;
   durationMs: number;
   transportAttempts: number;
 }
@@ -118,6 +120,16 @@ export interface DecisionProvider {
   readonly kind: ProviderKind;
   readonly capabilities: Capabilities;
   evaluate(request: EvaluationRequest, signal: AbortSignal): Promise<EvaluationResult>;
+}
+
+/** A real judge request, independent of saved answers replayed on a wording swipe. */
+export interface RequestUsage {
+  requestId: string;
+  stage: string;
+  costUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  durationMs: number | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +221,8 @@ export type ResolutionMethod = 'threshold' | 'sample' | 'rules' | 'manual';
 export type ResolutionStatus = 'prepared' | 'accepted' | 'superseded' | 'invalidated';
 
 export interface FrozenResolution {
+  /** Old ruling evidence was removed; the frozen outcome and dice remain reusable. */
+  replayTrimmed?: boolean;
   resolutionId: string;
   previousResolutionId: string | null;
   actionId: string;
@@ -249,14 +263,29 @@ export interface FrozenResolution {
 }
 
 // ---------------------------------------------------------------------------
-// Attempts, variants, checkpoints, projection
+// Frozen attempts and variants
 // ---------------------------------------------------------------------------
 
-export type AttemptStatus = 'prepared' | 'writing' | 'observing' | 'provisional' | 'accepted' | 'rejected' | 'cancelled' | 'failed' | 'stale';
+export type AttemptStatus = 'prepared' | 'writing' | 'accepted' | 'rejected' | 'cancelled' | 'failed' | 'stale';
 export type GenerationType = 'normal' | 'swipe' | 'regenerate' | 'continue';
 
 export interface GenerationAttempt {
+  /** This turn is outside the retained judge-replay window. */
+  replayTrimmed?: boolean;
+  frozenPackId?: string;
+  /** Successful decision output, including a judged no-move, survives replay trimming. */
+  decisionsApplied?: boolean;
+  frozenPacing?: import('./pacing.ts').FrozenPacing | null;
+  replyCheck?: import('./reply-check.ts').ReplyCheckResult;
+  replyCheckError?: string;
+  replyCorrection?: string;
+  rerolledByCheck?: import('./reply-check.ts').ReplyCheckReason;
+  /** Zero-based original wording, which need not be next to its rewrite. */
+  replyOriginalSwipe?: number;
+  replyNudge?: string;
   attemptId: string;
+  /** Actual requests for this turn, retained when old inspector payloads are trimmed. */
+  requestUsage?: RequestUsage[];
   resolutionId: string | null;
   /** Optional permit for newly planned NPC actions in this writer attempt. */
   permitId?: string | null;
@@ -276,7 +305,26 @@ export interface GenerationAttempt {
   epoch: number;
   /** True when the host generated without the Director pipeline. */
   unadjudicated: boolean;
-  /** Tool checkpoint state. Missing on records from earlier builds. */
+  /** Frozen speaker choice, reused by swipes even after settings change. */
+  frozenSpeaker?: SpeakerDecision | null;
+  /** Exact character state given to the writer for this turn. */
+  frozenStateBlock?: string;
+  /** Story snapshot before judging this user turn; explicit retries start here. */
+  storyBefore?: StorySnapshot | null;
+  /** Judged snapshot frozen for this variant, restored when its swipe is selected. */
+  storyAfter?: StorySnapshot | null;
+  /** Frozen, JSON-safe writer lore activation; null means no lore for this turn. */
+  frozenLorePlan?: { force: string[]; managed: string[]; nearEnd?: boolean } | null;
+  /** Error types recorded when one or more judge stages failed open. */
+  judgeErrors?: string[];
+  /** Failed stages, kept separately from error categories for selective retries. */
+  judgeFailedStages?: string[];
+  /** Successful independent stage answers can be replayed during a judge retry. */
+  stageRecords?: import('./pipeline/staged.ts').StageRecord[];
+  turnKind?: 'director_send' | 'director_next';
+  /** Exact input this turn answered, including a Next turn's own exchange. */
+  inputText?: string;
+  /** Writer tool state. Missing on records from earlier builds. */
   toolStatus?: 'not_offered' | 'offered' | 'permitted' | 'failed' | 'malformed' | 'reused';
   toolError?: string | null;
   /** Key of the lore picks (story.lore) this attempt is written with; null or missing = none. */
@@ -293,15 +341,10 @@ export interface VariantRecord {
   cursorBefore: string | null;
   /** Fingerprint of the accepted prefix including this variant. */
   cursorAfter: string | null;
-  acceptance: 'pending' | 'accepted' | 'rejected' | 'auto';
-  /** Post-generation observation is provisional until this variant is selected and committed. */
-  observerStatus?: 'pending' | 'ready' | 'failed' | 'not_required';
-  observation?: ObservationRecord | null;
-  observerError?: string | null;
 }
 
 // ---------------------------------------------------------------------------
-// Writer tool checkpoint and post-generation observer
+// Writer tool
 // ---------------------------------------------------------------------------
 
 export interface PlannedAction {
@@ -347,6 +390,8 @@ export interface PermittedAction {
 }
 
 export interface TurnPermit {
+  /** Old judge proposal/evidence was removed; the kept action rulings remain. */
+  replayTrimmed?: boolean;
   schemaVersion: 1;
   permitId: string;
   attemptId: string;
@@ -366,64 +411,6 @@ export interface TurnPermit {
   proposal?: TurnProposal;
   snapshot?: DecisionSnapshot;
   profile?: DirectorProfile;
-}
-
-export type ObservationOperation =
-  | { operationId: string; op: 'advance_time'; seconds: number; quality: 'exact' | 'estimated' }
-  | { operationId: string; op: 'set_known_location'; actorId: string; placeId: string | null; status: 'known' | 'unknown' | 'in_transit' }
-  | { operationId: string; op: 'transfer_item'; itemId: string; fromActorId: string | null; toActorId: string | null }
-  | { operationId: string; op: 'set_condition'; actorId: string; conditionId: string; active: boolean }
-  | { operationId: string; op: 'mark_fact_known'; actorId: string; factId: string }
-  | { operationId: string; op: 'mark_secret_revealed'; secretId: string; actorIds: string[] };
-
-export interface ObservationRegistry {
-  actorIds: string[];
-  placeIds: string[];
-  itemIds: string[];
-  conditionIds: string[];
-  factIds: string[];
-  secretIds: string[];
-}
-
-export interface ObservationRequest {
-  schemaVersion: 1;
-  requestId: string;
-  attemptId: string;
-  variantId: string;
-  baseCursor: string;
-  cursorAfter: string;
-  stateRevision: number;
-  acceptedSpan: EvidenceSpan;
-  expectedResolutionIds: string[];
-  expectedRulings: {
-    resolutionId: string;
-    actingActorId: string;
-    boundedResult: string;
-    outcome: Outcome;
-    instruction: string;
-  }[];
-  permit: TurnPermit | null;
-  priorState: CompactState;
-  registry: ObservationRegistry;
-}
-
-export interface ObservationRecord {
-  schemaVersion: 1;
-  requestId: string;
-  attemptId: string;
-  variantId: string;
-  baseCursor: string;
-  cursorAfter: string;
-  stateRevision: number;
-  realizedResolutionIds: string[];
-  operations: ObservationOperation[];
-  unresolved: string[];
-  providerKind: ProviderKind | 'local';
-  requestedModel: string | null;
-  returnedModel: string | null;
-  durationMs: number;
-  inputTokens: number | null;
-  outputTokens: number | null;
 }
 
 export interface Position {
@@ -461,26 +448,6 @@ export interface CompactState {
   revealedSecrets: Record<string, string[]>;
   lastObservedCursor: string;
   trackingStatus: 'current' | 'pending' | 'stale';
-}
-
-export interface Checkpoint {
-  cursor: string;
-  parentCursor: string | null;
-  stateAfter: CompactState;
-  variantId: string | null;
-  acceptedResolutionId: string | null;
-  observationOperationIds: string[];
-}
-
-export type ProjectionStatus = 'current' | 'provisional' | 'stale' | 'unknown';
-
-export interface Projection {
-  /** Cursor of the head the projection describes. */
-  cursor: string | null;
-  state: CompactState;
-  status: ProjectionStatus;
-  /** Why the projection is stale or unknown, for the inspector. */
-  reason: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -539,7 +506,7 @@ export interface InspectorEntry {
   id: string;
   at: number;
   epoch: number;
-  kind: 'director_send' | 'director_next' | 'wording_regeneration' | 'reroll' | 'native_bypass' | 'acceptance' | 'tool_checkpoint' | 'observer' | 'restore' | 'error' | 'yield' | 'info';
+  kind: 'director_send' | 'director_next' | 'wording_regeneration' | 'reroll' | 'tool_checkpoint' | 'error' | 'yield' | 'info';
   attemptId: string | null;
   resolutionId: string | null;
   actionId: string | null;
@@ -560,11 +527,20 @@ export interface InspectorEntry {
   inputTokens: number | null;
   outputTokens: number | null;
   networkCalls: number;
+  requestUsage?: RequestUsage[];
   message: string;
 }
 
 export interface DirectorChatRecord {
+  /** Last saved selected transcript chain, used to rebase edited prefixes by index. */
+  transcriptCursors?: string[];
+  /** A raw 0.7 record still needs its pre-user story keys migrated on chat load. */
+  legacyStoryLayout?: true;
+  /** User-prefix identities already given their one automatic wording retry. */
+  replyCheckRerolls?: string[];
   schemaVersion: 1;
+  /** Marks normalized v0.8 data; earlier raw records get a separate rollback backup. */
+  dataVersion?: 2;
   seedId: string;
   actors: Record<string, ActorBinding>;
   actions: Record<string, ActionSpec>;
@@ -572,11 +548,10 @@ export interface DirectorChatRecord {
   permits: Record<string, TurnPermit>;
   attempts: Record<string, GenerationAttempt>;
   variants: Record<string, VariantRecord>;
-  /** Keyed by `cursorAfter`. */
-  checkpoints: Record<string, Checkpoint>;
   appliedOperationIds: string[];
   pending: PendingGeneration | null;
-  projection: Projection;
+  /** Per-chat pause; does not change global module settings. */
+  paused: boolean;
   inspector: InspectorEntry[];
   /** Active profile revision when the record was last touched. */
   profileRevision: string;
@@ -596,6 +571,8 @@ export interface StorySnapshot {
   at: number;
   /** NPC id -> meter key -> level index. */
   meters: Record<string, Record<string, number>>;
+  /** Per-meter judgment status. Absent on legacy snapshots: saved values were judged. */
+  assessed?: Record<string, Record<string, boolean>>;
   /** Secret id -> actor ids who know it (always including its holders). */
   knownBy: Record<string, string[]>;
 }
@@ -607,6 +584,8 @@ export interface StoryState {
   secrets: SecretRecord[];
   /** Snapshots keyed by the transcript cursor they were judged at; the nearest earlier one on the current branch applies. */
   history: Record<string, StorySnapshot>;
+  /** Identical wording-swipe snapshots share one stored payload. Targets are direct history keys. */
+  historyAliases?: Record<string, string>;
   /** Lore chosen for a turn, keyed by the cursor the turn was decided at; swipes and continues reuse it. */
   lore: Record<string, LoreSelectionRecord>;
 }
@@ -614,6 +593,12 @@ export interface StoryState {
 export interface LoreSelectionRecord {
   at: number;
   refs: { world: string; uid: number; title: string; score: number }[];
+  /** Separately admissible evidence picks are never inferred from writer picks. */
+  evidenceRefs?: { world: string; uid: number; title: string; score: number }[];
+  /** Public scene where these picks were selected, retained while they are reused. */
+  scene?: Json;
+  /** Selection settings and book visibility fingerprint for safe reuse. */
+  configuration?: string;
   requests: number;
   /** Books the turn could draw on; managed books among them lose keyword activation while this turn is written. */
   books: string[];
@@ -637,6 +622,8 @@ export interface LoreBookSettings {
 }
 
 export interface LoreSettings {
+  /** Keep picked writer lore near the tail of the prompt to preserve its prefix cache. */
+  placeNearEnd: boolean;
   books: Record<string, LoreBookSettings>;
   /** Mode for books without their own setting. */
   defaultMode: LoreBookMode;
@@ -704,29 +691,31 @@ export interface ConnectionSettings {
   mockScenario: string;
 }
 
-export interface ObserverConnectionSettings {
-  /** Empty uses the decision provider in bounded entailment mode. */
-  stProfileId: string;
-}
-
 export interface DirectorSettings {
   enabled: boolean;
+  /** Ask before a wording swipe of a reply with a frozen ruling. */
+  askWhenSwiping: boolean;
+  /** Let the user keep or reroll NPC tool results before prose continues. */
+  reviewNpcRolls: boolean;
   profileId: string;
-  /** ISO timestamp of the user's explicit first-use confirmation, or null. */
-  bindingConfirmedAt: string | null;
   connection: ConnectionSettings;
-  observerConnection: ObserverConnectionSettings;
   reactions: ReactionSettings;
-  showBar: boolean;
-  inspectorOpen: boolean;
+  showBadges: boolean;
+  /** Editable pacing and reply-check preferences. */
+  pacingTexts: Record<'combat' | 'conversation' | 'travel' | 'intimate' | 'downtime', string>;
+  /** Only active while Pacing is enabled; missing on older saved settings. */
+  handBackBeats?: boolean;
+  replyCheckThresholds: { speaksForUser: number; followsRuling: number; responds: number; repeats: number };
   /** Per-profile user edits (bands, priors) keyed by profile id. */
   profileOverrides: Record<string, Partial<DirectorProfile>>;
-  /** Which decision pipeline runs a turn. Staged is the default; legacy stays selectable. */
-  pipeline: 'legacy' | 'staged';
-  /** Settings migrations applied (2: staged became the default once). */
+  /** The only supported decision pipeline. */
+  pipeline: 'staged';
+  /** Total pre-reply judge wait, in seconds. Zero means proceed immediately. */
+  waitForJudgeSeconds: number;
+  /** Settings migrations applied (3: staged only; observer and confirmation removed). */
   settingsRevision: number;
   /** Independently switchable suites. NPC reactions keep their own `reactions.enabled` switch. */
-  modules: { speaker: boolean; decisions: boolean; meters: boolean; secrets: boolean; lore: boolean };
+  modules: { speaker: boolean; decisions: boolean; meters: boolean; secrets: boolean; lore: boolean; replyCheck?: boolean; pacing?: boolean };
   lore: LoreSettings;
 }
 

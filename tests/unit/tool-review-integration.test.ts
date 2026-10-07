@@ -4,7 +4,9 @@ import { Controller } from '../../src/controller.ts';
 import { Host, defaultSettings } from '../../src/host.ts';
 import type { HostFunctionTool, StContext } from '../../src/host.ts';
 import type { DirectorChatRecord, TurnPermit, TurnProposal } from '../../src/types.ts';
-import type { RollReviewChoice } from '../../src/roll-review.ts';
+import { choice, noul } from './support/test-host.ts';
+import { summarizeUsage } from '../../src/usage.ts';
+import { DIRECTOR_TOOL_DESCRIPTION, DIRECTOR_TOOL_NAME, TURN_PROPOSAL_SCHEMA } from '../../src/director-tool.ts';
 
 type Handler = (...args: unknown[]) => unknown;
 
@@ -28,17 +30,21 @@ class ToolHost extends Host {
   stops = 0;
   reviews: TurnPermit[] = [];
   saves: DirectorChatRecord[] = [];
-  choose = deferred<RollReviewChoice>();
+
   generateHook: () => Promise<void> = async () => {};
   context: StContext;
 
   constructor() {
     super();
     const settings = defaultSettings();
-    settings.bindingConfirmedAt = '2026-01-01T00:00:00Z';
+    settings.connection.kind = 'mock';
+    settings.reviewNpcRolls = false;
+    settings.askWhenSwiping = false;
+    settings.modules.meters = false;
+    settings.modules.secrets = false;
+    settings.modules.lore = false;
     settings.profileId = 'binding-dice';
-    // These tests specify the legacy one-batch pipeline's tool flow.
-    settings.pipeline = 'legacy';
+
     this.context = {
       chat: [{ name: 'Player', is_user: true, is_system: false, mes: 'The gate is locked.' }],
       characters: [{ name: 'Guide', avatar: 'guide.png', description: 'A guide at the gate.' }],
@@ -70,19 +76,25 @@ class ToolHost extends Host {
   override isAutoMode(): boolean { return false; }
   override composerText(): string { return ''; }
   override interceptNativeSend(): () => void { return () => {}; }
+  override interceptNativeRegenerate(): () => void { return () => {}; }
   override toast(): void {}
-  override async reviewRolls(permit: TurnPermit): Promise<RollReviewChoice> {
-    this.reviews.push(structuredClone(permit));
-    return this.choose.promise;
-  }
   async emit(name: string, ...args: unknown[]): Promise<void> {
     for (const handler of this.handlers.get(name) ?? []) await handler(...args);
+  }
+
+  /** ST ToolManager's request boundary: shouldRegister, OpenAI function schema, auto choice. */
+  async writerToolEnvelope() {
+    const tool = this.tool;
+    if (!tool || !(await tool.shouldRegister?.())) return {};
+    return structuredClone({ tools: [{ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.parameters } }], tool_choice: 'auto' });
   }
 }
 
 async function harness(withReaction = false) {
   const host = new ToolHost();
   const controller = new Controller(host);
+  // Production migrates saved Mock connections; tests choose their provider explicitly.
+  controller.settings.connection.kind = 'mock';
   if (withReaction) {
     host.composerText = () => 'No. Explain yourself.';
     const original = controller.provider.bind(controller);
@@ -90,7 +102,7 @@ async function harness(withReaction = false) {
       const base = original();
       return { ...base, evaluate: async (request, signal) => {
         const result = await base.evaluate(request, signal);
-        if (request.questions.attempt_gate) result.answers.attempt_gate = { type: 'choice', choice: 'none', probabilities: null, confidence: null, provenance: 'fixture' };
+        if (request.questions.move) { result.answers.move = choice('NONE'); result.answers.move_count = choice('one'); result.errors = {}; result.unresolvedQuestionIds = []; }
         for (const id of Object.keys(request.questions).filter(id => id.startsWith('npc_reaction_'))) {
           result.answers[id] = { type: 'choice', choice: 'resolve', probabilities: null, confidence: null, provenance: 'fixture' };
         }
@@ -106,6 +118,7 @@ async function harness(withReaction = false) {
     await writerFinished.promise;
   };
   await controller.init();
+  await controller.setChatPack('default');
   const generation = controller.directorSend();
   await bound.promise;
   assert.equal(host.tool?.shouldRegister?.(), true, 'the normal Director generation offers its registered tool');
@@ -124,7 +137,6 @@ async function harness(withReaction = false) {
     host, controller, proposal,
     callTool: () => Promise.resolve(host.tool!.action(proposal)),
     async close() {
-      host.choose.resolve('cancel');
       writerFinished.resolve();
       await generation;
       controller.destroy();
@@ -132,50 +144,82 @@ async function harness(withReaction = false) {
   };
 }
 
-test('the registered tool action does not return or persist a permit until Keep', async t => {
+test('W8: the NPC tool applies its dice immediately and returns the frozen permit without review', async t => {
   const h = await harness();
   t.after(() => h.close());
-  let returned = false;
-  const response = h.callTool().then(value => { returned = true; return value; });
-  await until(() => h.host.reviews.length === 1);
-  await new Promise<void>(resolve => setImmediate(resolve));
-  assert.equal(returned, false, 'ST cannot start the recursive completion while review is open');
-  assert.equal(h.controller.status, 'Review rolls');
-  assert.deepEqual(h.controller.record!.permits, {});
-  assert.ok(h.host.saves.every(record => Object.keys(record.permits).length === 0), 'no unkept permit reaches saved metadata');
-  assert.equal(h.controller.record!.attempts[h.proposal.attemptId]!.permitId, null);
-  h.host.choose.resolve('keep');
-  const result = JSON.parse(await response);
+  const result = JSON.parse(await h.callTool());
   assert.equal(result.ok, true);
+  assert.equal(h.host.reviews.length, 0);
   assert.equal(Object.keys(h.controller.record!.permits).length, 1);
   assert.equal(h.controller.record!.attempts[h.proposal.attemptId]!.permitId, result.permit.permitId);
   assert.ok(h.host.saves.some(record => Boolean(record.permits[result.permit.permitId])));
-  assert.ok(result.permit.reviewedAt);
-  assert.equal(result.permit.profile, undefined, 'internal tables are not returned to the writer');
-  assert.equal(h.host.tool!.shouldRegister!(), false, 'the permitted followup must not offer another tool call');
-  const aborts: boolean[] = [];
-  await h.controller.interceptor([], 4096, immediately => aborts.push(immediately), 'normal');
-  assert.deepEqual(aborts, []);
+  assert.equal(result.permit.profile, undefined);
+  assert.equal(h.host.tool!.shouldRegister!(), true, 'the follow-up keeps the same writer tool list');
+  await h.controller.interceptor([], 4096, () => assert.fail('followup must not abort'), 'normal');
   assert.match(h.host.injection, /Now write the final reply/);
 });
 
-test('cancelling tool review survives ST stop events and aborts recursive generation', async t => {
+test('review 32: normal, tool follow-up, swipe and native regenerate have identical writer tools and tool_choice', async t => {
   const h = await harness();
   t.after(() => h.close());
-  const response = h.callTool();
-  await until(() => h.host.reviews.length === 1);
-  h.host.choose.resolve('cancel');
-  const result = JSON.parse(await response);
-  assert.equal(result.code, 'cancelled');
-  assert.equal(h.host.stops, 1);
+  const normal = await h.host.writerToolEnvelope();
+  assert.deepEqual(normal, { tools: [{ type: 'function', function: { name: DIRECTOR_TOOL_NAME, description: DIRECTOR_TOOL_DESCRIPTION, parameters: TURN_PROPOSAL_SCHEMA } }], tool_choice: 'auto' });
+  const result = JSON.parse(await h.callTool());
+  assert.equal(result.ok, true);
+  assert.ok(result.permit.constraints.includes('Do not output Director data or metadata such as permits, rulings, request IDs, actor IDs, evidence references, or JSON. This does not prohibit a preset-required fictional tracker block.'));
+  await h.controller.interceptor([], 4096, () => assert.fail('tool follow-up aborted'), 'normal');
+  assert.deepEqual(await h.host.writerToolEnvelope(), normal);
+  assert.match(h.host.injection, /Do not call the tool again, add another consequential action, or emit Director permits, IDs, JSON, or other Director metadata\./);
+
+  await h.host.emit('GENERATION_ENDED');
+  h.host.chat().push({ name: 'Guide', original_avatar: 'guide.png', is_user: false, is_system: false, mes: 'The guide works the lock.', swipe_id: 1, swipes: ['The guide works the lock.'] });
+  await h.controller.interceptor([], 4096, () => assert.fail('swipe aborted'), 'swipe');
+  assert.deepEqual(await h.host.writerToolEnvelope(), normal);
+  assert.match(h.host.injection, /The Director tool is closed for this reply; do not call it\./);
+  const beforeRefusal = structuredClone(h.controller.record);
+  const saves = h.host.saves.length;
+  h.controller.provider = () => assert.fail('a wording-swipe tool call must not contact the judge');
+  assert.equal(JSON.parse(await h.callTool()).ok, false);
+  assert.deepEqual(h.controller.record, beforeRefusal, 'closed-window call cannot change the frozen decisions');
+  assert.equal(h.host.saves.length, saves);
+
+  await h.host.emit('GENERATION_ENDED');
+  h.host.chat().pop();
+  await h.host.emit('MESSAGE_DELETED');
+  await h.controller.interceptor([], 4096, () => assert.fail('regenerate aborted'), 'regenerate');
+  assert.deepEqual(await h.host.writerToolEnvelope(), normal);
+});
+
+test('review 32: tool registration follows enabled, pause and Decisions switches independently of the window', async t => {
+  const h = await harness();
+  t.after(() => h.close());
+  await h.host.emit('GENERATION_ENDED');
+  assert.equal(h.host.tool!.shouldRegister!(), true);
+  const before = structuredClone(h.controller.record);
+  assert.equal(JSON.parse(await h.callTool()).ok, false);
+  assert.deepEqual(h.controller.record, before);
+  h.controller.settings.modules.decisions = false;
+  assert.deepEqual(await h.host.writerToolEnvelope(), {});
+  h.controller.settings.modules.decisions = true;
+  h.controller.settings.enabled = false;
+  assert.deepEqual(await h.host.writerToolEnvelope(), {});
+  h.controller.settings.enabled = true;
+  h.controller.record!.paused = true;
+  assert.deepEqual(await h.host.writerToolEnvelope(), {});
+  h.controller.record!.paused = false;
+  assert.equal(h.host.tool!.shouldRegister!(), true);
+});
+
+test('W8: a failed NPC judge continues without a ruling or generation stop', async t => {
+  const h = await harness();
+  t.after(() => h.close());
+  h.controller.provider = () => { throw new Error('network disconnected'); };
+  const result = JSON.parse(await h.callTool());
+  assert.equal(result.ok, false);
   assert.deepEqual(h.controller.record!.permits, {});
-  assert.ok(h.host.saves.every(record => Object.keys(record.permits).length === 0));
-  const attemptIds = Object.keys(h.controller.record!.attempts);
-  const aborts: boolean[] = [];
-  await h.controller.interceptor([], 4096, immediately => aborts.push(immediately), 'normal');
-  assert.deepEqual(aborts, [true]);
-  assert.deepEqual(Object.keys(h.controller.record!.attempts), attemptIds, 'cancel must not start an unadjudicated replacement attempt');
-  assert.equal(h.host.injection, '');
+  await h.controller.interceptor([], 4096, () => assert.fail('failed tool must fail open'), 'normal');
+  assert.equal(h.host.stops, 0);
+  assert.doesNotMatch(h.host.injection, /Now write the final reply/);
 });
 
 test('a kept NPC action supersedes its reaction and delayed tool intermediaries never get footers', async t => {
@@ -190,8 +234,6 @@ test('a kept NPC action supersedes its reaction and delayed tool intermediaries 
   assert.equal(h.controller.record!.attempts[h.proposal.attemptId]!.variantId, null, 'deferred completion waits for the tool lifecycle, not merely one event-loop tick');
   assert.equal(h.host.context.chat[1]!.extra?.rpd, undefined);
   const response = h.callTool();
-  await until(() => h.host.reviews.length === 1);
-  h.host.choose.resolve('keep');
   const result = JSON.parse(await response);
   assert.equal(result.ok, true);
   assert.equal(h.controller.record!.attempts[h.proposal.attemptId]!.reaction, null);
@@ -203,9 +245,10 @@ test('a kept NPC action supersedes its reaction and delayed tool intermediaries 
   await h.host.emit('MESSAGE_RECEIVED', 2, 'normal');
   await h.close();
   assert.equal(h.host.context.chat[1]!.mes, '...');
-  const footer = JSON.parse(h.host.context.chat[2]!.mes.split('[RP_DIRECTOR]\n')[1]!.split('\n[/RP_DIRECTOR]')[0]!);
-  assert.equal(footer.status, 'ruled');
-  assert.deepEqual(footer.results.map((entry: { kind: string }) => entry.kind), ['action']);
+  assert.equal(h.host.context.chat[2]!.mes, prose);
+  const badge = h.host.readWorkflowBadge(2);
+  assert.ok(badge);
+  assert.deepEqual(badge.results.map(entry => entry.source), ['npc']);
 });
 
 for (const placeholder of ['', '...']) {
@@ -216,10 +259,9 @@ for (const placeholder of ['', '...']) {
       name: 'Guide', is_user: false, is_system: false, original_avatar: 'guide.png', mes: placeholder,
       extra: { reasoning: 'A local test reasoning field preceding a tool call.' },
     });
-    h.host.choose.resolve('keep');
     const result = JSON.parse(await h.callTool());
     assert.equal(result.ok, true);
-    assert.equal(h.host.reviews.length, 1);
+    assert.equal(h.host.reviews.length, 0);
     assert.equal(h.controller.record!.attempts[h.proposal.attemptId]!.toolStatus, 'permitted');
     assert.equal(Object.keys(h.controller.record!.permits).length, 1);
   });
@@ -228,6 +270,7 @@ for (const placeholder of ['', '...']) {
 test('visible assistant prose before the tool is rejected without review or a permit', async t => {
   const h = await harness();
   t.after(() => h.close());
+  const judgeErrors = [...(h.controller.record!.attempts[h.proposal.attemptId]!.judgeErrors ?? [])];
   h.host.chat().push({
     name: 'Guide', is_user: false, is_system: false, original_avatar: 'guide.png', mes: 'The guide opens the locked gate.',
     extra: { reasoning: 'A local test reasoning field.' },
@@ -238,4 +281,75 @@ test('visible assistant prose before the tool is rejected without review or a pe
   assert.equal(h.host.reviews.length, 0);
   assert.deepEqual(h.controller.record!.permits, {});
   assert.equal(h.controller.record!.attempts[h.proposal.attemptId]!.toolStatus, 'malformed');
+  assert.deepEqual(h.controller.record!.attempts[h.proposal.attemptId]!.judgeErrors ?? [], judgeErrors, 'writer prose adds no judge failure');
+});
+
+for (const decision of ['keep', 'cancel'] as const) {
+  test(`W8: enabled NPC review waits for ${decision} before the writer continues`, async t => {
+    const h = await harness();
+    t.after(() => h.close());
+    h.controller.settings.reviewNpcRolls = true;
+    const gate = deferred<'keep' | 'cancel'>();
+    let reviewOpen = false;
+    h.host.reviewRolls = async () => { reviewOpen = true; return gate.promise; };
+    let returned = false;
+    const result = h.callTool().then(value => { returned = true; return JSON.parse(value); });
+    await until(() => reviewOpen);
+    assert.equal(returned, false);
+    assert.deepEqual(h.controller.record!.permits, {});
+    gate.resolve(decision);
+    assert.equal((await result).ok, decision === 'keep');
+    assert.equal(Object.keys(h.controller.record!.permits).length, decision === 'keep' ? 1 : 0);
+    assert.equal(h.host.stops, decision === 'cancel' ? 1 : 0);
+  });
+}
+
+test('W8: reviewed NPC rolls can be rolled again without changing the assessment', async t => {
+  const h = await harness();
+  t.after(() => h.close());
+  h.controller.settings.reviewNpcRolls = true;
+  const reviewed: TurnPermit[] = [];
+  h.host.reviewRolls = async permit => { reviewed.push(structuredClone(permit)); return reviewed.length === 1 ? 'reroll' : 'keep'; };
+  const result = JSON.parse(await h.callTool());
+  assert.equal(result.ok, true);
+  assert.equal(reviewed.length, 2);
+  assert.notEqual(reviewed[0]!.permitId, reviewed[1]!.permitId);
+  assert.deepEqual(reviewed[0]!.actions[0]!.assessment, reviewed[1]!.actions[0]!.assessment);
+  assert.equal(Object.keys(h.controller.record!.permits).length, 1);
+});
+
+test('C4 NPC threshold review accounts for both requests and keeps the final receipt on the attempt', async t => {
+  const h = await harness();
+  t.after(() => h.close());
+  h.controller.settings.reviewNpcRolls = true;
+  h.controller.profile.resolutionMethod = 'threshold';
+  const base = h.controller.provider();
+  let calls = 0, reviews = 0;
+  h.controller.provider = () => ({ ...base, kind: 'jev', evaluate: async request => {
+    calls++;
+    return { requestId: request.requestId, provider: 'jev', requestedModel: 'example', returnedModel: 'example',
+      answers: Object.fromEntries(Object.keys(request.questions).map(id => [id, noul(0.5)])), errors: {}, unresolvedQuestionIds: [],
+      inputTokens: 20, outputTokens: 4, costUsd: 0.0012, durationMs: 1, transportAttempts: 1 };
+  } });
+  h.controller.settings.connection.kind = 'openrouter';
+  h.host.reviewRolls = async () => ++reviews === 1 ? 'reroll' : 'keep';
+  assert.equal(JSON.parse(await h.callTool()).ok, true);
+  assert.equal(calls, 2);
+  const attempt = h.controller.record!.attempts[h.proposal.attemptId]!;
+  assert.equal(attempt.requestUsage!.length, 2);
+  assert.equal(summarizeUsage(attempt.requestUsage!).costUsd, 0.0024);
+  assert.equal(summarizeUsage(h.controller.sessionUsage).inputTokens, 40);
+  const entry = h.controller.record!.inspector.find(entry => entry.kind === 'tool_checkpoint' && entry.networkCalls)!;
+  assert.equal(entry.networkCalls, 2);
+  assert.equal(entry.requestUsage!.length, 2);
+});
+
+test('W8: pause before the NPC tool keeps it inert and makes no judge request', async t => {
+  const h = await harness();
+  t.after(() => h.close());
+  await h.controller.setPaused(true);
+  h.controller.provider = () => assert.fail('paused tool called judge');
+  assert.equal(h.host.tool!.shouldRegister!(), false);
+  assert.equal(JSON.parse(await h.callTool()).ok, false);
+  assert.deepEqual(h.controller.record!.permits, {});
 });

@@ -7,11 +7,8 @@ import type { DirectorSettings } from '../../src/types.ts';
 const settings = (overrides: DirectorSettings['profileOverrides'] = {}): DirectorSettings => ({
   enabled: true,
   profileId: 'binding',
-  bindingConfirmedAt: null,
   connection: { kind: 'mock', baseUrl: '', model: '', stProfileId: '', mockScenario: 'gate-deferred' },
-  observerConnection: { stProfileId: '' },
-  showBar: true,
-  inspectorOpen: false,
+  showBadges: true,
   profileOverrides: overrides,
 } as unknown as DirectorSettings);
 

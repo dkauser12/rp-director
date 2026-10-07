@@ -1,0 +1,812 @@
+{
+ "metadata": {
+  "rpDirector": {
+   "schemaVersion": 1,
+   "seedId": "char:guide.png:staged-test|",
+   "actors": {
+    "player": {
+     "actorId": "player",
+     "avatar": "persona",
+     "name": "Player",
+     "control": "user"
+    },
+    "guide-801abb": {
+     "actorId": "guide-801abb",
+     "avatar": "guide.png",
+     "name": "Guide",
+     "control": "npc"
+    }
+   },
+   "actions": {},
+   "resolutions": {},
+   "permits": {},
+   "attempts": {
+    "att_cc2e47e77cfc4108": {
+     "attemptId": "att_cc2e47e77cfc4108",
+     "resolutionId": null,
+     "permitId": null,
+     "reaction": null,
+     "actorId": "guide-801abb",
+     "cursorBefore": "c_f24f072c71788ea8",
+     "status": "accepted",
+     "generationType": "normal",
+     "hostMessageRef": 3,
+     "hostVariantRef": 0,
+     "variantId": "var_a542fd27d4044daf",
+     "injectedText": "[Director character state — judged from play]\nGuide: regard for Player friendly (3 of 5); nerve steady (3 of 5).\nPlay each character at these levels. They change only through what happens in the scene.",
+     "epoch": 0,
+     "unadjudicated": false,
+     "toolStatus": "not_offered",
+     "toolError": null,
+     "createdAt": 1790674307875,
+     "loreCursor": null
+    },
+    "att_9e64a4d5623949c3": {
+     "attemptId": "att_9e64a4d5623949c3",
+     "resolutionId": null,
+     "permitId": null,
+     "reaction": null,
+     "actorId": "guide-801abb",
+     "cursorBefore": "c_40d8fa1de455f033",
+     "status": "provisional",
+     "generationType": "normal",
+     "hostMessageRef": 5,
+     "hostVariantRef": 0,
+     "variantId": "var_e91ef9ab47424ca0",
+     "injectedText": "[Director character state — judged from play]\nGuide: regard for Player warm (4 of 5); nerve steady (3 of 5).\nPlay each character at these levels. They change only through what happens in the scene.",
+     "epoch": 0,
+     "unadjudicated": false,
+     "toolStatus": "not_offered",
+     "toolError": null,
+     "createdAt": 1790674307892,
+     "loreCursor": null
+    }
+   },
+   "variants": {
+    "var_a542fd27d4044daf": {
+     "variantId": "var_a542fd27d4044daf",
+     "attemptId": "att_cc2e47e77cfc4108",
+     "resolutionId": null,
+     "permitId": null,
+     "actorId": "guide-801abb",
+     "cursorBefore": "c_f24f072c71788ea8",
+     "cursorAfter": "c_479574c23d68d629",
+     "acceptance": "accepted",
+     "observerStatus": "ready",
+     "observation": {
+      "schemaVersion": 1,
+      "requestId": "obsreq_667a36cb0d254f3e",
+      "attemptId": "att_cc2e47e77cfc4108",
+      "variantId": "var_a542fd27d4044daf",
+      "baseCursor": "c_f24f072c71788ea8",
+      "cursorAfter": "c_479574c23d68d629",
+      "stateRevision": 0,
+      "realizedResolutionIds": [],
+      "operations": [],
+      "unresolved": [],
+      "providerKind": "local",
+      "requestedModel": null,
+      "returnedModel": null,
+      "durationMs": 0,
+      "inputTokens": null,
+      "outputTokens": null
+     },
+     "observerError": null
+    },
+    "var_e91ef9ab47424ca0": {
+     "variantId": "var_e91ef9ab47424ca0",
+     "attemptId": "att_9e64a4d5623949c3",
+     "resolutionId": null,
+     "permitId": null,
+     "actorId": "guide-801abb",
+     "cursorBefore": "c_40d8fa1de455f033",
+     "cursorAfter": "c_7d2925fde583509f",
+     "acceptance": "pending",
+     "observerStatus": "ready",
+     "observation": {
+      "schemaVersion": 1,
+      "requestId": "obsreq_e76a8fd515df45eb",
+      "attemptId": "att_9e64a4d5623949c3",
+      "variantId": "var_e91ef9ab47424ca0",
+      "baseCursor": "c_40d8fa1de455f033",
+      "cursorAfter": "c_7d2925fde583509f",
+      "stateRevision": 1,
+      "realizedResolutionIds": [],
+      "operations": [],
+      "unresolved": [],
+      "providerKind": "local",
+      "requestedModel": null,
+      "returnedModel": null,
+      "durationMs": 0,
+      "inputTokens": null,
+      "outputTokens": null
+     },
+     "observerError": null
+    }
+   },
+   "checkpoints": {
+    "c_c9e95141e22a08e1": {
+     "cursor": "c_c9e95141e22a08e1",
+     "parentCursor": null,
+     "stateAfter": {
+      "revision": 0,
+      "variables": {},
+      "settledGains": {},
+      "unresolvedVariableIds": [],
+      "elapsedSeconds": 0,
+      "timeQuality": "unresolved",
+      "sceneId": 1,
+      "sceneReplyCount": 0,
+      "positions": {},
+      "notifiedDeadlineIds": [],
+      "acceptedResolutionIds": [],
+      "acceptedPermitIds": [],
+      "itemOwners": {},
+      "conditions": {},
+      "knownFacts": {},
+      "revealedSecrets": {},
+      "lastObservedCursor": "",
+      "trackingStatus": "current"
+     },
+     "variantId": null,
+     "acceptedResolutionId": null,
+     "observationOperationIds": []
+    },
+    "c_f24f072c71788ea8": {
+     "cursor": "c_f24f072c71788ea8",
+     "parentCursor": "c_c9e95141e22a08e1",
+     "stateAfter": {
+      "revision": 0,
+      "variables": {},
+      "settledGains": {},
+      "unresolvedVariableIds": [],
+      "elapsedSeconds": 0,
+      "timeQuality": "unresolved",
+      "sceneId": 1,
+      "sceneReplyCount": 0,
+      "positions": {},
+      "notifiedDeadlineIds": [],
+      "acceptedResolutionIds": [],
+      "acceptedPermitIds": [],
+      "itemOwners": {},
+      "conditions": {},
+      "knownFacts": {},
+      "revealedSecrets": {},
+      "lastObservedCursor": "",
+      "trackingStatus": "current"
+     },
+     "variantId": null,
+     "acceptedResolutionId": null,
+     "observationOperationIds": []
+    },
+    "c_479574c23d68d629": {
+     "cursor": "c_479574c23d68d629",
+     "parentCursor": "c_f24f072c71788ea8",
+     "stateAfter": {
+      "revision": 1,
+      "variables": {},
+      "settledGains": {},
+      "unresolvedVariableIds": [],
+      "elapsedSeconds": 0,
+      "timeQuality": "unresolved",
+      "sceneId": 1,
+      "sceneReplyCount": 1,
+      "positions": {},
+      "notifiedDeadlineIds": [],
+      "acceptedResolutionIds": [],
+      "acceptedPermitIds": [],
+      "itemOwners": {},
+      "conditions": {},
+      "knownFacts": {},
+      "revealedSecrets": {},
+      "lastObservedCursor": "c_479574c23d68d629",
+      "trackingStatus": "current"
+     },
+     "variantId": "var_a542fd27d4044daf",
+     "acceptedResolutionId": null,
+     "observationOperationIds": []
+    },
+    "c_40d8fa1de455f033": {
+     "cursor": "c_40d8fa1de455f033",
+     "parentCursor": "c_479574c23d68d629",
+     "stateAfter": {
+      "revision": 1,
+      "variables": {},
+      "settledGains": {},
+      "unresolvedVariableIds": [],
+      "elapsedSeconds": 0,
+      "timeQuality": "unresolved",
+      "sceneId": 1,
+      "sceneReplyCount": 1,
+      "positions": {},
+      "notifiedDeadlineIds": [],
+      "acceptedResolutionIds": [],
+      "acceptedPermitIds": [],
+      "itemOwners": {},
+      "conditions": {},
+      "knownFacts": {},
+      "revealedSecrets": {},
+      "lastObservedCursor": "c_479574c23d68d629",
+      "trackingStatus": "current"
+     },
+     "variantId": null,
+     "acceptedResolutionId": null,
+     "observationOperationIds": []
+    }
+   },
+   "appliedOperationIds": [
+    "complete:att_cc2e47e77cfc4108:3:0",
+    "commit-observation:var_a542fd27d4044daf",
+    "complete:att_9e64a4d5623949c3:5:0"
+   ],
+   "pending": null,
+   "projection": {
+    "cursor": "c_7d2925fde583509f",
+    "state": {
+     "revision": 1,
+     "variables": {},
+     "settledGains": {},
+     "unresolvedVariableIds": [],
+     "elapsedSeconds": 0,
+     "timeQuality": "unresolved",
+     "sceneId": 1,
+     "sceneReplyCount": 1,
+     "positions": {},
+     "notifiedDeadlineIds": [],
+     "acceptedResolutionIds": [],
+     "acceptedPermitIds": [],
+     "itemOwners": {},
+     "conditions": {},
+     "knownFacts": {},
+     "revealedSecrets": {},
+     "lastObservedCursor": "c_479574c23d68d629",
+     "trackingStatus": "current"
+    },
+    "status": "provisional",
+    "reason": "variant var_e91ef9ab47424ca0 is observed and awaits implicit acceptance"
+   },
+   "inspector": [
+    {
+     "id": "ins_7f680f6fda9046a1",
+     "at": 1790674307870,
+     "epoch": 0,
+     "attemptId": null,
+     "resolutionId": null,
+     "actionId": null,
+     "applicability": null,
+     "questions": null,
+     "stateSent": null,
+     "answers": null,
+     "speaker": null,
+     "policyBandId": null,
+     "draw": null,
+     "outcome": null,
+     "injectedText": null,
+     "providerKind": null,
+     "requestedModel": null,
+     "returnedModel": null,
+     "durationMs": null,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "info",
+     "message": "Baseline set at the current transcript head. Earlier state was not reconstructed."
+    },
+    {
+     "id": "ins_f6172b337c0e4d79",
+     "at": 1790674307875,
+     "epoch": 0,
+     "attemptId": "att_cc2e47e77cfc4108",
+     "resolutionId": null,
+     "actionId": null,
+     "applicability": null,
+     "questions": {
+      "meter_1_regard": {
+       "type": "choice",
+       "instructions": "Judge Guide's regard for Player. How the character feels about the player right now: affection, attraction and trust together. Levels, lowest to highest: cold, guarded, friendly, warm, smitten. No level has been judged yet. Using Guide's character description in state.characters and the story so far in state.recentAcceptedMessages and state.latestInput, choose the level that fits Guide now.",
+       "criteria": {
+        "cold": "cold (1 of 5)",
+        "guarded": "guarded (2 of 5)",
+        "friendly": "friendly (3 of 5)",
+        "warm": "warm (4 of 5)",
+        "smitten": "smitten (5 of 5)"
+       }
+      },
+      "meter_1_nerve": {
+       "type": "choice",
+       "instructions": "Judge Guide's nerve. How boldly the character goes after what they want with the player right now. Levels, lowest to highest: withdrawn, hesitant, steady, bold, relentless. No level has been judged yet. Using Guide's character description in state.characters and the story so far in state.recentAcceptedMessages and state.latestInput, choose the level that fits Guide now.",
+       "criteria": {
+        "withdrawn": "withdrawn (1 of 5)",
+        "hesitant": "hesitant (2 of 5)",
+        "steady": "steady (3 of 5)",
+        "bold": "bold (4 of 5)",
+        "relentless": "relentless (5 of 5)"
+       }
+      }
+     },
+     "stateSent": null,
+     "answers": {
+      "meter_1_regard": {
+       "type": "choice",
+       "choice": "friendly",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "meter_1_nerve": {
+       "type": "choice",
+       "choice": "steady",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      }
+     },
+     "speaker": {
+      "questionId": null,
+      "eligibleActorIds": [
+       "guide-801abb"
+      ],
+      "raw": null,
+      "adjusted": null,
+      "selected": "guide-801abb",
+      "source": "single",
+      "tieBroken": false
+     },
+     "policyBandId": null,
+     "draw": null,
+     "outcome": null,
+     "injectedText": "[Director character state — judged from play]\nGuide: regard for Player friendly (3 of 5); nerve steady (3 of 5).\nPlay each character at these levels. They change only through what happens in the scene.",
+     "providerKind": "mock",
+     "requestedModel": null,
+     "returnedModel": "fixture",
+     "durationMs": 1,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "director_send",
+     "message": "Speaker Guide; no move to rule on. Staged: no move to rule on; 1 request."
+    },
+    {
+     "id": "ins_61726f91ce984351",
+     "at": 1790674307891,
+     "epoch": 0,
+     "attemptId": "att_cc2e47e77cfc4108",
+     "resolutionId": null,
+     "actionId": null,
+     "applicability": null,
+     "questions": null,
+     "stateSent": {
+      "schemaVersion": 1,
+      "requestId": "obsreq_667a36cb0d254f3e",
+      "attemptId": "att_cc2e47e77cfc4108",
+      "variantId": "var_a542fd27d4044daf",
+      "baseCursor": "c_f24f072c71788ea8",
+      "cursorAfter": "c_479574c23d68d629",
+      "stateRevision": 0,
+      "acceptedSpan": {
+       "id": "span:var_a542fd27d4044daf",
+       "actorId": "guide-801abb",
+       "role": "assistant",
+       "text": "Reply 1.",
+       "accepted": true
+      },
+      "expectedResolutionIds": [],
+      "expectedRulings": [],
+      "permit": null,
+      "priorState": {
+       "revision": 0,
+       "variables": {},
+       "settledGains": {},
+       "unresolvedVariableIds": [],
+       "elapsedSeconds": 0,
+       "timeQuality": "unresolved",
+       "sceneId": 1,
+       "sceneReplyCount": 0,
+       "positions": {},
+       "notifiedDeadlineIds": [],
+       "acceptedResolutionIds": [],
+       "acceptedPermitIds": [],
+       "itemOwners": {},
+       "conditions": {},
+       "knownFacts": {},
+       "revealedSecrets": {},
+       "lastObservedCursor": "",
+       "trackingStatus": "current"
+      },
+      "registry": {
+       "actorIds": [
+        "guide-801abb",
+        "player"
+       ],
+       "placeIds": [],
+       "itemIds": [],
+       "conditionIds": [
+        "exposed",
+        "hidden",
+        "injured",
+        "restrained",
+        "unconscious"
+       ],
+       "factIds": [],
+       "secretIds": []
+      }
+     },
+     "answers": null,
+     "speaker": null,
+     "policyBandId": null,
+     "draw": null,
+     "outcome": null,
+     "injectedText": null,
+     "providerKind": null,
+     "requestedModel": null,
+     "returnedModel": null,
+     "durationMs": 0,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "observer",
+     "message": "Observed reply: 0 realized rulings, 0 factual operations."
+    },
+    {
+     "id": "ins_4c451d11eb784081",
+     "at": 1790674307891,
+     "epoch": 0,
+     "attemptId": "att_cc2e47e77cfc4108",
+     "resolutionId": null,
+     "actionId": null,
+     "applicability": null,
+     "questions": null,
+     "stateSent": null,
+     "answers": null,
+     "speaker": null,
+     "policyBandId": null,
+     "draw": null,
+     "outcome": null,
+     "injectedText": null,
+     "providerKind": null,
+     "requestedModel": null,
+     "returnedModel": null,
+     "durationMs": null,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "acceptance",
+     "message": "Implicitly accepted selected reply on next Director turn; observer deltas committed once."
+    },
+    {
+     "id": "ins_56582f27093244ca",
+     "at": 1790674307892,
+     "epoch": 0,
+     "attemptId": "att_9e64a4d5623949c3",
+     "resolutionId": null,
+     "actionId": null,
+     "applicability": null,
+     "questions": {
+      "meter_1_regard": {
+       "type": "choice",
+       "instructions": "Judge Guide's regard for Player. How the character feels about the player right now: affection, attraction and trust together. Levels, lowest to highest: cold, guarded, friendly, warm, smitten. Before the latest exchange Guide was \"friendly\". Keep the previous level unless something in the latest exchange (the last messages in state.recentAcceptedMessages and state.latestInput) would realistically move it for someone with Guide's character (state.characters). Choose the level that fits Guide now.",
+       "criteria": {
+        "guarded": "guarded (2 of 5)",
+        "friendly": "friendly (3 of 5)",
+        "warm": "warm (4 of 5)"
+       }
+      },
+      "meter_1_nerve": {
+       "type": "choice",
+       "instructions": "Judge Guide's nerve. How boldly the character goes after what they want with the player right now. Levels, lowest to highest: withdrawn, hesitant, steady, bold, relentless. Before the latest exchange Guide was \"steady\". Keep the previous level unless something in the latest exchange (the last messages in state.recentAcceptedMessages and state.latestInput) would realistically move it for someone with Guide's character (state.characters). Choose the level that fits Guide now.",
+       "criteria": {
+        "hesitant": "hesitant (2 of 5)",
+        "steady": "steady (3 of 5)",
+        "bold": "bold (4 of 5)"
+       }
+      }
+     },
+     "stateSent": null,
+     "answers": {
+      "meter_1_regard": {
+       "type": "choice",
+       "choice": "warm",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      },
+      "meter_1_nerve": {
+       "type": "choice",
+       "choice": "steady",
+       "probabilities": null,
+       "confidence": null,
+       "provenance": "fixture"
+      }
+     },
+     "speaker": {
+      "questionId": null,
+      "eligibleActorIds": [
+       "guide-801abb"
+      ],
+      "raw": null,
+      "adjusted": null,
+      "selected": "guide-801abb",
+      "source": "single",
+      "tieBroken": false
+     },
+     "policyBandId": null,
+     "draw": null,
+     "outcome": null,
+     "injectedText": "[Director character state — judged from play]\nGuide: regard for Player warm (4 of 5); nerve steady (3 of 5).\nPlay each character at these levels. They change only through what happens in the scene.",
+     "providerKind": "mock",
+     "requestedModel": null,
+     "returnedModel": "fixture",
+     "durationMs": 1,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "director_send",
+     "message": "Speaker Guide; no move to rule on. Staged: no move to rule on; 1 request. State: Guide: regard friendly → warm."
+    },
+    {
+     "id": "ins_b4fd288f1c5248f7",
+     "at": 1790674307905,
+     "epoch": 0,
+     "attemptId": "att_9e64a4d5623949c3",
+     "resolutionId": null,
+     "actionId": null,
+     "applicability": null,
+     "questions": null,
+     "stateSent": {
+      "schemaVersion": 1,
+      "requestId": "obsreq_e76a8fd515df45eb",
+      "attemptId": "att_9e64a4d5623949c3",
+      "variantId": "var_e91ef9ab47424ca0",
+      "baseCursor": "c_40d8fa1de455f033",
+      "cursorAfter": "c_7d2925fde583509f",
+      "stateRevision": 1,
+      "acceptedSpan": {
+       "id": "span:var_e91ef9ab47424ca0",
+       "actorId": "guide-801abb",
+       "role": "assistant",
+       "text": "Reply 2.",
+       "accepted": true
+      },
+      "expectedResolutionIds": [],
+      "expectedRulings": [],
+      "permit": null,
+      "priorState": {
+       "revision": 1,
+       "variables": {},
+       "settledGains": {},
+       "unresolvedVariableIds": [],
+       "elapsedSeconds": 0,
+       "timeQuality": "unresolved",
+       "sceneId": 1,
+       "sceneReplyCount": 1,
+       "positions": {},
+       "notifiedDeadlineIds": [],
+       "acceptedResolutionIds": [],
+       "acceptedPermitIds": [],
+       "itemOwners": {},
+       "conditions": {},
+       "knownFacts": {},
+       "revealedSecrets": {},
+       "lastObservedCursor": "c_479574c23d68d629",
+       "trackingStatus": "current"
+      },
+      "registry": {
+       "actorIds": [
+        "guide-801abb",
+        "player"
+       ],
+       "placeIds": [],
+       "itemIds": [],
+       "conditionIds": [
+        "exposed",
+        "hidden",
+        "injured",
+        "restrained",
+        "unconscious"
+       ],
+       "factIds": [],
+       "secretIds": []
+      }
+     },
+     "answers": null,
+     "speaker": null,
+     "policyBandId": null,
+     "draw": null,
+     "outcome": null,
+     "injectedText": null,
+     "providerKind": null,
+     "requestedModel": null,
+     "returnedModel": null,
+     "durationMs": 0,
+     "inputTokens": null,
+     "outputTokens": null,
+     "networkCalls": 0,
+     "kind": "observer",
+     "message": "Observed reply: 0 realized rulings, 0 factual operations."
+    }
+   ],
+   "profileRevision": "example-3.1.0",
+   "story": {
+    "packId": "romance",
+    "packSource": "user",
+    "secrets": [],
+    "history": {
+     "c_c9e95141e22a08e1": {
+      "at": 1790674307874,
+      "meters": {
+       "guide-801abb": {
+        "regard": 2,
+        "nerve": 2
+       }
+      },
+      "knownBy": {}
+     },
+     "c_479574c23d68d629": {
+      "at": 1790674307892,
+      "meters": {
+       "guide-801abb": {
+        "regard": 3,
+        "nerve": 2
+       }
+      },
+      "knownBy": {}
+     }
+    },
+    "lore": {}
+   }
+  }
+ },
+ "chat": [
+  {
+   "name": "Player",
+   "is_user": true,
+   "is_system": false,
+   "mes": "We reach the gate."
+  },
+  {
+   "name": "Guide",
+   "is_user": false,
+   "is_system": false,
+   "mes": "The gate remains shut. \"State your business, or wait until dawn.\"",
+   "original_avatar": "guide.png",
+   "swipe_id": 0,
+   "swipes": [
+    "The gate remains shut. \"State your business, or wait until dawn.\""
+   ],
+   "extra": {}
+  },
+  {
+   "name": "Player",
+   "is_user": true,
+   "is_system": false,
+   "mes": "Hello."
+  },
+  {
+   "name": "Guide",
+   "original_avatar": "guide.png",
+   "is_user": false,
+   "is_system": false,
+   "mes": "Reply 1.\n\n[RP_DIRECTOR]\n{\"status\":\"no_ruling\",\"results\":[]}\n[/RP_DIRECTOR]",
+   "swipe_id": 0,
+   "swipes": [
+    "Reply 1.\n\n[RP_DIRECTOR]\n{\"status\":\"no_ruling\",\"results\":[]}\n[/RP_DIRECTOR]"
+   ],
+   "swipe_info": [
+    {
+     "extra": {
+      "rpd": {
+       "v": "var_a542fd27d4044daf",
+       "a": "att_cc2e47e77cfc4108",
+       "r": null
+      }
+     }
+    }
+   ],
+   "extra": {
+    "rpd": {
+     "v": "var_a542fd27d4044daf",
+     "a": "att_cc2e47e77cfc4108",
+     "r": null
+    }
+   }
+  },
+  {
+   "name": "Player",
+   "is_user": true,
+   "is_system": false,
+   "mes": "I lean closer."
+  },
+  {
+   "name": "Guide",
+   "original_avatar": "guide.png",
+   "is_user": false,
+   "is_system": false,
+   "mes": "Reply 2.\n\n[RP_DIRECTOR]\n{\"status\":\"no_ruling\",\"results\":[]}\n[/RP_DIRECTOR]",
+   "swipe_id": 0,
+   "swipes": [
+    "Reply 2.\n\n[RP_DIRECTOR]\n{\"status\":\"no_ruling\",\"results\":[]}\n[/RP_DIRECTOR]"
+   ],
+   "swipe_info": [
+    {
+     "extra": {
+      "rpd": {
+       "v": "var_e91ef9ab47424ca0",
+       "a": "att_9e64a4d5623949c3",
+       "r": null
+      }
+     }
+    }
+   ],
+   "extra": {
+    "rpd": {
+     "v": "var_e91ef9ab47424ca0",
+     "a": "att_9e64a4d5623949c3",
+     "r": null
+    }
+   }
+  }
+ ],
+ "settings": {
+  "enabled": true,
+  "profileId": "binding",
+  "bindingConfirmedAt": "confirmed",
+  "connection": {
+   "kind": "mock",
+   "baseUrl": "",
+   "model": "",
+   "stProfileId": "",
+   "mockScenario": "gate-deferred"
+  },
+  "observerConnection": {
+   "stProfileId": ""
+  },
+  "reactions": {
+   "enabled": false,
+   "weights": {
+    "resolve": {
+     "press": 40,
+     "change_tactic": 40,
+     "concede": 15,
+     "withdraw": 5
+    },
+    "secret": {
+     "hold": 75,
+     "slip": 20,
+     "reveal": 5
+    },
+    "exposure": {
+     "unnoticed": 60,
+     "suspicion": 30,
+     "witnessed": 10
+    },
+    "initiative": {
+     "takes_lead": 40,
+     "raises_stakes": 25,
+     "hands_back": 25,
+     "declines": 10
+    }
+   }
+  },
+  "showBar": true,
+  "inspectorOpen": false,
+  "profileOverrides": {},
+  "pipeline": "staged",
+  "settingsRevision": 2,
+  "modules": {
+   "speaker": false,
+   "decisions": false,
+   "meters": true,
+   "secrets": false,
+   "lore": false
+  },
+  "lore": {
+   "books": {},
+   "defaultMode": "assist",
+   "maxEntries": 5,
+   "width": 3,
+   "minProbability": 0.15,
+   "maxDepth": 4,
+   "judgeChars": 12000
+  }
+ }
+}

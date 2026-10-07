@@ -75,14 +75,45 @@ const ENTITIES: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"'
  * removed; block breaks become line breaks; remaining markup is stripped.
  */
 export function visibleText(html: string): string {
-  let text = String(html ?? '').replace(/<!--[\s\S]*?-->/g, ' ').replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ');
+  let text = String(html ?? '').replace(/<!--[\s\S]*?(?:-->|$)/g, ' ').replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, ' ');
   // Remove innermost <details> first so nested blocks disappear whole.
   for (let guard = 0; guard < 50 && /<details\b/i.test(text); guard++) {
-    const next = text.replace(/<details\b[^>]*>(?:(?!<details\b)[\s\S])*?<\/details>/gi, ' ');
+    const next = text.replace(/<details\b[^>]*>(?:(?!<details\b)[\s\S])*?<\/details\s*>/gi, ' ');
     if (next === text) break;
     text = next;
   }
+  // A stopped stream can end inside a tracker (or even its opening tag).
+  // Anything after the first remaining opener is still hidden.
+  text = text.replace(/<details\b[\s\S]*$/i, ' ');
   text = text.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|div|li|h[1-6])>/gi, '\n').replace(/<[^>]+>/g, ' ');
   text = text.replace(/&(amp|lt|gt|quot|#39|apos|nbsp);/g, (_, key: string) => ENTITIES[key] ?? '');
   return text.split('\n').map(line => line.replace(/[ \t]+/g, ' ').trim()).filter(Boolean).join('\n');
+}
+
+/** Remove explicit OOC spans while keeping the fictional action around them. */
+export function stripOutOfCharacterSegments(source: string): string {
+  let text = String(source ?? '');
+  const opener = /[([]\s*OOC\s*:/gi;
+  let match: RegExpExecArray | null;
+  while ((match = opener.exec(text))) {
+    const open = match[0][0]!;
+    const close = open === '(' ? ')' : ']';
+    let depth = 1;
+    let end = opener.lastIndex;
+    for (; end < text.length && depth; end++) {
+      if (text[end] === open) depth++;
+      else if (text[end] === close) depth--;
+    }
+    text = text.slice(0, match.index) + ' ' + text.slice(end);
+    opener.lastIndex = match.index + 1;
+  }
+  // An unbracketed OOC prefix owns its line, not the following action. A
+  // paragraph written on one line is handled identically.
+  text = text.replace(/^\s*OOC\s*:[^\r\n]*(?:\r?\n|$)/i, '');
+  return text.trim();
+}
+
+/** Only an explicitly marked message with no fictional text left is OOC. */
+export function isOutOfCharacterMessage(text: string): boolean {
+  return Boolean(text.trim()) && stripOutOfCharacterSegments(text).length === 0;
 }

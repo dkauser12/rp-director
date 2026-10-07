@@ -149,8 +149,18 @@ test('selectLore honours the entry cap, the depth limit and the batch limit', as
 });
 
 import { applyLorePlan } from '../../src/lore/apply.ts';
-import { runLoreStage } from '../../src/lore/stage.ts';
+import { loreSceneState, runLoreStage } from '../../src/lore/stage.ts';
 import { effectiveMode, lorePlan, normalizeLoreSettings } from '../../src/lore/settings.ts';
+
+test('lore scene and leaf questions never include collapsed details, even before excerpt clipping', () => {
+  const hidden = `<details><summary>Private</summary>LORE-HIDDEN-CANARY ${'x'.repeat(500)}</details>`;
+  const scene = loreSceneState([{ actorId: 'npc', role: 'assistant', text: `Visible reply. ${hidden}` }], `Visible input. ${hidden}`, { npc: 'Character' }, 60000);
+  const tree = buildTree('Book', [entry(1, `Visible title ${hidden}`, { content: `Visible start. ${hidden} Visible end.` })], null)!;
+  const { question } = frontierQuestion('Book', tree.root, true, false, tree.entries);
+  assert.doesNotMatch(JSON.stringify({ scene, question }), /LORE-HIDDEN-CANARY/);
+  assert.match(JSON.stringify(question), /Visible end/);
+  assert.match(JSON.stringify(scene), /Visible input/);
+});
 
 test('applyLorePlan: managed books keep constants and chosen entries (the scan can only activate listed entries)', () => {
   const managedKeyword = { world: 'Cast', uid: 1, constant: false };

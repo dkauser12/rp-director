@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { migrateAutoHistory, normalizeBaseSettings, recoverInterruptedObservations } from '../../src/migration.ts';
-import { applyEvent, emptyState, newRecord, normalizeRecord } from '../../src/state.ts';
+import { migrateAutoHistory, normalizeBaseSettings } from '../../src/migration.ts';
+import { applyEvent, newRecord, normalizeRecord } from '../../src/state.ts';
 import { defaultSettings, Host } from '../../src/host.ts';
 import type { HostChatMessage, StContext } from '../../src/host.ts';
 import { freeze } from '../../src/resolver.ts';
-import type { ActionSpec, DirectorChatRecord, ObservationRecord } from '../../src/types.ts';
+import type { ActionSpec, DirectorChatRecord } from '../../src/types.ts';
 
-function oldReply(observerRequired = false): DirectorChatRecord {
+function oldReply(): DirectorChatRecord {
   const action: ActionSpec = {
     actionId: 'action', templateId: 'acquire_secure', playerActorId: 'player', actingActorId: 'player', targetActorIds: [],
     attemptedAction: 'takes the key', requestedGain: 'the key is secured', applicability: 'favorable', preconditions: [],
@@ -22,99 +22,69 @@ function oldReply(observerRequired = false): DirectorChatRecord {
   });
   let record = newRecord('seed', 'p1');
   for (const event of [
-    { type: 'set_baseline', cursor: 'before', state: emptyState(), reason: 'fixture' },
     { type: 'prepare', resolution, action, attemptId: 'attempt', actorId: 'npc', epoch: 1, composerText: '', now: 1 },
     { type: 'bind', attemptId: 'attempt', cursorBefore: 'before', epoch: 1, injectedText: 'binding' },
-    { type: 'completed', attemptId: 'attempt', epoch: 1, operationId: 'complete', variantId: 'variant', hostMessageRef: 0, hostVariantRef: 0, cursorAfter: 'after', now: 2, observerRequired },
+    { type: 'completed', attemptId: 'attempt', epoch: 1, operationId: 'complete', variantId: 'variant', hostMessageRef: 0, hostVariantRef: 0, cursorAfter: 'after', now: 2 },
   ] satisfies Parameters<typeof applyEvent>[1][]) record = applyEvent(record, event).record;
-  if (!observerRequired) {
-    delete record.variants.variant!.observerStatus;
-    delete record.variants.variant!.observation;
-    delete record.variants.variant!.observerError;
-  }
   return record;
 }
 
-function observation(): ObservationRecord {
-  return {
-    schemaVersion: 1, requestId: 'request', attemptId: 'attempt', variantId: 'variant', baseCursor: 'before', cursorAfter: 'after', stateRevision: 0,
-    realizedResolutionIds: ['resolution'], operations: [{ operationId: 'observed-time', op: 'advance_time', seconds: 20, quality: 'estimated' }],
-    unresolved: [], providerKind: 'mock', requestedModel: null, returnedModel: null, durationMs: 0, inputTokens: null, outputTokens: null,
+test('W6: 0.7 pending observer records load without repair and retain frozen turns and story', () => {
+  const legacy = {
+    ...oldReply(),
+    projection: { cursor: 'after', state: { sceneId: 7 }, status: 'stale', reason: 'observer failed' },
+    checkpoints: { before: { stateAfter: { variables: { key: 'secured' } } } },
   };
-}
-
-test('accepted legacy base history remains exact across migration, reload, and saved swipe restore', () => {
-  const legacy = applyEvent(oldReply(), { type: 'accept', attemptId: 'attempt', operationId: 'legacy-accept', now: 3 }).record;
-  const original = structuredClone(legacy);
-  const recovered = recoverInterruptedObservations(normalizeRecord(legacy, 'seed', 'p1'));
-  assert.deepEqual(recovered.recoveredVariantIds, []);
-  assert.deepEqual(recovered.record, original);
-  const selected = applyEvent(recovered.record, { type: 'select_variant', variantId: 'variant', cursorAfter: 'after', chain: ['before', 'after'] }).record;
-  const reloaded = applyEvent(selected, { type: 'head_changed', cursor: 'after', chain: ['before', 'after'], reason: 'load' }).record;
-  assert.deepEqual(reloaded, original);
-  assert.equal(reloaded.projection.state.revision, 1);
-  assert.equal(reloaded.projection.state.variables.key, 'secured');
+  (legacy.attempts.attempt! as unknown as Record<string, unknown>).status = 'observing';
+  const variant = legacy.variants.variant! as unknown as Record<string, unknown>;
+  variant.acceptance = 'pending'; variant.observerStatus = 'failed'; variant.observerError = 'connection unavailable'; variant.observation = { operations: [] };
+  legacy.story = {
+    packId: 'adventure', packSource: 'user', secrets: [{ id: 'key', text: 'Hidden key', holders: ['npc'] }],
+    history: { before: { at: 1, meters: { npc: { resolve: 2 } }, knownBy: { key: ['npc'] } } },
+    lore: { before: { at: 1, refs: [{ world: 'Keep', uid: 1, title: 'Gate', score: 0.8 }], requests: 1, books: ['Keep'], failed: [] } },
+  };
+  const before = structuredClone(legacy);
+  const loaded = normalizeRecord(legacy, 'seed', 'p1');
+  assert.deepEqual(legacy, before, 'normalization never mutates the saved input');
+  assert.deepEqual(loaded.story, legacy.story);
+  assert.deepEqual(loaded.resolutions, legacy.resolutions);
+  assert.deepEqual(loaded.permits, legacy.permits);
+  assert.equal(loaded.attempts.attempt!.status, 'accepted');
+  assert.equal('acceptance' in loaded.variants.variant!, false);
+  assert.equal(loaded.attempts.attempt!.injectedText, 'binding');
+  for (const key of ['projection', 'checkpoints']) assert.equal(key in loaded, false);
+  for (const key of ['observerStatus', 'observerError', 'observation']) assert.equal(key in loaded.variants.variant!, false);
+  assert.deepEqual(normalizeRecord(loaded, 'seed', 'p1'), loaded, 'migration is idempotent');
 });
 
-test('legacy pending reply becomes retryable and only observation can commit its effects once', () => {
-  const legacy = oldReply();
-  const original = structuredClone(legacy);
-  const recovered = recoverInterruptedObservations(normalizeRecord(legacy, 'seed', 'p1'));
-  assert.deepEqual(legacy, original, 'migration does not mutate its input');
-  assert.deepEqual(recovered.recoveredVariantIds, ['variant']);
-  assert.equal(recovered.record.variants.variant!.observerStatus, 'failed');
-  assert.equal(recovered.record.attempts.attempt!.status, 'stale');
-  assert.match(recovered.record.projection.reason ?? '', /predates.*Retry observation/);
-  assert.deepEqual(recovered.record.checkpoints, legacy.checkpoints);
-  let record = applyEvent(recovered.record, { type: 'retry_observation', attemptId: 'attempt', variantId: 'variant' }).record;
-  assert.equal(record.attempts.attempt!.status, 'observing');
-  assert.equal(record.projection.state.variables.key, undefined);
-  record = applyEvent(record, { type: 'observation_ready', attemptId: 'attempt', variantId: 'variant', observation: observation() }).record;
-  assert.equal(record.projection.state.variables.key, undefined);
-  record = applyEvent(record, { type: 'commit_observation', variantId: 'variant', operationId: 'commit', now: 4 }).record;
-  const duplicate = applyEvent(record, { type: 'commit_observation', variantId: 'variant', operationId: 'commit', now: 5 }).record;
-  assert.equal(record.projection.state.variables.key, 'secured');
-  assert.equal(record.projection.state.elapsedSeconds, 20);
-  assert.equal(record.projection.state.revision, 1);
-  assert.deepEqual(record, duplicate);
-});
-
-test('reloaded in-flight observer is retryable and recovery is idempotent', () => {
-  const interrupted = oldReply(true);
-  const recovered = recoverInterruptedObservations(interrupted);
-  assert.deepEqual(recovered.recoveredVariantIds, ['variant']);
-  assert.equal(recovered.record.attempts.attempt!.status, 'stale');
-  assert.equal(recovered.record.variants.variant!.observerStatus, 'failed');
-  assert.match(recovered.record.variants.variant!.observerError ?? '', /interrupted by a reload/);
-  const again = recoverInterruptedObservations(recovered.record);
-  assert.deepEqual(again.recoveredVariantIds, []);
-  assert.deepEqual(again.record, recovered.record);
-  const retry = applyEvent(again.record, { type: 'retry_observation', attemptId: 'attempt', variantId: 'variant' }).record;
-  const ready = applyEvent(retry, { type: 'observation_ready', attemptId: 'attempt', variantId: 'variant', observation: observation() }).record;
-  assert.equal(ready.variants.variant!.observerStatus, 'ready');
-  assert.deepEqual(recoverInterruptedObservations(ready).record, ready, 'ready observation survives reload without another request');
-});
-
-test('base settings preserve existing private policy and connection while filling observer defaults', () => {
+test('revision 3 retains private policy, connections, reaction weights and module choices, dropping removed fields', () => {
   const defaults = defaultSettings();
-  const privateTable = { ...defaults.profileOverrides, [defaults.profileId]: { resolutionMethod: 'sample' as const, outcomes: [{ name: 'private_result', instruction: 'private policy', records: '', final: false }] } };
-  const existing = { enabled: false, profileId: defaults.profileId, bindingConfirmedAt: 'saved', connection: { kind: 'openrouter' as const, model: '~typesafe/jev-latest' }, profileOverrides: privateTable };
+  const privateTable = { [defaults.profileId]: { resolutionMethod: 'sample' as const, outcomes: [{ name: 'private_result', instruction: 'private policy', records: '', final: false }] } };
+  const existing = {
+    enabled: false, profileId: defaults.profileId, bindingConfirmedAt: 'saved', observerConnection: { stProfileId: 'old-sidecar' },
+    pipeline: 'legacy', settingsRevision: 2, connection: { kind: 'openrouter' as const, model: '~typesafe/jev-latest' },
+    profileOverrides: privateTable, modules: { speaker: false, decisions: false, meters: false, secrets: false, lore: false },
+    reactions: { ...defaults.reactions, enabled: false }, removedFutureLegacyField: true,
+  };
   const before = structuredClone(existing);
-  const sibling = { ...defaultSettings(), connection: { ...defaults.connection, kind: 'mock' as const }, observerConnection: { stProfileId: 'auto-only-sidecar' }, profileOverrides: {} };
-  const settings = { rpDirector: existing, rpDirectorAuto: sibling };
-  const normalized = normalizeBaseSettings(defaults, settings.rpDirector);
+  const normalized = normalizeBaseSettings(defaults, existing);
   assert.deepEqual(existing, before);
   assert.equal(normalized.enabled, false);
   assert.equal(normalized.connection.kind, 'openrouter');
   assert.equal(normalized.connection.model, '~typesafe/jev-latest');
-  assert.equal(normalized.observerConnection.stProfileId, '');
   assert.deepEqual(normalized.profileOverrides, privateTable);
   assert.notEqual(normalized.profileOverrides, privateTable);
+  assert.deepEqual(normalized.modules, { ...existing.modules, pacing: false, replyCheck: false });
+  assert.equal(normalized.reactions.enabled, false);
+  assert.equal(normalized.pipeline, 'staged'); assert.equal(normalized.settingsRevision, 3);
+  assert.equal(normalized.waitForJudgeSeconds, 10);
+  for (const key of ['bindingConfirmedAt', 'observerConnection', 'removedFutureLegacyField']) assert.equal(key in normalized, false);
+  assert.deepEqual(normalizeBaseSettings(defaults, normalized), normalized);
   assert.deepEqual(normalizeBaseSettings(defaults, undefined), defaults, 'first use does not import Auto settings');
 });
 
 test('Auto-only metadata migrates all valid swipe markers once without changing either source history or transcript', () => {
-  const auto = oldReply(true);
+  const auto = oldReply();
   auto.attempts['other-attempt'] = { ...auto.attempts.attempt!, attemptId: 'other-attempt', variantId: 'other-variant', hostVariantRef: 1 };
   auto.variants['other-variant'] = { ...auto.variants.variant!, variantId: 'other-variant', attemptId: 'other-attempt', cursorAfter: 'other-cursor' };
   const metadata = { rpDirectorAuto: auto, otherExtension: { retained: true } };
@@ -143,7 +113,7 @@ test('Auto-only metadata migrates all valid swipe markers once without changing 
 
 test('existing base history always wins and invalid Auto markers cannot invent base links', () => {
   const base = oldReply();
-  const auto = oldReply(true);
+  const auto = oldReply();
   const metadata = { rpDirector: base, rpDirectorAuto: auto };
   const messages: HostChatMessage[] = [{ name: 'Guide', mes: 'Reply', is_user: false, is_system: false, extra: { rpda: { v: 'unknown', a: 'attempt', r: null }, rpd: { v: 'base', a: 'base', r: null } } }];
   const untouched = migrateAutoHistory(metadata, messages);

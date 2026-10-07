@@ -20,39 +20,35 @@ import {
 import type { TableTestReport } from './tabletest.ts';
 
 export const TABLE_HELP = [
-  'The judge answers with one number from 0 (nothing supports the gain) to 1 (clearly justified). Each row is a band of that number.',
-  'Binding: the row the number lands in names the ruling directly, using the "outcome" column.',
-  'Binding + dice: the row gives the odds instead. Each "w:" cell is the chance of that ruling, and one recorded roll picks it.',
-  'Columns are the possible rulings, and every part of a ruling is yours to define: its name, exactly what the writer is told, what gets recorded when you accept the reply, and whether that record settles the matter. A ruling can be a real failure, a cost, a complication, or anything else you write.',
-  'Presets load a ready-made table into the editor. Optional local presets live in gitignored profiles/local/presets.json. Nothing in the table changes in play until you press Apply table; the resolution method applies as soon as you change it.',
-  'The table is applied in code. The judge never reads it during play, so "w:" and "b0" are labels of this extension, not a model format.',
+  'The judge gives a score from 0 to 1, and the matching row sets the result or its odds.',
+  'Threshold uses the named result, while Dice rolls using the odds in that row.',
+  'Edit each result and its writer instruction, then choose Apply table to use your changes.',
 ];
 
 export const TIP = {
-  method: 'How a row becomes a ruling. threshold: the row\'s outcome is the ruling. sample: the row\'s weights are odds and one recorded roll decides. Takes effect as soon as you change it; loading a preset never changes it. Rulings already frozen keep the method they were made with.',
-  id: 'Band id. Auto-numbered b0, b1, b2 … and written into every ruling so you can see which row decided. Not editable; add or remove rows instead.',
-  from: 'Lower edge of this band, included. It always equals the "to" of the row above, so it is filled in for you.',
-  to: 'Upper edge of this band, not included. Editing it moves the "from" of the next row. The last row always ends at 1 and includes it.',
-  toLast: 'The last band always ends at 1 and includes it.',
-  threshold: 'Binding: the ruling when the judge\'s number lands in this band. Type the name of one of the outcome columns. Spaces become underscores; other symbols are removed.',
-  prefix: '"w:" means weight. It is a fixed label of this table, not part of the name and not something the model sees.',
-  name: `Name of this outcome. Letters, digits and underscores, starting with a letter, up to ${NAME_MAX_LENGTH} characters. Spaces become underscores and other symbols are removed as you type. Jev accepts any text as an option name; this stricter set also keeps the name safe as a saved variable and for other backends. Renaming updates every row that uses the name.`,
-  instruction: `Exactly what the writer is told when this is the ruling. This is the whole meaning of the outcome, so write it as an order: what happens, what must not happen, what it costs. You can use {{gain}}, {{action}}, {{target}}, {{player}} and {{speaker}}. Example of a real failure: "The attempt fails and {{target}} will not reconsider. Show the door closing." Up to ${INSTRUCTION_MAX_LENGTH} characters.`,
-  records: 'What gets written to this gain\'s variable when you Accept the reply, for example achieved, partial, failed, blocked. Letters, digits and underscores; spaces become underscores. Leave empty to record nothing. It shows in the Inspector and decides what "stands once accepted" matches on.',
-  final: 'On: once you Accept this ruling, it stands for the declaration\'s scope. Attempt scope never settles a future retry; scene scope lasts until New scene; persistent scope stands until relevant history changes. The frozen meaning survives later table edits. Needs a recorded value. Off: the result can be attempted and judged again.',
-  preset: 'A ready-made table for a genre, with its own named rulings, instructions and recorded values. Loading one replaces the table below in the editor only. Review it, edit anything, then press Apply table.',
-  weight: 'Binding + dice: chance of this outcome when the judge\'s number lands in this band. From 0 to 1 in steps of 0.0001. Every row must add up to exactly 1.',
-  sum: 'Sum of this row\'s weights. It must be exactly 1.',
-  removeRow: 'Remove this band. Its range goes to the row above (or below, for the first row).',
-  removeCol: `Remove this outcome column. At least ${MIN_OUTCOMES} columns are required.`,
-  addRow: `Add a band by splitting the widest row in half; the new row copies its outcome and weights. Up to ${MAX_BANDS} rows: Jev accepts at most 255 options in one Choice question, and the table test asks one over the band ids.`,
-  addCol: `Add an outcome column. Up to ${MAX_OUTCOMES} columns, for the same 255-option limit.`,
-  apply: 'Check the table and start using it. Creates a new profile revision; rulings already frozen keep the table they were made with.',
-  reset: 'Discard your table and go back to the profile\'s built-in one. Your resolution method is kept.',
-  test: 'Send this table, as edited, through one call to the selected judge connection. Passes only if every answer comes back in the expected format and resolves to one of your outcome columns. Costs one judge call.',
+  method: 'Changes apply to new rulings immediately, while existing rulings keep their result.',
+  id: 'Rows are numbered automatically.',
+  from: 'This score is included and follows the end of the previous row.',
+  to: 'This score starts the next row.',
+  toLast: 'The last row includes the maximum score of 1.',
+  threshold: 'Enter the name of the result used when the score falls in this row.',
+  prefix: 'Each number is the chance of this result with Dice.',
+  name: `Use up to ${NAME_MAX_LENGTH} letters, digits or underscores, starting with a letter.`,
+  instruction: `Describe what happens and what it costs in up to ${INSTRUCTION_MAX_LENGTH} characters.`,
+  preset: 'Load a starting table, then choose Apply table to use it.',
+  weight: 'Enter a chance from 0 to 1, with all chances in the row adding to 1.',
+  sum: 'The chances in this row must add to 1.',
+  removeRow: 'Remove this row and give its score range to the next available row.',
+  removeCol: `Keep at least ${MIN_OUTCOMES} result columns.`,
+  addRow: `Split the widest row in half, up to ${MAX_BANDS} rows.`,
+  addCol: `Add a result column, up to ${MAX_OUTCOMES} columns.`,
+  apply: 'Use this table for new rulings.',
+  reset: 'Restore the original table while keeping the selected method.',
+  test: 'Check this edited table with one judge request.',
 };
 
-export function buildTableEditor(controller: Controller): { element: HTMLElement; reload: () => void } {
+/** The workspace uses isDirty before navigation; reload discards the draft. */
+export function buildTableEditor(controller: Controller): { element: HTMLElement; reload: () => void; isDirty: () => boolean } {
   const host = el('div', { id: 'rpd-bands' });
   let draft: PolicyTable = { outcomes: [], bands: [] };
   let method: 'threshold' | 'sample' = 'threshold';
@@ -61,47 +57,42 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
   let presetChoice = TABLE_PRESETS[0]?.id ?? 'standard';
   let pendingPresetActorPolicy: ActorPolicy | null = null;
   let localPresetWarnings: string[] = [];
+  let refreshPresetChoices = () => {};
 
   void loadLocalPresets().then(result => {
     localPresetWarnings = result.warnings;
-    if (result.loaded.length) {
-      presetChoice = result.loaded[0]!;
-      controller.host.toast('success', `Loaded ${result.loaded.length} local-only RP Director preset${result.loaded.length === 1 ? '' : 's'}.`);
-    }
     if (result.warnings.length) console.warn('[RP Director] local presets:', ...result.warnings);
-    render();
+    // Update only the list: loading must not replace a focused or edited field.
+    refreshPresetChoices();
   });
 
   const names = () => draft.outcomes.map(o => o.name);
-  const isDirty = () => JSON.stringify({ o: draft.outcomes, b: draft.bands, m: method }) !== JSON.stringify({ o: controller.profile.outcomes, b: controller.profile.bands, m: controller.profile.resolutionMethod });
+  const isDirty = () => JSON.stringify({ o: draft.outcomes, b: draft.bands, m: method }) !== JSON.stringify({ o: controller.profile.outcomes, b: controller.profile.bands, m: controller.profile.resolutionMethod })
+    || pendingPresetActorPolicy !== null && pendingPresetActorPolicy !== controller.profile.actorPolicy;
 
   const reload = () => {
     draft = cloneTable({ outcomes: controller.profile.outcomes, bands: controller.profile.bands });
     method = controller.profile.resolutionMethod;
+    pendingPresetActorPolicy = null;
     render();
   };
 
   const showReport = (box: HTMLElement) => {
     box.replaceChildren();
     box.dataset.status = report ? report.status : 'none';
-    if (testing) { box.dataset.status = 'info'; box.append(el('div', { class: 'rpd-result-head', text: 'Testing… one judge call in flight.' })); return; }
+    if (testing) { box.dataset.status = 'info'; box.append(el('div', { class: 'rpd-result-head', text: 'Testing… 1 judge request.' })); return; }
     if (!report) return;
-    box.append(el('div', { class: 'rpd-result-head', text: report.headline }));
-    for (const line of report.lines) box.append(el('div', { class: 'rpd-result-line', text: line }));
+    box.append(el('div', { class: 'rpd-result-head', text: tableReportText(report.headline) }));
+    for (const line of report.lines) box.append(el('div', { class: 'rpd-result-line', text: tableReportText(line) }));
   };
 
   function render(): void {
     host.replaceChildren();
     const outcomeNames = names();
 
-    // Explanation
-    const help = el('div', { class: 'rpd-help' });
-    for (const line of TABLE_HELP) help.append(el('div', { text: line }));
-    host.append(help);
-
     // Method
     const methodSelect = el('select', { class: 'text_pole', title: TIP.method });
-    for (const m of ['threshold', 'sample'] as const) methodSelect.append(el('option', { value: m, text: m === 'threshold' ? 'threshold (Binding)' : 'sample (Binding + dice)' }));
+    for (const m of ['threshold', 'sample'] as const) methodSelect.append(el('option', { value: m, text: m === 'threshold' ? 'Threshold' : 'Dice' }));
     methodSelect.value = method;
     methodSelect.addEventListener('change', () => {
       // The method is a mode, not table data: it applies now, without Apply table.
@@ -109,37 +100,48 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
       setResolutionMethod(controller.settings, controller.profile.id, method);
       controller.host.saveSettings();
       controller.reloadProfile();
-      controller.host.toast('success', method === 'sample' ? 'Resolution method: dice (sample).' : 'Resolution method: threshold.');
+      controller.host.toast('success', method === 'sample' ? 'Method: Dice.' : 'Method: Threshold.');
       render();
     });
-    const uses = el('span', { class: 'rpd-muted', text: method === 'threshold' ? 'Using the "outcome" column. Weights are kept but ignored.' : 'Using the "w:" weights. The "outcome" column is kept but ignored.' });
-    host.append(el('div', { class: 'rpd-row' }, [el('label', { text: 'Resolution method', title: TIP.method }), methodSelect, uses]));
+    const uses = el('span', { class: 'rpd-muted', text: method === 'threshold' ? 'The score picks the named result.' : 'The score picks the odds, then one roll picks the result.' });
+    host.append(el('div', { class: 'rpd-row' }, [el('label', { text: 'Method', title: TIP.method }), methodSelect, uses]));
+
+    const help = el('details', { class: 'rpd-help' }, [el('summary', { text: 'Table help' })]);
+    for (const line of TABLE_HELP) help.append(el('div', { text: line }));
+    host.append(help);
 
     // Presets
     const presetSelect = el('select', { id: 'rpd-preset', class: 'text_pole', title: TIP.preset });
-    for (const p of TABLE_PRESETS) presetSelect.append(el('option', { value: p.id, text: p.label, title: p.description }));
+    for (const p of TABLE_PRESETS) presetSelect.append(el('option', { value: p.id, text: p.label, title: presetHint(p.description) }));
     presetSelect.value = presetChoice;
-    const presetHelp = el('span', { class: 'rpd-muted', text: TABLE_PRESETS.find(p => p.id === presetChoice)?.description ?? '' });
-    presetSelect.addEventListener('change', () => { presetChoice = presetSelect.value; presetHelp.textContent = TABLE_PRESETS.find(p => p.id === presetChoice)?.description ?? ''; });
+    const presetHelp = el('span', { class: 'rpd-muted', text: presetHint(TABLE_PRESETS.find(p => p.id === presetChoice)?.description ?? '') });
+    const presetWarnings = el('div', { class: 'rpd-muted' });
+    refreshPresetChoices = () => {
+      presetSelect.replaceChildren(...TABLE_PRESETS.map(p => el('option', { value: p.id, text: p.label })));
+      presetSelect.value = presetChoice;
+      presetWarnings.textContent = localPresetWarnings.length ? 'Some local presets could not be loaded.' : '';
+    };
+    presetSelect.addEventListener('change', () => { presetChoice = presetSelect.value; presetHelp.textContent = presetHint(TABLE_PRESETS.find(p => p.id === presetChoice)?.description ?? ''); });
     const loadPreset = button('rpd-preset-load', 'Load preset', TIP.preset, () => {
       const preset = presetById(presetSelect.value);
       if (!preset) return;
       const loaded = presetDraft(preset, method);
       draft = cloneTable(loaded.table);
       pendingPresetActorPolicy = preset.actorPolicy ?? null;
-      report = { status: 'info', headline: `Loaded the "${preset.label}" preset into the editor. Press Apply table to use it.`, lines: loaded.note ? [loaded.note] : [] };
+      report = { status: 'info', headline: `Choose Apply table to use "${preset.label}".`, lines: loaded.note ? [loaded.note] : [] };
       render();
     });
-    host.append(el('div', { class: 'rpd-row' }, [el('label', { text: 'Preset', title: TIP.preset }), presetSelect, loadPreset]), el('div', { class: 'rpd-row' }, [presetHelp]));
+    refreshPresetChoices();
+    host.append(el('div', { class: 'rpd-row' }, [el('label', { text: 'Preset', title: TIP.preset }), presetSelect, loadPreset]), el('div', { class: 'rpd-row' }, [presetHelp]), presetWarnings);
 
     // Table
     const table = el('table', { class: 'rpd-bands' });
     const head = el('tr');
     head.append(
-      el('th', { text: 'id', title: TIP.id }),
-      el('th', { text: 'from ≥', title: TIP.from }),
-      el('th', { text: 'to <', title: TIP.to }),
-      el('th', { text: 'outcome', title: TIP.threshold, class: method === 'threshold' ? '' : 'rpd-dim' }),
+      el('th', { text: 'Row', title: TIP.id }),
+      el('th', { text: 'From ≥ (0–1)', title: TIP.from }),
+      el('th', { text: 'To < (0–1)', title: TIP.to }),
+      el('th', { text: 'Result', title: TIP.threshold, class: method === 'threshold' ? '' : 'rpd-dim' }),
     );
     draft.outcomes.forEach((o, i) => {
       const nameInput = el('input', { type: 'text', class: 'text_pole rpd-name', value: o.name, title: TIP.name, maxlength: String(NAME_MAX_LENGTH), spellcheck: 'false', 'data-col': String(i) });
@@ -150,7 +152,7 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
         draft = renameOutcome(draft, i, clean);
         render();
       });
-      const cell = el('div', { class: 'rpd-colhead' }, [el('span', { class: 'rpd-prefix', text: 'w:', title: TIP.prefix }), nameInput]);
+      const cell = el('div', { class: 'rpd-colhead' }, [el('span', { class: 'rpd-prefix', text: 'Chance (0–1)', title: TIP.prefix }), nameInput]);
       if (canRemoveOutcome(draft)) {
         const x = el('span', { class: 'rpd-x interactable', text: '×', title: TIP.removeCol, tabindex: '0', role: 'button', 'aria-label': `Remove outcome ${o.name}` });
         x.addEventListener('click', () => { draft = removeOutcome(draft, i); render(); });
@@ -158,7 +160,7 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
       }
       head.append(el('th', { class: method === 'sample' ? '' : 'rpd-dim' }, [cell]));
     });
-    head.append(el('th', { text: 'sum', title: TIP.sum, class: method === 'sample' ? '' : 'rpd-dim' }));
+    head.append(el('th', { text: 'Total (0–1)', title: TIP.sum, class: method === 'sample' ? '' : 'rpd-dim' }));
     const addColCell = el('th');
     if (canAddOutcome(draft)) addColCell.append(button('rpd-col-add', '+ column', TIP.addCol, () => { draft = addOutcome(draft); render(); }));
     head.append(addColCell);
@@ -166,7 +168,7 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
 
     // What the writer is told
     const told = el('tr', { class: 'rpd-meta' });
-    told.append(el('td', { colspan: '4', class: 'rpd-meta-label', text: 'what the writer is told →', title: TIP.instruction }));
+    told.append(el('td', { colspan: '4', class: 'rpd-meta-label', text: `Writer instruction (max ${INSTRUCTION_MAX_LENGTH} characters)`, title: TIP.instruction }));
     draft.outcomes.forEach((o, i) => {
       const area = el('textarea', { class: 'text_pole rpd-instruction', rows: '5', title: TIP.instruction, maxlength: String(INSTRUCTION_MAX_LENGTH), placeholder: 'Write the ruling as an order to the writer.', 'data-col': String(i) });
       area.value = o.instruction;
@@ -176,31 +178,6 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
     });
     told.append(el('td'), el('td'));
     table.append(told);
-
-    // What gets recorded
-    const recorded = el('tr', { class: 'rpd-meta' });
-    recorded.append(el('td', { colspan: '4', class: 'rpd-meta-label', text: 'records on accept →', title: TIP.records }));
-    draft.outcomes.forEach((o, i) => {
-      const input = el('input', { type: 'text', class: 'text_pole rpd-records', value: o.records, placeholder: 'nothing', title: TIP.records, maxlength: String(NAME_MAX_LENGTH), spellcheck: 'false', 'data-col': String(i) });
-      input.addEventListener('input', () => { const clean = sanitizeName(input.value); if (clean !== input.value) input.value = clean; });
-      input.addEventListener('change', () => { input.value = sanitizeName(input.value, true); draft.outcomes[i]!.records = input.value; render(); });
-      recorded.append(el('td', {}, [input]));
-    });
-    recorded.append(el('td'), el('td'));
-    table.append(recorded);
-
-    // Whether the ruling stands
-    const stands = el('tr', { class: 'rpd-meta' });
-    stands.append(el('td', { colspan: '4', class: 'rpd-meta-label', text: 'stands once accepted →', title: TIP.final }));
-    draft.outcomes.forEach((o, i) => {
-      const box = el('input', { type: 'checkbox', class: 'rpd-final', title: TIP.final, 'data-col': String(i) });
-      box.checked = o.final;
-      if (!o.records) { box.disabled = true; box.checked = false; draft.outcomes[i]!.final = false; }
-      box.addEventListener('change', () => { draft.outcomes[i]!.final = box.checked; refreshDirty(); });
-      stands.append(el('td', { title: TIP.final }, [box]));
-    });
-    stands.append(el('td'), el('td'));
-    table.append(stands);
 
     // Band rows
     draft.bands.forEach((band, r) => {
@@ -235,7 +212,7 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
       row.append(sumCell);
       const removeCell = el('td');
       if (canRemoveBand(draft)) {
-        const x = el('span', { class: 'rpd-x interactable', text: '×', title: TIP.removeRow, tabindex: '0', role: 'button', 'aria-label': `Remove band ${band.id}` });
+        const x = el('span', { class: 'rpd-x interactable', text: '×', title: TIP.removeRow, tabindex: '0', role: 'button', 'aria-label': `Remove row ${r + 1}` });
         x.addEventListener('click', () => { draft = removeBand(draft, r); render(); });
         removeCell.append(x);
       }
@@ -258,7 +235,7 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
       const v = validateTable(draft);
       if (!v.ok) {
         report = { status: 'fail', headline: 'Table not applied. Fix these first:', lines: v.errors };
-        controller.host.toast('error', 'Table rejected: ' + v.errors[0]);
+        controller.host.toast('error', 'Table needs changes: ' + tableReportText(v.errors[0] ?? 'Check the rows.'));
         showReport(result);
         return;
       }
@@ -267,43 +244,54 @@ export function buildTableEditor(controller: Controller): { element: HTMLElement
       overrides[id] = { ...(overrides[id] ?? {}), outcomes: cloneTable(draft).outcomes, bands: cloneTable(draft).bands, resolutionMethod: method, ...(pendingPresetActorPolicy ? { actorPolicy: pendingPresetActorPolicy } : {}) };
       controller.host.saveSettings();
       controller.reloadProfile();
-      report = { status: 'info', headline: `Applied. Profile revision ${controller.profile.revision}.`, lines: [] };
-      controller.host.toast('success', 'Policy table applied.');
+      report = { status: 'info', headline: 'Table applied.', lines: [] };
+      controller.host.toast('success', 'Table applied.');
       reload();
     });
-    const reset = button('rpd-bands-reset', 'Reset to profile default', TIP.reset, () => {
+    const reset = button('rpd-bands-reset', 'Restore defaults', TIP.reset, () => {
       const keptMethod = controller.profile.resolutionMethod;
       delete controller.settings.profileOverrides[controller.profile.id];
       setResolutionMethod(controller.settings, controller.profile.id, keptMethod);
       pendingPresetActorPolicy = null;
       controller.host.saveSettings();
       controller.reloadProfile();
-      report = { status: 'info', headline: 'Reset to the profile\'s built-in table.', lines: [] };
+      report = { status: 'info', headline: 'Default table restored.', lines: [] };
       reload();
     });
-    const test = button('rpd-bands-test', 'Test table', TIP.test, () => {
+    const test = button('rpd-bands-test', 'Test table (1 request)', TIP.test, () => {
       if (testing) return;
       testing = true;
       showReport(result);
       void controller.testTable(cloneTable(draft), method).then(r => { report = r; }, e => { report = { status: 'fail', headline: 'The test could not run.', lines: [String((e as Error)?.message ?? e)] }; }).finally(() => {
         testing = false;
-        const box = document.getElementById('rpd-table-result');
+        const box = host.querySelector<HTMLElement>('#rpd-table-result');
         if (box) showReport(box);
       });
     });
     host.append(el('div', { class: 'rpd-row' }, [apply, reset, test, dirty]), result);
-    if (controller.profileWarnings.length) host.append(el('div', { class: 'rpd-muted', text: controller.profileWarnings.join(' | ') }));
-    if (localPresetWarnings.length) host.append(el('div', { class: 'rpd-muted', text: `Local preset warnings: ${localPresetWarnings.join(' | ')}` }));
-    host.append(el('div', { class: 'rpd-muted', text: `Profile revision ${controller.profile.revision}. Connection for the test: ${controller.settings.connection.kind}${controller.settings.connection.model ? ' / ' + controller.settings.connection.model : ''}.` }));
+    if (controller.profileWarnings.length) host.append(el('div', { class: 'rpd-muted', text: controller.profileWarnings.map(tableReportText).join(' | ') }));
     showReport(result);
     refreshDirty();
   }
 
   function refreshDirty(): void {
-    const node = document.getElementById('rpd-table-dirty') ?? host.querySelector('#rpd-table-dirty');
-    if (node) node.textContent = isDirty() ? 'Unsaved changes. "Test table" uses what you see; play uses the applied table.' : '';
+    const node = host.querySelector('#rpd-table-dirty');
+    if (node) node.textContent = isDirty() ? 'Choose Apply table to save these changes.' : '';
   }
 
   reload();
-  return { element: host, reload };
+  return { element: host, reload, isDirty };
+}
+
+/** Diagnostics use the same row terminology as the editor. */
+function tableReportText(text: string): string {
+  return text.replace(/\bbands\b/gi, 'rows').replace(/\bband\b/gi, 'row')
+    .replace(/\btable_signal\b/g, 'Judge score').replace(/\btable_outcome\b/g, 'Result name').replace(/\btable_band\b/g, 'Row')
+    .replace(/\bSignal: (?:Noul|Score) [\d.]+ → x = /g, 'Score: ')
+    .replace(/with a sample roll of ([\d.]+)/g, (_match, value: string) => `with a roll of ${Math.round(Number(value) * 100)}/100`)
+    .replace(/\bOne judge call\b/g, '1 judge request');
+}
+
+function presetHint(text: string): string {
+  return text.match(/^[\s\S]*?[.!?](?=\s|$)/)?.[0] ?? text;
 }

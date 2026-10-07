@@ -8,6 +8,7 @@ export function defaultLoreSettings(): LoreSettings {
   return {
     books: {},
     defaultMode: 'assist',
+    placeNearEnd: true,
     maxEntries: 5,
     width: DEFAULT_BEAM.width,
     minProbability: DEFAULT_BEAM.minProbability,
@@ -43,6 +44,7 @@ export function normalizeLoreSettings(raw: unknown): LoreSettings {
   return {
     books,
     defaultMode: isMode(saved.defaultMode) ? saved.defaultMode : base.defaultMode,
+    placeNearEnd: saved.placeNearEnd !== false,
     maxEntries: bounded(saved.maxEntries, 1, 20, base.maxEntries),
     width: bounded(saved.width, 1, 6, base.width),
     minProbability: bounded(saved.minProbability, 0.01, 0.9, base.minProbability, false),
@@ -69,13 +71,15 @@ export function effectiveMode(settings: LoreSettings, world: string, tunnelVisio
 
 /** What the writer's World Info scan should do for one generation. */
 export interface LorePlan {
+  /** Emit selected entries in-chat at depth 1 rather than their authored position. */
+  nearEnd?: boolean;
   /** `${world}.${uid}` of entries to activate. */
   force: Set<string>;
   /** Books whose keyword activation is switched off (constant entries stay). */
   managed: Set<string>;
 }
 
-export function lorePlan(refs: { world: string; uid: number }[], modeOf: (world: string) => LoreBookMode, books: string[], failed: string[] = []): LorePlan {
+export function lorePlan(refs: { world: string; uid: number }[], modeOf: (world: string) => LoreBookMode, books: string[], failed: string[] = [], nearEnd = true): LorePlan {
   const force = new Set<string>();
   for (const ref of refs) {
     const mode = modeOf(ref.world);
@@ -83,5 +87,5 @@ export function lorePlan(refs: { world: string; uid: number }[], modeOf: (world:
   }
   // A book the judge could not walk keeps its keyword lore, even when managed.
   const managed = new Set(books.filter(world => modeOf(world) === 'managed' && !failed.includes(world)));
-  return { force, managed };
+  return { force, managed, nearEnd };
 }

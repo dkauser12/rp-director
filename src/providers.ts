@@ -20,6 +20,7 @@ import type {
   Question,
 } from './types.ts';
 import { isFiniteNumber, validateAnswer } from './validate.ts';
+import { reportedNumber } from './usage.ts';
 
 // ---------------------------------------------------------------------------
 // Errors
@@ -720,6 +721,7 @@ export function createOpenRouterDecisionsProvider(options: {
         errors: batch.errors,
         inputTokens: usageNumber(usage?.input_tokens),
         outputTokens: usageNumber(usage?.output_tokens),
+        costUsd: reportedNumber(usage?.cost),
         durationMs: now() - started,
         transportAttempts: 1,
       };

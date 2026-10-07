@@ -1,8 +1,9 @@
 /** One-time consolidation and reload recovery. These helpers never touch the host. */
-import type { DirectorChatRecord, DirectorSettings } from './types.ts';
+import type { DirectorSettings } from './types.ts';
 import { canonicalProfileId, LEGACY_PROFILE_IDS } from './profiles.ts';
 import { normalizeReactionSettings } from './npc-reaction.ts';
 import { normalizeLoreSettings } from './lore/settings.ts';
+import { normalizeUiPreferences } from './ui-preferences.ts';
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -13,24 +14,30 @@ export function normalizeBaseSettings(defaults: DirectorSettings, existing: unkn
   const saved = object(existing) ?? {};
   const result = structuredClone({
     ...defaults,
-    ...saved,
     enabled: typeof saved.enabled === 'boolean' ? saved.enabled : defaults.enabled,
+    askWhenSwiping: typeof saved.askWhenSwiping === 'boolean' ? saved.askWhenSwiping : defaults.askWhenSwiping,
+    reviewNpcRolls: typeof saved.reviewNpcRolls === 'boolean' ? saved.reviewNpcRolls : defaults.reviewNpcRolls,
     profileId: canonicalProfileId(typeof saved.profileId === 'string' ? saved.profileId : defaults.profileId),
-    bindingConfirmedAt: typeof saved.bindingConfirmedAt === 'string' || saved.bindingConfirmedAt === null ? saved.bindingConfirmedAt : defaults.bindingConfirmedAt,
     connection: { ...defaults.connection, ...(object(saved.connection) ?? {}) },
-    observerConnection: { ...defaults.observerConnection, ...(object(saved.observerConnection) ?? {}) },
     reactions: normalizeReactionSettings(saved.reactions),
-    showBar: typeof saved.showBar === 'boolean' ? saved.showBar : defaults.showBar,
-    inspectorOpen: typeof saved.inspectorOpen === 'boolean' ? saved.inspectorOpen : defaults.inspectorOpen,
+    showBadges: typeof saved.showBadges === 'boolean' ? saved.showBadges : defaults.showBadges,
+    ...normalizeUiPreferences(saved),
     profileOverrides: { ...defaults.profileOverrides, ...(object(saved.profileOverrides) ?? {}) },
-    // Revision 2 moved everyone to the staged pipeline once; later choices are kept.
-    pipeline: typeof saved.settingsRevision === 'number' && saved.settingsRevision >= 2 && (saved.pipeline === 'staged' || saved.pipeline === 'legacy') ? saved.pipeline : defaults.pipeline,
-    settingsRevision: Math.max(2, typeof saved.settingsRevision === 'number' ? saved.settingsRevision : 0),
+    // Revision 3 removes the legacy pipeline and its state machine permanently.
+    pipeline: 'staged',
+    settingsRevision: 3,
+    waitForJudgeSeconds: typeof saved.waitForJudgeSeconds === 'number' && Number.isFinite(saved.waitForJudgeSeconds) && saved.waitForJudgeSeconds >= 0
+      ? Math.max(2, Math.min(saved.waitForJudgeSeconds, 120)) : defaults.waitForJudgeSeconds,
     modules: {
+      replyCheck: typeof object(saved.modules)?.replyCheck === 'boolean' ? object(saved.modules)!.replyCheck as boolean
+        : object(saved.modules) && ['speaker', 'decisions', 'meters', 'secrets'].every(key => object(saved.modules)![key] === false) && object(saved.modules)!.lore !== true ? false : true,
       speaker: typeof object(saved.modules)?.speaker === 'boolean' ? object(saved.modules)!.speaker as boolean : defaults.modules.speaker,
       decisions: typeof object(saved.modules)?.decisions === 'boolean' ? object(saved.modules)!.decisions as boolean : defaults.modules.decisions,
       meters: typeof object(saved.modules)?.meters === 'boolean' ? object(saved.modules)!.meters as boolean : defaults.modules.meters,
       secrets: typeof object(saved.modules)?.secrets === 'boolean' ? object(saved.modules)!.secrets as boolean : defaults.modules.secrets,
+      pacing: typeof object(saved.modules)?.pacing === 'boolean' ? object(saved.modules)!.pacing as boolean
+        : object(saved.modules) && (['speaker', 'decisions', 'meters', 'secrets'] as const).every(key => object(saved.modules)![key] === false) && object(saved.modules)!.lore !== true ? false
+        : defaults.modules.pacing ?? true,
       // Lore arrived after the other suites: off for anyone who had switched them all off.
       lore: typeof object(saved.modules)?.lore === 'boolean' ? object(saved.modules)!.lore as boolean
         : object(saved.modules) && (['speaker', 'decisions', 'meters', 'secrets'] as const).every(key => object(saved.modules)![key] === false) ? false
@@ -38,6 +45,7 @@ export function normalizeBaseSettings(defaults: DirectorSettings, existing: unkn
     },
     lore: normalizeLoreSettings(saved.lore),
   }) as DirectorSettings;
+  if (result.connection.kind === 'mock') result.connection = { ...defaults.connection, kind: 'openrouter' };
   for (const [legacy, current] of Object.entries(LEGACY_PROFILE_IDS)) {
     if (result.profileOverrides[legacy]) {
       if (!result.profileOverrides[current]) result.profileOverrides[current] = result.profileOverrides[legacy];
@@ -45,45 +53,6 @@ export function normalizeBaseSettings(defaults: DirectorSettings, existing: unkn
     }
   }
   return result;
-}
-
-/**
- * A browser reload cannot resume an old observer promise. Historical accepted
- * checkpoints stay authoritative; only uncommitted replies become retryable.
- * Call after normalizeRecord and only when loading a chat, never while live
- * observation work is still running.
- */
-export function recoverInterruptedObservations(input: DirectorChatRecord): { record: DirectorChatRecord; recoveredVariantIds: string[] } {
-  const record = structuredClone(input);
-  const recoveredVariantIds: string[] = [];
-  for (const variant of Object.values(record.variants)) {
-    if (variant.acceptance !== 'pending') continue;
-    const attempt = record.attempts[variant.attemptId];
-    if (!attempt || attempt.variantId !== variant.variantId || attempt.status === 'accepted') continue;
-    // A completed observation is usable after reload and must not be rerun.
-    if (variant.observerStatus === 'ready' && variant.observation) continue;
-    const legacy = variant.observerStatus === undefined || variant.observerStatus === 'not_required';
-    const interrupted = variant.observerStatus === 'pending' || attempt.status === 'observing';
-    if (!legacy && !interrupted) continue;
-    const reason = legacy
-      ? 'This reply predates post-reply observation. Retry observation before continuing.'
-      : 'Post-reply observation was interrupted by a reload. Retry observation before continuing.';
-    variant.observerStatus = 'failed';
-    variant.observerError = reason;
-    variant.observation = null;
-    attempt.status = 'stale';
-    recoveredVariantIds.push(variant.variantId);
-    if (record.projection.cursor === variant.cursorAfter) {
-      const predecessor = variant.cursorBefore ? record.checkpoints[variant.cursorBefore] : undefined;
-      record.projection = {
-        cursor: variant.cursorAfter,
-        state: structuredClone(predecessor?.stateAfter ?? record.projection.state),
-        status: 'stale',
-        reason,
-      };
-    }
-  }
-  return { record, recoveredVariantIds };
 }
 
 export interface MarkerCarrier {

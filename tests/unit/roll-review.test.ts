@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { reviewPermit, rerollPermit } from '../../src/roll-review.ts';
+import { rerollPermit } from '../../src/roll-review.ts';
 import { adjudicateTurnProposal, DIRECTOR_TOOL_DESCRIPTION, writerPermit } from '../../src/director-tool.ts';
 import { profileById } from '../../src/profiles.ts';
 import { createMockProvider } from '../../src/providers.ts';
@@ -18,42 +18,15 @@ async function permit(): Promise<TurnPermit> {
   })).permit;
 }
 
-test('tool result remains pending until user keeps the roll; resampling preserves the assessment and old permit', async () => {
+test('explicit NPC dice reroll preserves the assessment and original permit', async () => {
   const initial = await permit();
   const original = structuredClone(initial);
-  let choose!: (value: 'keep' | 'reroll' | 'cancel') => void;
-  let resolved = false;
-  let reviews = 0;
-  const held = reviewPermit({ initial, method: 'sample', signal: new AbortController().signal, isCurrent: () => true,
-    choose: async () => { reviews++; return new Promise(resolve => { choose = resolve; }); },
-    reroll: async value => rerollPermit(value, initial.profile!, { npc: 'Nia', player: 'Player' }, 'Player', () => 0.99),
-  }).then(value => { resolved = true; return value; });
-  await Promise.resolve();
-  assert.equal(resolved, false);
-  choose('reroll');
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(reviews, 2);
-  assert.equal(resolved, false);
-  choose('keep');
-  const kept = await held;
-  assert.ok(kept);
-  assert.equal(kept.actions[0]!.draw, 0.99);
-  assert.deepEqual(kept.actions[0]!.assessment, initial.actions[0]!.assessment);
-  assert.equal(kept.reviewHistory!.length, 1);
+  const next = rerollPermit(initial, initial.profile!, { npc: 'Nia', player: 'Player' }, 'Player', () => 0.99);
+  assert.equal(next.actions[0]!.draw, 0.99);
+  assert.deepEqual(next.actions[0]!.assessment, initial.actions[0]!.assessment);
+  assert.notEqual(next.permitId, initial.permitId);
+  assert.equal(next.previousPermitId, initial.permitId);
   assert.deepEqual(initial, original);
-});
-
-test('Cancel, Stop and stale context cannot return a permit to the recursive writer', async () => {
-  const initial = await permit();
-  for (const reason of ['cancel', 'abort', 'stale']) {
-    const abort = new AbortController();
-    let current = true;
-    const result = await reviewPermit({ initial, method: 'sample', signal: abort.signal, isCurrent: () => current,
-      choose: async () => { if (reason === 'abort') abort.abort(); if (reason === 'stale') current = false; return reason === 'cancel' ? 'cancel' : 'keep'; },
-      reroll: async () => { throw new Error('should not reroll'); },
-    });
-    assert.equal(result, null, reason);
-  }
 });
 
 test('writer gets final values but never stored snapshots, table or rejected roll history', async () => {
@@ -65,5 +38,6 @@ test('writer gets final values but never stored snapshots, table or rejected rol
   assert.equal('snapshot' in result, false);
   assert.equal('reviewHistory' in result, false);
   assert.match(DIRECTOR_TOOL_DESCRIPTION, /reasoning/);
-  assert.match(DIRECTOR_TOOL_DESCRIPTION, /pauses for the user/);
+  assert.match(DIRECTOR_TOOL_DESCRIPTION, /may show its results for review/);
+  assert.doesNotMatch(DIRECTOR_TOOL_DESCRIPTION, /pauses for the user/);
 });

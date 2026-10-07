@@ -12,6 +12,8 @@ import type {
 import { newId, randomDraw } from './identity.ts';
 import { normaliseSignal, resolveOutcome } from './resolver.ts';
 import { fillPlaceholders } from './prompts.ts';
+import { visibleText } from './pipeline/spans.ts';
+import { StagedError, validateStageAnswers } from './pipeline/staged.ts';
 
 export const DIRECTOR_TOOL_NAME = 'RPDirector_AdjudicateTurn';
 export const MAX_PLANNED_ACTIONS = 3;
@@ -23,7 +25,7 @@ export const DIRECTOR_TOOL_DESCRIPTION = [
   'SKIP: ordinary dialogue, reactions, trivial or established actions, and the player attempt already resolved by the Director pre-pass.',
   'Use the frozen actor IDs and evidence references in the Director context. Supply a concrete method, one objective result and bounded failure stakes per action; at most three independent actions in one call.',
   'You may use the model\'s normal reasoning before calling, but never put reasoning, a thinking trace, drafted prose, invented rolls or predicted outcomes in the arguments. Do not narrate a result before the tool returns.',
-  'The tool pauses for the user to keep or reroll the values. Its final returned permit is authoritative for this attempt. Then write the final reply, obeying the permit; no further Director call, extra consequential action or state block.',
+  'The tool may show its results for review before returning. Its returned permit is authoritative for this attempt. Then write the final reply, obeying the permit; no further Director call, no extra consequential action, and no Director permits, IDs, JSON or other Director metadata. A preset-required fictional tracker block is fine.',
   'Feelings, attraction, consent, trust and permanent attitudes are not mechanical rewards. Leave the player\'s voluntary response open.',
 ].join('\n');
 
@@ -76,7 +78,7 @@ function exactKeys(value: Record<string, unknown>, allowed: readonly string[]): 
 
 function boundedText(value: unknown, label: string, max: number): { ok: true; value: string } | { ok: false; message: string } {
   if (typeof value !== 'string') return { ok: false, message: `${label} must be a string` };
-  const text = value.replace(/\s+/g, ' ').trim();
+  const text = visibleText(value).replace(/\s+/g, ' ').trim();
   if (!text) return { ok: false, message: `${label} must not be empty` };
   if (text.length > max) return { ok: false, message: `${label} exceeds ${max} characters` };
   return { ok: true, value: text };
@@ -233,26 +235,67 @@ export interface AdjudicateProposalResult {
   questions: Record<string, Question>;
 }
 
+/** The NPC tool is public-only, including when reassessing a saved 0.7 permit. */
+function publicToolEvidence(value: Json, names: Record<string, string>): Record<string, Json> {
+  const base = object(value) ?? {};
+  const actors: Record<string, Json> = Object.fromEntries(Object.entries(names).map(([id, name]) => [id, { name: visibleText(name) }]));
+  for (const [id, raw] of Object.entries(object(base.actors) ?? {})) {
+    const actor = object(raw);
+    if (!actor) continue;
+    actors[id] = {
+      ...(object(actors[id]) as Record<string, Json> ?? {}),
+      ...(typeof actor.name === 'string' ? { name: visibleText(actor.name) } : {}),
+      ...(actor.control === 'user' || actor.control === 'npc' ? { control: actor.control } : {}),
+    };
+  }
+  const recentAcceptedMessages: Json[] = [];
+  for (const raw of Array.isArray(base.recentAcceptedMessages) ? base.recentAcceptedMessages : []) {
+    const message = object(raw);
+    if (!message || !['user', 'assistant'].includes(String(message.role)) || typeof message.text !== 'string') continue;
+    recentAcceptedMessages.push({
+      role: String(message.role), text: visibleText(message.text),
+      ...(typeof message.actorId === 'string' ? { actorId: message.actorId } : {}),
+      ...(typeof message.speaker === 'string' ? { speaker: visibleText(message.speaker) } : {}),
+    });
+  }
+  return {
+    actors, recentAcceptedMessages,
+    latestInput: typeof base.latestInput === 'string' ? visibleText(base.latestInput) : '',
+    ...(typeof base.playerActorId === 'string' ? { playerActorId: base.playerActorId } : {}),
+  };
+}
+
 /** Executes exactly one provider batch and freezes every returned action meaning. */
 export async function adjudicateTurnProposal(input: AdjudicateProposalInput): Promise<AdjudicateProposalResult> {
+  // Keep the boundary safe even for a saved proposal used by Reassess.
+  const safeProposal: TurnProposal = {
+    schemaVersion: 1, requestId: input.proposal.requestId, attemptId: input.proposal.attemptId, speakerActorId: input.proposal.speakerActorId,
+    actions: input.proposal.actions.map(action => ({
+      proposalId: visibleText(action.proposalId), actingActorId: action.actingActorId, targetActorIds: [...action.targetActorIds], family: action.family,
+      method: visibleText(action.method), boundedResult: visibleText(action.boundedResult), opposed: action.opposed, evidenceRefs: [...action.evidenceRefs],
+      failureStake: { kind: action.failureStake.kind, detail: visibleText(action.failureStake.detail) },
+    })),
+  };
+  if (safeProposal.actions.some(action => !action.method || !action.boundedResult || !action.failureStake.detail)) throw new StagedError('ruling', 'A planned action has no visible method, result or failure stake.');
   const plannedActions: Record<string, Json> = {};
   const questions: Record<string, Question> = {};
-  for (const [index, action] of input.proposal.actions.entries()) {
+  for (const [index, action] of safeProposal.actions.entries()) {
     plannedActions[action.proposalId] = action as unknown as Json;
     questions[`planned_${index + 1}`] = plannedQuestion(action, `state.plannedActions.${action.proposalId}`, input.profile.drivingQuestionId === 'gain_score');
   }
-  if (Object.keys(questions).length > input.profile.budgets.maxQuestions) throw new Error('planned action batch exceeds the profile question budget');
-  const base = input.snapshot.state && typeof input.snapshot.state === 'object' && !Array.isArray(input.snapshot.state)
-    ? input.snapshot.state as Record<string, Json>
-    : {};
-  const snapshot: DecisionSnapshot = { ...input.snapshot, state: { ...base, plannedActions } };
+  if (Object.keys(questions).length > Math.min(16, input.profile.budgets.maxQuestions)) throw new StagedError('ruling', 'Planned action batch exceeds the question budget.');
+  const base = publicToolEvidence(input.snapshot.state, input.actorNames);
+  const publicSnapshot: DecisionSnapshot = { ...input.snapshot, state: base };
+  const snapshot: DecisionSnapshot = { ...publicSnapshot, state: { ...base, plannedActions } };
   const contextCharacters = JSON.stringify(snapshot.state).length;
   if (contextCharacters > input.profile.budgets.maxSerializedCharacters) {
-    throw new Error(`Planned action context exceeds the limit (${contextCharacters}/${input.profile.budgets.maxSerializedCharacters} characters). No decision was requested.`);
+    throw new StagedError('ruling', `Planned action context exceeds the limit (${contextCharacters}/${input.profile.budgets.maxSerializedCharacters} characters). No decision was requested.`, 'context_budget');
   }
-  const evaluation = await input.provider.evaluate({ requestId: newId('req'), phase: 'guide', snapshot, questions }, input.signal);
+  const checked = validateStageAnswers('ruling', questions, await input.provider.evaluate({ requestId: newId('req'), phase: 'guide', snapshot, questions }, input.signal));
+  if (checked.errors.length) throw new StagedError('ruling', checked.errors.map(error => error.message).join('; '), checked.errors[0]!.type);
+  const evaluation = checked.result;
   const actions = [];
-  for (const [index, proposal] of input.proposal.actions.entries()) {
+  for (const [index, proposal] of safeProposal.actions.entries()) {
     const questionId = `planned_${index + 1}`;
     const answer = evaluation.answers[questionId];
     if (!answer) throw new Error(`No valid assessment for ${proposal.proposalId}: ${evaluation.errors[questionId] ?? 'missing'}`);
@@ -300,18 +343,18 @@ export async function adjudicateTurnProposal(input: AdjudicateProposalInput): Pr
     stateRevision: input.snapshot.stateRevision,
     actions,
     compactState: {
-      sceneId: typeof base.sceneId === 'number' ? base.sceneId : 0,
+      sceneId: 0,
       revision: input.snapshot.stateRevision,
     },
     constraints: [
       'Write the final reply directly; do not call RPDirector_AdjudicateTurn again.',
       'Apply only these attempt-scoped rulings. Do not invent another unresolved consequential action.',
-      'Do not output state blocks or claim that the permit itself is canonical state.',
+      'Do not output Director data or metadata such as permits, rulings, request IDs, actor IDs, evidence references, or JSON. This does not prohibit a preset-required fictional tracker block.',
       `Do not author ${input.playerName}'s voluntary actions, speech, thoughts, feelings, consent, or decisions.`,
     ],
     createdAt: input.now ?? Date.now(),
-    proposal: structuredClone(input.proposal),
-    snapshot: structuredClone(input.snapshot),
+    proposal: structuredClone(safeProposal),
+    snapshot: structuredClone(publicSnapshot),
     profile: structuredClone(input.profile),
   };
   return { permit, evaluation, snapshot, questions };
@@ -334,7 +377,7 @@ export function toolPlanningBlock(input: {
     `Allowed evidenceRefs: ${JSON.stringify(input.evidenceRefs)}.`,
     `Submit at most ${MAX_PLANNED_ACTIONS} actions. Give only actor IDs, targets, family, concrete method, one bounded objective result, bounded failure stake, opposition, and evidence refs. Never include draft prose.`,
     'If no newly invented uncertain consequential NPC action is needed, do not call the tool. Do not roll dice before a permit is returned.',
-    'Normal model reasoning may precede the tool call. Send only the bounded proposal, never your thinking trace or draft. The tool pauses for the user to keep or reroll its values before your final response can begin.',
+    'Normal model reasoning may precede the tool call. Send only the bounded proposal, never your thinking trace or draft. If review is enabled, the user keeps or rerolls the results before the tool returns; otherwise the results apply automatically.',
   ].join('\n');
 }
 
@@ -345,13 +388,13 @@ export function permitFollowupBlock(permit: TurnPermit | null, failure: string |
   return [
     '[Director turn permit — binding for this reply]',
     JSON.stringify(writerPermit(permit)),
-    'Now write the final reply. Obey every permitted outcome and constraint. Do not call the tool again, add another consequential action, or emit state/metadata blocks.',
+    'Now write the final reply. Obey every permitted outcome and constraint. Do not call the tool again, add another consequential action, or emit Director permits, IDs, JSON, or other Director metadata.',
   ].join('\n');
 }
 
 /** Full snapshot/table/history stay local; the writer receives only the final rulings. */
 export function writerPermit(permit: TurnPermit) {
-  const { proposal: _proposal, snapshot: _snapshot, profile: _profile, reviewHistory: _history, ...result } = permit;
+  const { proposal: _proposal, snapshot: _snapshot, profile: _profile, reviewHistory: _history, replayTrimmed: _trimmed, ...result } = permit;
   return result;
 }
 

@@ -1,154 +1,126 @@
 /**
- * Lifecycle reducer (plan §7–§8): pure functions over the per-chat record.
- *
- * Every mutation of the record goes through `applyEvent`. The reducer never
- * touches the host; the controller feeds it host events and persists the
- * result. Identities: actionId (declared action), resolutionId (frozen
- * decision), attemptId (one writer generation), variantId (one host message
- * variant), cursor (accepted-prefix fingerprint).
+ * Frozen-turn history. Completing a writer attempt records its variant directly;
+ * story.ts owns branch-aware meters, secrets and lore. No post-reply state gate
+ * can hold up the next message.
  */
 import { emptyStory, normalizeStory } from './story.ts';
+import { decodeRecordStorage } from './state-storage.ts';
 import type { ReactionResult } from './npc-reaction.ts';
 import type {
-  ActionSpec, ActorBinding, CompactState, DirectorChatRecord, FrozenResolution, GenerationAttempt,
-  GenerationType, InspectorEntry, ObservationOperation, ObservationRecord, RegisteredEffect, TurnPermit, VariantRecord,
+  ActionSpec, ActorBinding, DirectorChatRecord, FrozenResolution,
+  GenerationAttempt, GenerationType, InspectorEntry, SpeakerDecision, StorySnapshot, TurnPermit,
 } from './types.ts';
-import { defOfResolution, effectsFor, gainVariableId, instructionForResolution, tierForResolution } from './resolver.ts';
 
 export const INSPECTOR_LIMIT = 200;
+/** Older Activity rows keep their summary without repeated judge payloads. */
+export const INSPECTOR_DETAIL_LIMIT = 8;
+/** Exact judge replay and off-chain dice survive for twenty distinct user turns. */
+export const REPLAY_TURN_LIMIT = 20;
+export const RECORD_BACKUP_KEY = 'rpDirector_0_7_backup';
 
-export function emptyState(): CompactState {
-  return {
-    revision: 0,
-    variables: {},
-    settledGains: {},
-    unresolvedVariableIds: [],
-    elapsedSeconds: 0,
-    timeQuality: 'unresolved',
-    sceneId: 1,
-    sceneReplyCount: 0,
-    positions: {},
-    notifiedDeadlineIds: [],
-    acceptedResolutionIds: [],
-    acceptedPermitIds: [],
-    itemOwners: {},
-    conditions: {},
-    knownFacts: {},
-    revealedSecrets: {},
-    lastObservedCursor: '',
-    trackingStatus: 'current',
-  };
+export function needsLegacyRecordBackup(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return false;
+  const record = raw as Partial<DirectorChatRecord>;
+  return record.schemaVersion === 1 && record.dataVersion !== 2;
+}
+
+export function trimInspector(entries: InspectorEntry[]): InspectorEntry[] {
+  const kept = entries.slice(-INSPECTOR_LIMIT);
+  const cut = kept.length - INSPECTOR_DETAIL_LIMIT;
+  return kept.map((entry, index) => index < cut && (entry.stateSent != null || entry.questions != null || entry.injectedText != null || entry.answers != null)
+    ? { ...entry, stateSent: null, questions: null, injectedText: null, answers: null }
+    : entry);
 }
 
 export function newRecord(seedId: string, profileRevision: string): DirectorChatRecord {
   return {
-    schemaVersion: 1,
-    seedId,
-    actors: {},
-    actions: {},
-    resolutions: {},
-    permits: {},
-    attempts: {},
-    variants: {},
-    checkpoints: {},
-    appliedOperationIds: [],
-    pending: null,
-    projection: { cursor: null, state: emptyState(), status: 'unknown', reason: 'no checkpoint yet' },
-    inspector: [],
-    profileRevision,
-    story: emptyStory(),
+    schemaVersion: 1, dataVersion: 2, seedId, actors: {}, actions: {}, resolutions: {}, permits: {},
+    attempts: {}, variants: {}, appliedOperationIds: [], pending: null, paused: false, replyCheckRerolls: [],
+    inspector: [], profileRevision, story: emptyStory(),
   };
 }
 
-/** Loads a record from untrusted metadata, filling defaults; never throws. */
+/** Loads 0.7 records without reviving observer, checkpoint, or repair state. */
 export function normalizeRecord(raw: unknown, seedId: string, profileRevision: string): DirectorChatRecord {
+  raw = decodeRecordStorage(raw);
   const base = newRecord(seedId, profileRevision);
-  if (!raw || typeof raw !== 'object') return base;
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return base;
   const r = raw as Partial<DirectorChatRecord>;
   if (r.schemaVersion !== 1) return base;
-  const obj = <T>(v: unknown, fallback: T): T => (v && typeof v === 'object' && !Array.isArray(v) ? (v as T) : fallback);
+  const map = <T>(value: unknown): Record<string, T> => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).filter(([, item]) => item && typeof item === 'object' && !Array.isArray(item)).map(([key, item]) => [key, structuredClone(item)]));
+  };
   const normalized: DirectorChatRecord = {
-    schemaVersion: 1,
+    ...base,
     seedId: typeof r.seedId === 'string' && r.seedId ? r.seedId : seedId,
-    actors: obj(r.actors, {}),
-    actions: obj(r.actions, {}),
-    resolutions: obj(r.resolutions, {}),
-    permits: obj(r.permits, {}),
-    attempts: obj(r.attempts, {}),
-    variants: obj(r.variants, {}),
-    checkpoints: obj(r.checkpoints, {}),
+    actors: map(r.actors), actions: map(r.actions), resolutions: map(r.resolutions),
+    permits: map(r.permits), attempts: map(r.attempts), variants: map(r.variants),
     appliedOperationIds: Array.isArray(r.appliedOperationIds) ? r.appliedOperationIds.filter(x => typeof x === 'string') : [],
-    pending: obj(r.pending, null),
-    projection: r.projection && typeof r.projection === 'object' ? { ...base.projection, ...r.projection, state: { ...emptyState(), ...obj(r.projection.state, {}), settledGains: obj(r.projection.state?.settledGains, {}), itemOwners: obj(r.projection.state?.itemOwners, {}), conditions: obj(r.projection.state?.conditions, {}), knownFacts: obj(r.projection.state?.knownFacts, {}), revealedSecrets: obj(r.projection.state?.revealedSecrets, {}) } } : base.projection,
-    inspector: Array.isArray(r.inspector) ? r.inspector.slice(-INSPECTOR_LIMIT) : [],
+    paused: r.paused === true,
+    replyCheckRerolls: Array.isArray(r.replyCheckRerolls) ? [...new Set(r.replyCheckRerolls.filter(key => typeof key === 'string'))] : [],
+    inspector: Array.isArray(r.inspector) ? trimInspector(structuredClone(r.inspector)) : [],
     profileRevision: typeof r.profileRevision === 'string' ? r.profileRevision : profileRevision,
     story: normalizeStory(r.story),
+    ...(Array.isArray(r.transcriptCursors) && r.transcriptCursors.every(cursor => typeof cursor === 'string') ? { transcriptCursors: [...r.transcriptCursors] } : {}),
+    ...(r.dataVersion !== 2 || r.legacyStoryLayout ? { legacyStoryLayout: true as const } : {}),
   };
-  for (const checkpoint of Object.values(normalized.checkpoints)) {
-    checkpoint.stateAfter = { ...emptyState(), ...checkpoint.stateAfter, settledGains: obj(checkpoint.stateAfter?.settledGains, {}), itemOwners: obj(checkpoint.stateAfter?.itemOwners, {}), conditions: obj(checkpoint.stateAfter?.conditions, {}), knownFacts: obj(checkpoint.stateAfter?.knownFacts, {}), revealedSecrets: obj(checkpoint.stateAfter?.revealedSecrets, {}) };
-    hydrateFrozenSettlements(checkpoint.stateAfter, normalized.resolutions);
+  for (const variant of Object.values(normalized.variants)) {
+    const saved = variant as unknown as Record<string, unknown>;
+    delete saved.observerStatus;
+    delete saved.observation;
+    delete saved.observerError;
+    // Completed 0.7 replies remain reusable even when their observer never ran.
+    const attempt = normalized.attempts[variant.attemptId];
+    if (attempt && attempt.variantId === variant.variantId && saved.acceptance !== 'rejected') {
+      attempt.status = 'accepted';
+    }
+    delete saved.acceptance;
   }
-  hydrateFrozenSettlements(normalized.projection.state, normalized.resolutions);
+  // Promises and host generations cannot resume after a browser reload.
+  for (const attempt of Object.values(normalized.attempts)) {
+    // An imported shared-text reference may be damaged. Omit its optional
+    // block so frozen story state can rebuild it; never pass an object to prose.
+    if (typeof attempt.injectedText !== 'string') attempt.injectedText = '';
+    if (attempt.frozenStateBlock !== undefined && typeof attempt.frozenStateBlock !== 'string') delete attempt.frozenStateBlock;
+    if (attempt.inputText !== undefined && typeof attempt.inputText !== 'string') delete attempt.inputText;
+    if (['prepared', 'writing', 'observing', 'provisional'].includes(attempt.status)) attempt.status = 'cancelled';
+  }
+  // Removed observer Activity rows are historical information, not active kinds.
+  for (const entry of normalized.inspector) if (['observer', 'acceptance', 'restore', 'native_bypass'].includes(entry.kind)) entry.kind = 'info';
   return normalized;
 }
 
-/** Migrates old accepted records into frozen settlements without consulting today's policy table. */
-function hydrateFrozenSettlements(state: CompactState, resolutions: Record<string, FrozenResolution>): void {
-  state.settledGains = state.settledGains && typeof state.settledGains === 'object' ? state.settledGains : {};
-  for (const resolutionId of state.acceptedResolutionIds ?? []) {
-    const resolution = resolutions[resolutionId];
-    if (!resolution || resolution.status !== 'accepted') continue;
-    const legacyTier = tierForResolution(resolution);
-    const legacyFinal = resolution.outcomeFinal === undefined && resolution.outcomeInstruction === undefined && legacyTier === 'achieved';
-    if (resolution.outcomeFinal !== true && !legacyFinal) continue;
-    const def = defOfResolution(resolution) ?? (legacyFinal
-      ? { name: resolution.outcome, instruction: instructionForResolution(resolution), records: 'achieved', final: true }
-      : null);
-    if (!def) continue;
-    const scope = resolution.action.identityVersion === 2 ? (resolution.action.resolutionScope ?? 'attempt') : 'persistent';
-    if (scope === 'attempt') continue;
-    const variableId = gainVariableId(resolution.action);
-    if (!state.settledGains[variableId]) {
-      state.settledGains[variableId] = {
-        variableId,
-        resolutionId,
-        outcome: def,
-        scope,
-        sceneId: scope === 'scene' ? (resolution.action.sceneId ?? null) : null,
-      };
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Events
-// ---------------------------------------------------------------------------
+type FrozenTurn = {
+  reaction?: ReactionResult | null;
+  frozenSpeaker?: SpeakerDecision | null;
+  frozenStateBlock?: string;
+  storyBefore?: StorySnapshot | null;
+  storyAfter?: StorySnapshot | null;
+  frozenLorePlan?: { force: string[]; managed: string[]; nearEnd?: boolean } | null;
+  judgeErrors?: string[];
+  judgeFailedStages?: string[];
+  stageRecords?: GenerationAttempt['stageRecords'];
+  turnKind?: GenerationAttempt['turnKind'];
+  inputText?: string;
+  loreCursor?: string | null;
+};
 
 export type DirectorEvent =
   | { type: 'bind_actor'; binding: ActorBinding }
-  | { type: 'prepare'; resolution: FrozenResolution | null; action: ActionSpec | null; reaction?: ReactionResult | null; attemptId: string; actorId: string | null; epoch: number; composerText: string; now: number }
+  | ({ type: 'prepare'; resolution: FrozenResolution | null; action: ActionSpec | null; attemptId: string; actorId: string | null; epoch: number; composerText: string; now: number } & FrozenTurn)
   | { type: 'bind'; attemptId: string; cursorBefore: string; epoch: number; injectedText: string; toolOffered?: boolean }
   | { type: 'tool_result'; attemptId: string; permit: TurnPermit | null; status: 'permitted' | 'failed' | 'malformed'; error: string | null }
   | { type: 'store_permit'; permit: TurnPermit }
   | { type: 'store_resolution'; resolution: FrozenResolution }
-  | { type: 'regeneration_attempt'; attemptId: string; resolutionId: string | null; permitId?: string | null; reaction?: ReactionResult | null; cursorBefore: string; epoch: number; generationType: GenerationType; actorId: string | null; injectedText: string; unadjudicated: boolean; now: number }
-  | { type: 'completed'; attemptId: string; epoch: number; operationId: string; variantId: string; hostMessageRef: number | null; hostVariantRef: number | null; cursorAfter: string; now: number; actorId?: string | null; observerRequired?: boolean }
-  | { type: 'observation_ready'; attemptId: string; variantId: string; observation: ObservationRecord }
-  | { type: 'observation_failed'; attemptId: string; variantId: string; error: string }
-  | { type: 'retry_observation'; attemptId: string; variantId: string }
-  | { type: 'commit_observation'; variantId: string; operationId: string; now: number }
-  | { type: 'accept'; attemptId: string; operationId: string; now: number }
-  | { type: 'reject'; attemptId: string }
+  | ({ type: 'regeneration_attempt'; attemptId: string; resolutionId: string | null; permitId?: string | null; cursorBefore: string; epoch: number; generationType: GenerationType; actorId: string | null; injectedText: string; unadjudicated: boolean; now: number } & FrozenTurn)
+  | { type: 'completed'; attemptId: string; epoch: number; operationId: string; variantId: string; hostMessageRef: number | null; hostVariantRef: number | null; cursorAfter: string; now: number; actorId?: string | null }
   | { type: 'cancel'; attemptId: string | null; epoch: number; reason: string }
   | { type: 'abort_epoch'; epoch: number; reason: string }
   | { type: 'select_variant'; variantId: string | null; cursorAfter: string; chain: string[] }
   | { type: 'head_changed'; cursor: string; chain: string[]; reason: 'edit' | 'delete' | 'load' | 'branch' | 'continue' | 'unknown' }
   | { type: 'reroll'; previousResolutionId: string; resolution: FrozenResolution; now: number }
   | { type: 'invalidate_prepared'; reason: string; onlyUnbound: boolean; profileRevision: string | null }
-  | { type: 'set_baseline'; cursor: string; state: CompactState; reason: string }
-  | { type: 'start_scene'; cursor: string; reason: string }
-  /** A user (or otherwise untracked) message extends the accepted prefix without changing tracked state. */
-  | { type: 'extend_checkpoint'; cursor: string; parentCursor: string }
   | { type: 'inspect'; entry: InspectorEntry };
 
 export interface ApplyResult {
@@ -157,646 +129,345 @@ export interface ApplyResult {
   changed: boolean;
 }
 
-function clone<T>(x: T): T {
-  return structuredClone(x);
-}
-
-function predecessorState(record: DirectorChatRecord, cursorBefore: string | null): { state: CompactState; known: boolean } {
-  if (cursorBefore) {
-    const cp = record.checkpoints[cursorBefore];
-    if (cp) return { state: clone(cp.stateAfter), known: true };
-    if (record.projection.cursor === cursorBefore && record.projection.status !== 'unknown') return { state: clone(record.projection.state), known: true };
-  }
-  return { state: clone(record.projection.state), known: false };
-}
-
-/** Applies registered effects; unknown ops are refused, never guessed. */
-export function applyEffects(state: CompactState, effects: RegisteredEffect[]): { state: CompactState; refused: string[] } {
-  const next = clone(state);
-  const refused: string[] = [];
-  for (const effect of effects) {
-    switch (effect.op) {
-      case 'set_enum':
-        next.variables[effect.variableId] = effect.value;
-        break;
-      case 'set_bounded_value':
-        if (Number.isFinite(effect.value)) next.variables[effect.variableId] = effect.value;
-        else refused.push(`set_bounded_value ${effect.variableId}: nonfinite`);
-        break;
-      case 'apply_named_delta':
-      case 'advance_time':
-      case 'set_known_location':
-        refused.push(`${effect.op}: not enabled before milestone 4`);
-        break;
-      default:
-        refused.push(`unknown effect ${(effect as { op: string }).op}`);
-    }
-  }
-  return { state: next, refused };
-}
-
-/** Applies already-validated observer operations. This is the only new-state writer in the live v2 flow. */
-export function applyObservationOperations(state: CompactState, operations: ObservationOperation[]): CompactState {
-  const next = clone(state);
-  for (const operation of operations) {
-    switch (operation.op) {
-      case 'advance_time':
-        next.elapsedSeconds += operation.seconds;
-        next.timeQuality = operation.quality;
-        break;
-      case 'set_known_location': {
-        const previous = next.positions[operation.actorId];
-        next.positions[operation.actorId] = {
-          status: operation.status,
-          placeId: operation.placeId,
-          lastKnownPlaceId: operation.status === 'known' ? operation.placeId : (previous?.placeId ?? previous?.lastKnownPlaceId ?? null),
-          offstage: previous?.offstage ?? false,
-        };
-        break;
-      }
-      case 'transfer_item':
-        next.itemOwners[operation.itemId] = operation.toActorId;
-        break;
-      case 'set_condition':
-        next.conditions[operation.actorId] = { ...(next.conditions[operation.actorId] ?? {}), [operation.conditionId]: operation.active };
-        break;
-      case 'mark_fact_known':
-        next.knownFacts[operation.actorId] = [...new Set([...(next.knownFacts[operation.actorId] ?? []), operation.factId])].sort();
-        break;
-      case 'mark_secret_revealed':
-        next.revealedSecrets[operation.secretId] = [...new Set([...(next.revealedSecrets[operation.secretId] ?? []), ...operation.actorIds])].sort();
-        break;
-    }
-  }
-  return next;
-}
+const clone = <T>(value: T): T => structuredClone(value);
+const frozenTurn = (event: FrozenTurn): FrozenTurn => ({
+  reaction: clone(event.reaction ?? null), frozenSpeaker: clone(event.frozenSpeaker ?? null),
+  frozenStateBlock: event.frozenStateBlock ?? '', frozenLorePlan: clone(event.frozenLorePlan ?? null), judgeErrors: [...(event.judgeErrors ?? [])],
+  loreCursor: event.loreCursor ?? null,
+  ...(event.judgeFailedStages === undefined ? {} : { judgeFailedStages: [...event.judgeFailedStages] }),
+  ...(event.stageRecords === undefined ? {} : { stageRecords: clone(event.stageRecords) }),
+  ...(event.turnKind === undefined ? {} : { turnKind: event.turnKind }),
+  ...(event.inputText === undefined ? {} : { inputText: event.inputText }),
+  ...(event.storyBefore === undefined ? {} : { storyBefore: clone(event.storyBefore) }),
+  ...(event.storyAfter === undefined ? {} : { storyAfter: clone(event.storyAfter) }),
+});
 
 export function applyEvent(input: DirectorChatRecord, event: DirectorEvent): ApplyResult {
   const record = clone(input);
   const notices: string[] = [];
-  const done = (changed = true): ApplyResult => ({ record, notices, changed });
-  const ignore = (why: string): ApplyResult => { notices.push(why); return { record: input, notices, changed: false }; };
-
+  const done = (): ApplyResult => ({ record, notices, changed: true });
+  const ignore = (why: string): ApplyResult => ({ record: input, notices: [why], changed: false });
   switch (event.type) {
-    case 'bind_actor': {
-      record.actors[event.binding.actorId] = { ...event.binding };
+    case 'bind_actor':
+      record.actors[event.binding.actorId] = clone(event.binding);
       return done();
-    }
-
     case 'prepare': {
+      if (record.attempts[event.attemptId]) return ignore('attempt already exists');
       if (record.pending) {
-        const prev = record.attempts[record.pending.attemptId];
-        if (prev && (prev.status === 'prepared' || prev.status === 'writing')) prev.status = 'cancelled';
-        notices.push(`replaced pending preparation ${record.pending.attemptId}`);
+        const previous = record.attempts[record.pending.attemptId];
+        if (previous?.status === 'prepared') previous.status = 'cancelled';
       }
       if (event.action) record.actions[event.action.actionId] = clone(event.action);
       if (event.resolution) record.resolutions[event.resolution.resolutionId] = clone(event.resolution);
-      const attempt: GenerationAttempt = {
-        attemptId: event.attemptId,
-        resolutionId: event.resolution?.resolutionId ?? null,
-        permitId: null,
-        reaction: event.reaction ? clone(event.reaction) : null,
-        actorId: event.actorId,
-        cursorBefore: null,
-        status: 'prepared',
-        generationType: 'normal',
-        hostMessageRef: null,
-        hostVariantRef: null,
-        variantId: null,
-        injectedText: '',
-        epoch: event.epoch,
-        unadjudicated: false,
-        toolStatus: 'not_offered',
-        toolError: null,
-        createdAt: event.now,
+      record.attempts[event.attemptId] = {
+        attemptId: event.attemptId, resolutionId: event.resolution?.resolutionId ?? null,
+        permitId: null, ...frozenTurn(event), actorId: event.actorId, cursorBefore: null,
+        status: 'prepared', generationType: 'normal', hostMessageRef: null, hostVariantRef: null,
+        variantId: null, injectedText: '', epoch: event.epoch, unadjudicated: false,
+        toolStatus: 'not_offered', toolError: null, createdAt: event.now,
       };
-      record.attempts[attempt.attemptId] = attempt;
-      record.pending = { attemptId: attempt.attemptId, resolutionId: attempt.resolutionId, actorId: event.actorId, epoch: event.epoch, composerText: event.composerText, createdAt: event.now };
+      record.pending = {
+        attemptId: event.attemptId, resolutionId: event.resolution?.resolutionId ?? null,
+        actorId: event.actorId, epoch: event.epoch, composerText: event.composerText, createdAt: event.now,
+      };
       return done();
     }
-
     case 'bind': {
       const pending = record.pending;
-      if (!pending || pending.attemptId !== event.attemptId) return ignore(`bind ignored: no pending attempt ${event.attemptId}`);
-      if (pending.epoch !== event.epoch) return ignore(`bind ignored: epoch ${event.epoch} does not match pending epoch ${pending.epoch}`);
       const attempt = record.attempts[event.attemptId];
-      if (!attempt) return ignore('bind ignored: attempt record missing');
+      if (!pending || pending.attemptId !== event.attemptId || pending.epoch !== event.epoch || !attempt) return ignore('bind does not match pending attempt');
       attempt.cursorBefore = event.cursorBefore;
       attempt.status = 'writing';
       attempt.injectedText = event.injectedText;
       attempt.toolStatus = event.toolOffered ? 'offered' : 'not_offered';
-      if (attempt.resolutionId) {
-        const res = record.resolutions[attempt.resolutionId];
-        if (res) {
-          if (res.cursorBefore === null) res.cursorBefore = event.cursorBefore;
-          else if (res.cursorBefore !== event.cursorBefore) {
-            res.status = 'invalidated';
-            attempt.resolutionId = null;
-            attempt.unadjudicated = true;
-            notices.push(`resolution ${res.resolutionId} was frozen for a different prefix and is invalidated`);
-          }
+      const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
+      if (resolution) {
+        if (resolution.cursorBefore === null) resolution.cursorBefore = event.cursorBefore;
+        else if (resolution.cursorBefore !== event.cursorBefore) {
+          attempt.resolutionId = null;
+          attempt.unadjudicated = true;
+          attempt.injectedText = '';
+          notices.push('stored ruling did not match this message; proceeding unruled');
         }
       }
       record.pending = null;
       return done();
     }
-
-    case 'store_permit': {
+    case 'store_permit':
       record.permits[event.permit.permitId] = clone(event.permit);
       return done();
-    }
-
-    case 'store_resolution': {
+    case 'store_resolution':
       record.actions[event.resolution.actionId] = clone(event.resolution.action);
       record.resolutions[event.resolution.resolutionId] = clone(event.resolution);
       return done();
-    }
-
     case 'tool_result': {
       const attempt = record.attempts[event.attemptId];
-      if (!attempt || attempt.status !== 'writing') return ignore(`tool result for inactive attempt ${event.attemptId} ignored`);
+      if (!attempt || attempt.status !== 'writing') return ignore('tool result is not for the active attempt');
+      if (event.permit && (event.permit.attemptId !== attempt.attemptId || event.permit.baseCursor !== attempt.cursorBefore)) return ignore('tool result identity does not match');
       attempt.toolStatus = event.status;
       attempt.toolError = event.error;
       if (event.permit) {
-        if (event.permit.attemptId !== attempt.attemptId || event.permit.baseCursor !== attempt.cursorBefore) return ignore('tool permit identity did not match the active attempt');
         record.permits[event.permit.permitId] = clone(event.permit);
         attempt.permitId = event.permit.permitId;
         attempt.reaction = null;
       }
       return done();
     }
-
-    case 'regeneration_attempt': {
-      if (record.attempts[event.attemptId]) return ignore(`attempt ${event.attemptId} already exists`);
+    case 'regeneration_attempt':
+      if (record.attempts[event.attemptId]) return ignore('attempt already exists');
       record.attempts[event.attemptId] = {
-        attemptId: event.attemptId,
-        resolutionId: event.resolutionId,
-        permitId: event.permitId ?? null,
-        reaction: event.reaction ? clone(event.reaction) : null,
-        actorId: event.actorId,
-        cursorBefore: event.cursorBefore,
-        status: 'writing',
-        generationType: event.generationType,
-        hostMessageRef: null,
-        hostVariantRef: null,
-        variantId: null,
-        injectedText: event.injectedText,
-        epoch: event.epoch,
-        unadjudicated: event.unadjudicated,
-        toolStatus: event.permitId ? 'reused' : 'not_offered',
-        toolError: null,
-        createdAt: event.now,
+        attemptId: event.attemptId, resolutionId: event.resolutionId, permitId: event.permitId ?? null,
+        ...frozenTurn(event), actorId: event.actorId, cursorBefore: event.cursorBefore, status: 'writing',
+        generationType: event.generationType, hostMessageRef: null, hostVariantRef: null, variantId: null,
+        injectedText: event.injectedText, epoch: event.epoch, unadjudicated: event.unadjudicated,
+        toolStatus: event.permitId ? 'reused' : 'not_offered', toolError: null, createdAt: event.now,
       };
       return done();
-    }
-
     case 'completed': {
-      if (record.appliedOperationIds.includes(event.operationId)) return ignore(`duplicate completion ${event.operationId} ignored`);
+      if (record.appliedOperationIds.includes(event.operationId)) return ignore('duplicate completion');
       const attempt = record.attempts[event.attemptId];
-      if (!attempt) return ignore(`completion for unknown attempt ${event.attemptId} ignored`);
-      if (attempt.epoch !== event.epoch) return ignore(`stale completion for attempt ${event.attemptId} from epoch ${attempt.epoch} rejected`);
-      if (attempt.status !== 'writing') return ignore(`completion for attempt ${event.attemptId} in status ${attempt.status} ignored`);
+      if (!attempt || attempt.epoch !== event.epoch || attempt.status !== 'writing') return ignore('completion does not match an active attempt');
       record.appliedOperationIds.push(event.operationId);
       attempt.hostMessageRef = event.hostMessageRef;
       attempt.hostVariantRef = event.hostVariantRef;
       attempt.variantId = event.variantId;
       if (attempt.actorId === null && event.actorId) attempt.actorId = event.actorId;
-      const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] ?? null : null;
-      const needsAcceptance = Boolean(resolution);
-      const variant: VariantRecord = {
-        variantId: event.variantId,
-        attemptId: attempt.attemptId,
-        resolutionId: resolution?.resolutionId ?? null,
-        permitId: attempt.permitId ?? null,
-        actorId: attempt.actorId,
-        cursorBefore: attempt.cursorBefore,
+      attempt.status = 'accepted';
+      const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
+      if (resolution?.status === 'prepared') resolution.status = 'accepted';
+      record.variants[event.variantId] = {
+        variantId: event.variantId, attemptId: attempt.attemptId, resolutionId: attempt.resolutionId,
+        permitId: attempt.permitId ?? null, actorId: attempt.actorId, cursorBefore: attempt.cursorBefore,
         cursorAfter: event.cursorAfter,
-        acceptance: (needsAcceptance || event.observerRequired) ? 'pending' : 'auto',
-        observerStatus: event.observerRequired ? 'pending' : 'not_required',
-        observation: null,
-        observerError: null,
       };
-      record.variants[variant.variantId] = variant;
-      if (event.observerRequired) {
-        attempt.status = 'observing';
-        const pred = predecessorState(record, attempt.cursorBefore);
-        record.projection = { cursor: event.cursorAfter, state: pred.state, status: 'provisional', reason: `observing ${attempt.attemptId}` };
-        return done();
-      }
-      if (needsAcceptance) {
-        attempt.status = 'provisional';
-        const pred = predecessorState(record, attempt.cursorBefore);
-        record.projection = { cursor: event.cursorAfter, state: pred.state, status: 'provisional', reason: `awaiting acceptance of ${attempt.attemptId}` };
-        return done();
-      }
-      attempt.status = 'accepted';
-      const pred = predecessorState(record, attempt.cursorBefore);
-      const state = pred.state;
-      state.sceneReplyCount += 1;
-      state.revision += 1;
-      record.checkpoints[event.cursorAfter] = {
-        cursor: event.cursorAfter,
-        parentCursor: attempt.cursorBefore,
-        stateAfter: clone(state),
-        variantId: variant.variantId,
-        acceptedResolutionId: null,
-        observationOperationIds: [],
-      };
-      record.projection = { cursor: event.cursorAfter, state, status: pred.known ? 'current' : 'stale', reason: pred.known ? null : 'predecessor state was not known; set a baseline to continue tracking' };
-      if (attempt.unadjudicated) notices.push(`attempt ${attempt.attemptId} was generated without the Director pipeline (unadjudicated)`);
       return done();
     }
-
-    case 'observation_ready': {
-      const attempt = record.attempts[event.attemptId];
-      const variant = record.variants[event.variantId];
-      if (!attempt || !variant || attempt.variantId !== event.variantId) return ignore('observation does not match the active attempt variant');
-      if (attempt.status !== 'observing') return ignore(`observation for attempt ${event.attemptId} in status ${attempt.status} ignored`);
-      if (event.observation.attemptId !== attempt.attemptId || event.observation.variantId !== variant.variantId || event.observation.baseCursor !== attempt.cursorBefore || event.observation.cursorAfter !== variant.cursorAfter) return ignore('observation identity mismatch');
-      const pred = predecessorState(record, attempt.cursorBefore);
-      if (event.observation.stateRevision !== pred.state.revision) return ignore('observation state revision is stale');
-      variant.observation = clone(event.observation);
-      variant.observerStatus = 'ready';
-      variant.observerError = null;
-      attempt.status = 'provisional';
-      record.projection = { cursor: variant.cursorAfter, state: pred.state, status: 'provisional', reason: `variant ${variant.variantId} is observed and awaits implicit acceptance` };
-      return done();
-    }
-
-    case 'observation_failed': {
-      const attempt = record.attempts[event.attemptId];
-      const variant = record.variants[event.variantId];
-      if (!attempt || !variant || attempt.variantId !== event.variantId) return ignore('observation failure does not match the active attempt variant');
-      if (attempt.status !== 'observing' && attempt.status !== 'provisional') return ignore(`observation failure for attempt ${event.attemptId} in status ${attempt.status} ignored`);
-      attempt.status = 'stale';
-      variant.observerStatus = 'failed';
-      variant.observerError = event.error;
-      const pred = predecessorState(record, attempt.cursorBefore);
-      record.projection = { cursor: variant.cursorAfter, state: pred.state, status: 'stale', reason: `observer failed: ${event.error}` };
-      return done();
-    }
-
-    case 'retry_observation': {
-      const attempt = record.attempts[event.attemptId];
-      const variant = record.variants[event.variantId];
-      if (!attempt || !variant || attempt.variantId !== variant.variantId || variant.observerStatus !== 'failed') return ignore('no failed observation matches the retry request');
-      attempt.status = 'observing';
-      variant.acceptance = 'pending';
-      variant.observerStatus = 'pending';
-      variant.observerError = null;
-      variant.observation = null;
-      const pred = predecessorState(record, attempt.cursorBefore);
-      record.projection = { cursor: variant.cursorAfter, state: pred.state, status: 'provisional', reason: `retrying observer for ${variant.variantId}` };
-      return done();
-    }
-
-    case 'commit_observation': {
-      if (record.appliedOperationIds.includes(event.operationId)) return ignore(`duplicate observation commit ${event.operationId} ignored`);
-      const variant = record.variants[event.variantId];
-      if (!variant || variant.acceptance !== 'pending' || variant.observerStatus !== 'ready' || !variant.observation || !variant.cursorAfter) return ignore(`variant ${event.variantId} has no ready observation to commit`);
-      const attempt = record.attempts[variant.attemptId];
-      if (!attempt || attempt.status !== 'provisional') return ignore(`attempt ${variant.attemptId} is not provisional`);
-      const pred = predecessorState(record, variant.cursorBefore);
-      if (!pred.known || pred.state.revision !== variant.observation.stateRevision) return ignore('observation commit predecessor is unknown or changed');
-      record.appliedOperationIds.push(event.operationId);
-      for (const operation of variant.observation.operations) {
-        if (!record.appliedOperationIds.includes(operation.operationId)) record.appliedOperationIds.push(operation.operationId);
-      }
-      let state = applyObservationOperations(pred.state, variant.observation.operations);
-      const realized = new Set(variant.observation.realizedResolutionIds);
-      const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
-      if (resolution && realized.has(resolution.resolutionId)) {
-        if (resolution.status === 'prepared') resolution.status = 'accepted';
-        const applied = applyEffects(state, effectsFor(resolution));
-        state = applied.state;
-        for (const refused of applied.refused) notices.push(`effect refused: ${refused}`);
-        if (!state.acceptedResolutionIds.includes(resolution.resolutionId)) state.acceptedResolutionIds.push(resolution.resolutionId);
-        const legacyTier = tierForResolution(resolution);
-        const legacyFinal = resolution.outcomeFinal === undefined && resolution.outcomeInstruction === undefined && legacyTier === 'achieved';
-        if (resolution.outcomeFinal === true || legacyFinal) {
-          const scope = resolution.action.identityVersion === 2 ? (resolution.action.resolutionScope ?? 'attempt') : 'persistent';
-          const def = defOfResolution(resolution) ?? (legacyFinal ? { name: resolution.outcome, instruction: instructionForResolution(resolution), records: 'achieved', final: true } : null);
-          if (scope !== 'attempt' && def) {
-            const variableId = gainVariableId(resolution.action);
-            state.settledGains[variableId] = { variableId, resolutionId: resolution.resolutionId, outcome: def, scope, sceneId: scope === 'scene' ? (resolution.action.sceneId ?? state.sceneId) : null };
-          }
-        }
-      }
-      const permit = attempt.permitId ? record.permits[attempt.permitId] : null;
-      if (permit) {
-        const permitRealized = permit.actions.some(action => realized.has(action.resolutionId));
-        if (permitRealized && !state.acceptedPermitIds.includes(permit.permitId)) state.acceptedPermitIds.push(permit.permitId);
-        for (const action of permit.actions) {
-          if (!realized.has(action.resolutionId)) continue;
-          if (!state.acceptedResolutionIds.includes(action.resolutionId)) state.acceptedResolutionIds.push(action.resolutionId);
-          if (action.recordedValue) state.variables[`permit:${action.resolutionId}`] = action.recordedValue;
-        }
-      }
-      attempt.status = 'accepted';
-      variant.acceptance = 'accepted';
-      state.sceneReplyCount += 1;
-      state.revision += 1;
-      state.lastObservedCursor = variant.cursorAfter;
-      state.trackingStatus = 'current';
-      record.checkpoints[variant.cursorAfter] = {
-        cursor: variant.cursorAfter,
-        parentCursor: attempt.cursorBefore,
-        stateAfter: clone(state),
-        variantId: variant.variantId,
-        acceptedResolutionId: resolution && realized.has(resolution.resolutionId) ? resolution.resolutionId : null,
-        observationOperationIds: variant.observation.operations.map(operation => operation.operationId),
-      };
-      record.projection = { cursor: variant.cursorAfter, state, status: 'current', reason: null };
-      return done();
-    }
-
-    case 'accept': {
-      if (record.appliedOperationIds.includes(event.operationId)) return ignore(`duplicate acceptance ${event.operationId} ignored`);
-      const attempt = record.attempts[event.attemptId];
-      if (!attempt) return ignore(`acceptance for unknown attempt ${event.attemptId} ignored`);
-      if (attempt.status !== 'provisional') return ignore(`acceptance for attempt ${event.attemptId} in status ${attempt.status} ignored`);
-      const variant = attempt.variantId ? record.variants[attempt.variantId] : null;
-      if (!variant || !variant.cursorAfter) return ignore(`acceptance for attempt ${event.attemptId} has no variant`);
-      const resolution = attempt.resolutionId ? record.resolutions[attempt.resolutionId] : null;
-      record.appliedOperationIds.push(event.operationId);
-      attempt.status = 'accepted';
-      variant.acceptance = 'accepted';
-      const pred = predecessorState(record, attempt.cursorBefore);
-      let state = pred.state;
-      if (resolution) {
-        if (resolution.status === 'prepared') resolution.status = 'accepted';
-        const applied = applyEffects(state, effectsFor(resolution));
-        state = applied.state;
-        for (const r of applied.refused) notices.push(`effect refused: ${r}`);
-        if (!state.acceptedResolutionIds.includes(resolution.resolutionId)) state.acceptedResolutionIds.push(resolution.resolutionId);
-        const legacyTier = tierForResolution(resolution);
-        const legacyFinal = resolution.outcomeFinal === undefined && resolution.outcomeInstruction === undefined && legacyTier === 'achieved';
-        if (resolution.outcomeFinal === true || legacyFinal) {
-          const scope = resolution.action.identityVersion === 2 ? (resolution.action.resolutionScope ?? 'attempt') : 'persistent';
-          const def = defOfResolution(resolution) ?? (legacyFinal
-            ? { name: resolution.outcome, instruction: instructionForResolution(resolution), records: 'achieved', final: true }
-            : null);
-          if (scope !== 'attempt' && def) {
-            const variableId = gainVariableId(resolution.action);
-            state.settledGains[variableId] = {
-              variableId,
-              resolutionId: resolution.resolutionId,
-              outcome: def,
-              scope,
-              sceneId: scope === 'scene' ? (resolution.action.sceneId ?? state.sceneId) : null,
-            };
-          }
-        }
-      }
-      state.sceneReplyCount += 1;
-      state.revision += 1;
-      record.checkpoints[variant.cursorAfter] = {
-        cursor: variant.cursorAfter,
-        parentCursor: attempt.cursorBefore,
-        stateAfter: clone(state),
-        variantId: variant.variantId,
-        acceptedResolutionId: resolution?.resolutionId ?? null,
-        observationOperationIds: [],
-      };
-      record.projection = { cursor: variant.cursorAfter, state, status: pred.known ? 'current' : 'stale', reason: pred.known ? null : 'predecessor state was not known; set a baseline to continue tracking' };
-      return done();
-    }
-
-    case 'reject': {
-      const attempt = record.attempts[event.attemptId];
-      if (!attempt) return ignore(`rejection for unknown attempt ${event.attemptId} ignored`);
-      if (attempt.status !== 'provisional' && attempt.status !== 'observing') return ignore(`rejection for attempt ${event.attemptId} in status ${attempt.status} ignored`);
-      attempt.status = 'rejected';
-      const variant = attempt.variantId ? record.variants[attempt.variantId] : null;
-      if (variant) variant.acceptance = 'rejected';
-      if (record.projection.status === 'provisional') {
-        const pred = predecessorState(record, attempt.cursorBefore);
-        record.projection = { cursor: attempt.cursorBefore, state: pred.state, status: pred.known ? 'current' : 'unknown', reason: pred.known ? null : 'predecessor unknown' };
-      }
-      return done();
-    }
-
-    case 'cancel': {
+    case 'cancel':
+    case 'abort_epoch': {
       let changed = false;
-      const ids = event.attemptId ? [event.attemptId] : Object.keys(record.attempts);
-      for (const id of ids) {
-        const attempt = record.attempts[id];
-        if (!attempt) continue;
-        if (attempt.epoch !== event.epoch && event.attemptId === null) continue;
-        if (attempt.status === 'prepared' || attempt.status === 'writing' || attempt.status === 'observing') {
+      const attemptId = event.type === 'cancel' ? event.attemptId : null;
+      for (const attempt of Object.values(record.attempts)) {
+        if (attemptId !== null ? attempt.attemptId !== attemptId : attempt.epoch !== event.epoch) continue;
+        if (attempt.status === 'prepared' || attempt.status === 'writing') {
           attempt.status = 'cancelled';
           changed = true;
         }
       }
-      if (record.pending && (event.attemptId === null || record.pending.attemptId === event.attemptId)) {
+      if (record.pending && record.pending.epoch === event.epoch && (attemptId === null || record.pending.attemptId === attemptId)) {
         record.pending = null;
         changed = true;
       }
-      if (record.projection.status === 'provisional' && event.attemptId) {
-        // no change: cancellation of a different attempt does not touch a provisional head
-      }
-      if (!changed) return ignore(`cancel (${event.reason}): nothing to cancel`);
-      notices.push(`cancelled: ${event.reason}`);
-      return done();
+      return changed ? done() : ignore('nothing in flight');
     }
-
-    case 'abort_epoch': {
-      let changed = false;
-      for (const attempt of Object.values(record.attempts)) {
-        if (attempt.epoch === event.epoch && (attempt.status === 'prepared' || attempt.status === 'writing' || attempt.status === 'observing')) {
-          attempt.status = 'cancelled';
-          changed = true;
-        }
-      }
-      if (record.pending) { record.pending = null; changed = true; }
-      if (!changed) return ignore(`abort (${event.reason}): nothing in flight`);
-      notices.push(`aborted in-flight work: ${event.reason}`);
-      return done();
-    }
-
-    case 'select_variant': {
-      let variant = event.variantId ? record.variants[event.variantId] ?? null : null;
-      if (variant && variant.cursorAfter && variant.cursorAfter !== event.cursorAfter) {
-        // The host copies `extra` into a new swipe slot; a marker whose text no longer matches is not this variant.
-        notices.push(`variant ${variant.variantId} marker does not match the message text; treated as unknown`);
-        variant = null;
-      }
-      const cursor = variant?.cursorAfter ?? event.cursorAfter;
-      const cp = record.checkpoints[cursor];
-      if (cp) {
-        record.projection = { cursor, state: clone(cp.stateAfter), status: 'current', reason: null };
-        return done();
-      }
-      if (variant && variant.acceptance === 'pending') {
-        const pred = predecessorState(record, variant.cursorBefore);
-        if (variant.observerStatus === 'failed') {
-          record.projection = { cursor, state: pred.state, status: 'stale', reason: variant.observerError ?? `observer failed for ${variant.variantId}` };
-          return done();
-        }
-        record.projection = { cursor, state: pred.state, status: 'provisional', reason: `variant ${variant.variantId} awaits acceptance` };
-        return done();
-      }
-      if (variant && variant.acceptance === 'rejected') {
-        const pred = predecessorState(record, variant.cursorBefore);
-        if (variant.observerStatus === 'ready' && variant.observation) {
-          variant.acceptance = 'pending';
-          const attempt = record.attempts[variant.attemptId];
-          if (attempt) attempt.status = 'provisional';
-          record.projection = { cursor, state: pred.state, status: 'provisional', reason: `restored observed variant ${variant.variantId}; awaits implicit acceptance` };
-          return done();
-        }
-        record.projection = { cursor, state: pred.state, status: 'stale', reason: `variant ${variant.variantId} was rejected; regenerate wording, reroll, or accept it` };
-        return done();
-      }
-      record.projection = { cursor, state: record.projection.state, status: 'unknown', reason: 'no checkpoint for this variant' };
-      return done();
-    }
-
-    case 'head_changed': {
-      const chainSet = new Set(event.chain);
-      // Prepared, unaccepted decisions bound to a prefix that no longer exists are invalidated (M1-05).
-      for (const res of Object.values(record.resolutions)) {
-        if (res.status === 'prepared' && res.cursorBefore && !chainSet.has(res.cursorBefore)) {
-          res.status = 'invalidated';
-          notices.push(`prepared resolution ${res.resolutionId} no longer matches the transcript and was invalidated`);
-        }
-      }
-      for (const attempt of Object.values(record.attempts)) {
-        if ((attempt.status === 'provisional' || attempt.status === 'observing') && attempt.cursorBefore && !chainSet.has(attempt.cursorBefore)) {
-          attempt.status = 'stale';
-          notices.push(`provisional attempt ${attempt.attemptId} no longer matches the transcript`);
-        }
-      }
-      const cp = record.checkpoints[event.cursor];
-      if (cp) {
-        record.projection = { cursor: event.cursor, state: clone(cp.stateAfter), status: 'current', reason: null };
-        return done();
-      }
-      const provisional = Object.values(record.variants).find(v => v.cursorAfter === event.cursor && v.acceptance === 'pending');
-      if (provisional) {
-        const pred = predecessorState(record, provisional.cursorBefore);
-        if (provisional.observerStatus === 'failed') {
-          record.projection = { cursor: event.cursor, state: pred.state, status: 'stale', reason: provisional.observerError ?? `observer failed for ${provisional.variantId}` };
-          return done();
-        }
-        record.projection = { cursor: event.cursor, state: pred.state, status: 'provisional', reason: `variant ${provisional.variantId} awaits acceptance` };
-        return done();
-      }
-      if (event.reason === 'edit') {
-        record.projection = { cursor: event.cursor, state: record.projection.state, status: 'stale', reason: 'an earlier message was edited; rebuild from a checkpoint or set a baseline' };
-        return done();
-      }
-      record.projection = { cursor: event.cursor, state: record.projection.state, status: 'unknown', reason: `no checkpoint matches the current transcript (${event.reason})` };
-      return done();
-    }
-
+    case 'select_variant':
+    case 'head_changed':
+      // Story snapshots select themselves by transcript cursor. Frozen history
+      // remains intact so returning to an earlier swipe restores its decision.
+      return ignore('transcript selection does not change frozen history');
     case 'reroll': {
       const previous = record.resolutions[event.previousResolutionId];
-      if (!previous) return ignore(`reroll of unknown resolution ${event.previousResolutionId} ignored`);
-      if (previous.status === 'prepared') previous.status = 'superseded';
+      if (!previous) return ignore('unknown prior ruling');
       const next = clone(event.resolution);
       next.previousResolutionId = previous.resolutionId;
       next.cursorBefore = previous.cursorBefore;
       next.generation = previous.generation + 1;
       next.status = 'prepared';
+      if (previous.status === 'prepared') previous.status = 'superseded';
       record.resolutions[next.resolutionId] = next;
       return done();
     }
-
     case 'invalidate_prepared': {
       let changed = false;
-      for (const res of Object.values(record.resolutions)) {
-        if (res.status !== 'prepared') continue;
-        if (event.onlyUnbound && res.cursorBefore !== null) continue;
-        if (event.profileRevision && res.policyRevision === event.profileRevision) continue;
-        res.status = 'invalidated';
+      for (const resolution of Object.values(record.resolutions)) {
+        // A settings edit must never reinterpret an already bound turn.
+        if (resolution.status !== 'prepared' || resolution.cursorBefore !== null) continue;
+        if (event.profileRevision && resolution.policyRevision === event.profileRevision) continue;
+        resolution.status = 'invalidated';
         changed = true;
       }
       if (record.pending) {
         const attempt = record.attempts[record.pending.attemptId];
-        if (attempt && attempt.status === 'prepared') attempt.status = 'cancelled';
+        if (attempt?.status === 'prepared') attempt.status = 'cancelled';
         record.pending = null;
         changed = true;
       }
-      if (event.profileRevision) record.profileRevision = event.profileRevision;
-      if (!changed) return ignore(`nothing to invalidate (${event.reason})`);
-      notices.push(`invalidated unused preparation: ${event.reason}`);
-      return done();
-    }
-
-    case 'set_baseline': {
-      const state = clone(event.state);
-      record.checkpoints[event.cursor] = { cursor: event.cursor, parentCursor: null, stateAfter: clone(state), variantId: null, acceptedResolutionId: null, observationOperationIds: [] };
-      record.projection = { cursor: event.cursor, state, status: 'current', reason: null };
-      notices.push(`baseline set (${event.reason}); earlier state was not reconstructed`);
-      return done();
-    }
-
-    case 'start_scene': {
-      if (record.projection.status !== 'current') return ignore(`cannot start scene while projection is ${record.projection.status}`);
-      const state = clone(record.projection.state);
-      state.sceneId += 1;
-      state.sceneReplyCount = 0;
-      state.revision += 1;
-      record.checkpoints[event.cursor] = {
-        cursor: event.cursor,
-        parentCursor: record.checkpoints[event.cursor]?.parentCursor ?? null,
-        stateAfter: clone(state),
-        variantId: record.checkpoints[event.cursor]?.variantId ?? null,
-        acceptedResolutionId: record.checkpoints[event.cursor]?.acceptedResolutionId ?? null,
-        observationOperationIds: [...(record.checkpoints[event.cursor]?.observationOperationIds ?? [])],
-      };
-      record.projection = { cursor: event.cursor, state, status: 'current', reason: null };
-      notices.push(`scene advanced to ${state.sceneId} (${event.reason})`);
-      return done();
-    }
-
-    case 'extend_checkpoint': {
-      if (record.checkpoints[event.cursor]) return ignore('checkpoint already exists');
-      const parent = record.checkpoints[event.parentCursor];
-      if (!parent) return ignore(`cannot extend: no checkpoint at ${event.parentCursor}`);
-      record.checkpoints[event.cursor] = { cursor: event.cursor, parentCursor: event.parentCursor, stateAfter: clone(parent.stateAfter), variantId: null, acceptedResolutionId: null, observationOperationIds: [] };
-      if (record.projection.cursor === event.parentCursor || record.projection.status === 'unknown') {
-        record.projection = { cursor: event.cursor, state: clone(parent.stateAfter), status: 'current', reason: null };
+      if (event.profileRevision && record.profileRevision !== event.profileRevision) {
+        record.profileRevision = event.profileRevision;
+        changed = true;
       }
-      return done();
+      return changed ? done() : ignore('no unused preparation');
     }
-
-    case 'inspect': {
+    case 'inspect':
       record.inspector.push(clone(event.entry));
-      if (record.inspector.length > INSPECTOR_LIMIT) record.inspector.splice(0, record.inspector.length - INSPECTOR_LIMIT);
+      record.inspector = trimInspector(record.inspector);
       return done();
-    }
-
     default:
       return ignore('unknown event');
   }
 }
 
-// ---------------------------------------------------------------------------
-// Selectors
-// ---------------------------------------------------------------------------
-
-/** The resolution that constrains new generations at a prefix: highest generation among prepared/accepted. */
+/** New explicit draws take priority; saved variants keep their original links. */
 export function activeResolutionForCursor(record: DirectorChatRecord, cursor: string): FrozenResolution | null {
   let best: FrozenResolution | null = null;
-  for (const res of Object.values(record.resolutions)) {
-    if (res.cursorBefore !== cursor) continue;
-    if (res.status !== 'prepared' && res.status !== 'accepted') continue;
-    if (!best || res.generation > best.generation || (res.generation === best.generation && res.createdAt > best.createdAt)) best = res;
+  for (const resolution of Object.values(record.resolutions)) {
+    if (resolution.cursorBefore !== cursor || (resolution.status !== 'prepared' && resolution.status !== 'accepted')) continue;
+    if (!best || resolution.generation > best.generation || (resolution.generation === best.generation && resolution.createdAt > best.createdAt)) best = resolution;
   }
   return best;
 }
 
-export function provisionalAttempts(record: DirectorChatRecord): GenerationAttempt[] {
-  return Object.values(record.attempts).filter(a => a.status === 'provisional' || a.status === 'observing');
-}
-
 export function attemptForVariant(record: DirectorChatRecord, variantId: string): GenerationAttempt | null {
-  const v = record.variants[variantId];
-  return v ? record.attempts[v.attemptId] ?? null : null;
+  const variant = record.variants[variantId];
+  return variant ? record.attempts[variant.attemptId] ?? null : null;
 }
 
 export function resolutionsForAction(record: DirectorChatRecord, actionId: string): FrozenResolution[] {
   return Object.values(record.resolutions).filter(r => r.actionId === actionId).sort((a, b) => a.generation - b.generation);
+}
+
+export interface LiveRecordReferences {
+  /** Every cursor on the currently selected transcript chain, including its root. */
+  liveCursors: readonly string[];
+  /** Markers on every surviving message and swipe, including unselected swipes. */
+  liveVariantIds: readonly string[];
+  activeAttemptIds?: readonly (string | null | undefined)[];
+  activeResolutionIds?: readonly (string | null | undefined)[];
+  activePermitIds?: readonly (string | null | undefined)[];
+}
+
+/**
+ * Drop unreachable frozen payloads, retaining every live swipe and the newest
+ * attempt for each live input cursor. The latter is essential: deleting a reply
+ * to regenerate it, or a failed writer with no reply marker, must not buy a new
+ * ruling. Activity supplies the bounded historical summary after payload removal.
+ */
+export function compactRecord(input: DirectorChatRecord, live: LiveRecordReferences): DirectorChatRecord {
+  const record = clone(input);
+  const cursors = new Set(live.liveCursors);
+  const attemptIds = new Set(live.activeAttemptIds?.filter((id): id is string => typeof id === 'string'));
+  const resolutionIds = new Set(live.activeResolutionIds?.filter((id): id is string => typeof id === 'string'));
+  const permitIds = new Set(live.activePermitIds?.filter((id): id is string => typeof id === 'string'));
+  const variantIds = new Set(live.liveVariantIds);
+  const newestByCursor = new Map<string, GenerationAttempt>();
+  const firstByCursor = new Map<string, GenerationAttempt>();
+  for (const attempt of Object.values(record.attempts)) {
+    if (!attempt.cursorBefore) continue;
+    const first = firstByCursor.get(attempt.cursorBefore);
+    if (!first || attempt.createdAt < first.createdAt) firstByCursor.set(attempt.cursorBefore, attempt);
+  }
+  // Wording swipes and explicit rerolls cannot make an old user turn young.
+  // Next beats between user turns share that age window without consuming it.
+  const turns = [...firstByCursor.values()].sort((a, b) => b.createdAt - a.createdAt);
+  const userTurns = turns.filter(attempt => attempt.turnKind !== 'director_next');
+  const cutoff = (userTurns.length ? userTurns : turns)[REPLAY_TURN_LIMIT - 1]?.createdAt ?? -Infinity;
+  const recentCursors = new Set(turns.filter(attempt => attempt.createdAt >= cutoff).map(attempt => attempt.cursorBefore!));
+  const replayResolutionIds = new Set(resolutionIds);
+  const replayPermitIds = new Set(permitIds);
+  for (const attempt of Object.values(record.attempts)) {
+    if (attempt.status === 'writing' || record.pending?.attemptId === attempt.attemptId) attemptIds.add(attempt.attemptId);
+    if (attempt.cursorBefore && recentCursors.has(attempt.cursorBefore)) {
+      if (attempt.resolutionId || attempt.permitId) attemptIds.add(attempt.attemptId);
+      if (attempt.resolutionId) replayResolutionIds.add(attempt.resolutionId);
+      if (attempt.permitId) replayPermitIds.add(attempt.permitId);
+    }
+    if (attemptIds.has(attempt.attemptId)) {
+      if (attempt.resolutionId) replayResolutionIds.add(attempt.resolutionId);
+      if (attempt.permitId) replayPermitIds.add(attempt.permitId);
+    }
+    if (!attempt.cursorBefore || !cursors.has(attempt.cursorBefore)) continue;
+    const prior = newestByCursor.get(attempt.cursorBefore);
+    if (!prior || attempt.createdAt >= prior.createdAt) newestByCursor.set(attempt.cursorBefore, attempt);
+  }
+  for (const attempt of newestByCursor.values()) attemptIds.add(attempt.attemptId);
+  for (const [id, variant] of Object.entries(record.variants)) {
+    if (!variantIds.has(id)) { delete record.variants[id]; continue; }
+    attemptIds.add(variant.attemptId);
+    if (variant.resolutionId) resolutionIds.add(variant.resolutionId);
+    if (variant.permitId) permitIds.add(variant.permitId);
+    if (variant.cursorBefore) cursors.add(variant.cursorBefore);
+    if (variant.cursorAfter) cursors.add(variant.cursorAfter);
+  }
+  for (const [id, attempt] of Object.entries(record.attempts)) {
+    if (!attemptIds.has(id)) { delete record.attempts[id]; continue; }
+    if (attempt.resolutionId) resolutionIds.add(attempt.resolutionId);
+    if (attempt.permitId) permitIds.add(attempt.permitId);
+    if (attempt.cursorBefore) cursors.add(attempt.cursorBefore);
+    if (attempt.loreCursor) cursors.add(attempt.loreCursor);
+    if (attempt.cursorBefore && !recentCursors.has(attempt.cursorBefore) && !live.activeAttemptIds?.includes(id)) {
+      attempt.replayTrimmed = true;
+      delete attempt.stageRecords;
+    }
+    if (!attempt.judgeFailedStages?.some(stage => ['move', 'route', 'ruling'].includes(stage))) delete attempt.stageRecords;
+    else if (attempt.stageRecords) {
+      // Retry compares the saved questions and answers, never the original
+      // request payload. Keep full ruling evidence in resolution.snapshot only.
+      attempt.stageRecords = attempt.stageRecords.map(stage => ({ ...stage, state: null }));
+    }
+    // A removed reply's attempt remains the reusable turn, not a phantom swipe.
+    if (attempt.variantId && !record.variants[attempt.variantId]) {
+      attempt.variantId = null;
+      attempt.hostMessageRef = null;
+      attempt.hostVariantRef = null;
+    }
+  }
+  const actionIds = new Set<string>();
+  for (const [id, resolution] of Object.entries(record.resolutions)) {
+    if (!resolutionIds.has(id)) { delete record.resolutions[id]; continue; }
+    if (!replayResolutionIds.has(id)) {
+      resolution.snapshot.state = null;
+      resolution.replayTrimmed = true;
+    }
+    actionIds.add(resolution.actionId);
+  }
+  for (const [id, permit] of Object.entries(record.permits)) {
+    if (!permitIds.has(id)) { delete record.permits[id]; continue; }
+    if (!replayPermitIds.has(id)) {
+      delete permit.proposal;
+      delete permit.snapshot;
+      delete permit.profile;
+      delete permit.reviewHistory;
+      permit.replayTrimmed = true;
+    }
+    // Review history can contain full repeated question/evidence payloads. Its
+    // latest eight choices are sufficient audit detail; the kept permit is full.
+    if (permit.reviewHistory) permit.reviewHistory = permit.reviewHistory.slice(-INSPECTOR_DETAIL_LIMIT);
+  }
+  for (const id of Object.keys(record.actions)) if (!actionIds.has(id)) delete record.actions[id];
+  record.inspector = trimInspector(record.inspector);
+  // Completed attempts cannot complete again, even after their operation ID is
+  // evicted, because completion accepts only the writing status.
+  record.appliedOperationIds = record.appliedOperationIds.slice(-INSPECTOR_LIMIT);
+  // Retain the allowance for every reachable turn (including old selected
+  // history) and the same recent off-chain window as frozen rulings.
+  record.replyCheckRerolls = record.replyCheckRerolls?.filter(cursor => cursors.has(cursor) || recentCursors.has(cursor));
+
+  const aliases: Record<string, string> = {};
+  const historyKeys = new Set(cursors);
+  for (const [cursor, target] of Object.entries(record.story.historyAliases ?? {})) {
+    if (!cursors.has(cursor) || !record.story.history[target]) continue;
+    aliases[cursor] = target;
+    historyKeys.add(target);
+  }
+  for (const cursor of Object.keys(record.story.history)) if (!historyKeys.has(cursor)) delete record.story.history[cursor];
+  // Older builds stored a complete snapshot for every wording. Compact those
+  // existing duplicates too, without losing the cursors that name them.
+  const byValue = new Map<string, string>();
+  for (const [cursor, snapshot] of Object.entries(record.story.history)) {
+    const key = JSON.stringify(snapshot);
+    const shared = byValue.get(key);
+    if (!shared) { byValue.set(key, cursor); continue; }
+    delete record.story.history[cursor];
+    if (cursors.has(cursor)) aliases[cursor] = shared;
+    for (const alias of Object.keys(aliases)) if (aliases[alias] === cursor) aliases[alias] = shared;
+  }
+  if (record.story.historyAliases || Object.keys(aliases).length) record.story.historyAliases = aliases;
+  for (const cursor of Object.keys(record.story.lore)) if (!cursors.has(cursor)) delete record.story.lore[cursor];
+  return record;
+}
+
+/** Never silently re-judge an old turn after its original evidence was trimmed. */
+export function replayIsTrimmed(record: DirectorChatRecord, attempt: GenerationAttempt): boolean {
+  return attempt.replayTrimmed === true
+    || Boolean(attempt.resolutionId && record.resolutions[attempt.resolutionId]?.replayTrimmed)
+    || Boolean(attempt.permitId && record.permits[attempt.permitId]?.replayTrimmed);
 }

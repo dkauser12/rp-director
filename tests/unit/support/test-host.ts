@@ -6,7 +6,7 @@ import type { HostChatMessage, StContext } from '../../../src/host.ts';
 import type { Answer, EvaluationRequest, EvaluationResult } from '../../../src/types.ts';
 
 type Handler = (...args: unknown[]) => unknown;
-type SwipeChoice = Awaited<ReturnType<Host['chooseSwipeAction']>>;
+type SwipeChoice = 'reuse' | 'cancel' | 'reroll';
 
 export class TestHost extends Host {
   private handlers = new Map<string, Handler[]>();
@@ -21,7 +21,12 @@ export class TestHost extends Host {
   constructor(options: { group?: boolean } = {}) {
     super();
     const settings = defaultSettings();
-    settings.bindingConfirmedAt = 'confirmed';
+    settings.connection.kind = 'mock';
+    // Earlier module tests opt into Phase 3 explicitly when they exercise it.
+    settings.modules.pacing = false;
+    settings.modules.replyCheck = false;
+    settings.askWhenSwiping = false;
+    settings.reviewNpcRolls = false;
     const characters = [
       { name: 'Guide', avatar: 'guide.png', description: 'A careful guide. GUIDE-CARD', personality: 'dry' },
       { name: 'Mira', avatar: 'mira.png', description: 'A bold companion. MIRA-CARD', personality: 'warm' },
@@ -35,7 +40,7 @@ export class TestHost extends Host {
       groups: options.group ? [{ id: 'g1', name: 'Party', chat_id: 'staged-test', members: ['guide.png', 'mira.png'], disabled_members: [] }] : [],
       name1: 'Player', characterId: 0, groupId: options.group ? 'g1' : null, chatId: 'staged-test',
       chatMetadata: {}, extensionSettings: { rpDirector: settings },
-      eventTypes: Object.fromEntries(['CHAT_CHANGED', 'GENERATION_STARTED', 'GENERATION_STOPPED', 'GENERATION_ENDED', 'MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_SENT', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'MESSAGE_SWIPE_DELETED'].map(name => [name, name])),
+      eventTypes: Object.fromEntries(['CHAT_CHANGED', 'GENERATE_AFTER_DATA', 'GENERATION_STARTED', 'GENERATION_STOPPED', 'GENERATION_ENDED', 'MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_SENT', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'MESSAGE_SWIPE_DELETED'].map(name => [name, name])),
       eventSource: {
         on: (name: string, handler: Handler) => { this.handlers.set(name, [...(this.handlers.get(name) ?? []), handler]); },
         removeListener: (name: string, handler: Handler) => { this.handlers.set(name, (this.handlers.get(name) ?? []).filter(item => item !== handler)); },
@@ -53,15 +58,22 @@ export class TestHost extends Host {
   }
 
   override ctx(): StContext { return this.context; }
+  override settings() { const result = super.settings(); result.connection.kind = 'mock'; return result; }
   override async loadFlags(): Promise<void> {}
+  installedExtensions = ['third-party/DynamicResponse'];
+  protected override findHostExtension(name: string): { enabled: boolean } | null {
+    const id = this.installedExtensions.find(id => id === name || id === `third-party/${name}`);
+    return id ? { enabled: !(this.context.extensionSettings.disabledExtensions as string[] | undefined)?.includes(id) } : null;
+  }
   override isGenerating(): boolean { return false; }
   override isAutoMode(): boolean { return false; }
   override composerText(): string { return this.composerValue; }
   override interceptNativeSend(): () => void { return () => {}; }
+  override interceptNativeRegenerate(): () => void { return () => {}; }
   override toast(_kind: 'info' | 'success' | 'warning' | 'error', message: string): void { this.notices.push(message); }
   override async confirm(): Promise<boolean> { return true; }
-  override async chooseSwipeAction(): Promise<SwipeChoice> { return this.swipeResult(); }
-  override async postUserMessage(): Promise<boolean> { return true; }
+  async chooseSwipeAction(): Promise<SwipeChoice> { return this.swipeResult(); }
+  override async postUserMessage(_text: string): Promise<boolean> { return true; }
   async emit(name: string, ...args: unknown[]): Promise<void> {
     for (const handler of this.handlers.get(name) ?? []) await handler(...args);
   }
@@ -95,9 +107,14 @@ export function writerReplies(host: TestHost, controller: Controller, name: stri
   let injected = '';
   host.context.generate = async (_type: string, options?: Record<string, unknown>) => {
     host.generated.push(options ?? {});
+    // Native group generation selects force_chid before building the prompt
+    // and emits the reply under that character, not the previous selection.
+    const forced = host.isGroup() && typeof options?.force_chid === 'number' ? host.context.characters[options.force_chid] : null;
+    if (forced) host.context.characterId = options!.force_chid as number;
+    if (host.composerValue) { host.chat().push({ name: 'Player', is_user: true, is_system: false, mes: host.composerValue }); host.composerValue = ''; }
     await controller.interceptor([], 4096, () => assert.fail('unexpected abort'), 'normal');
     injected = host.injection;
-    host.chat().push({ name, original_avatar: avatar, is_user: false, is_system: false, mes: prose, swipe_id: 0, swipes: [prose], swipe_info: [{ extra: {} }] } as HostChatMessage);
+    host.chat().push({ name: forced?.name ?? name, original_avatar: forced?.avatar ?? avatar, is_user: false, is_system: false, mes: prose, swipe_id: 0, swipes: [prose], swipe_info: [{ extra: {} }] } as HostChatMessage);
     await host.emit('MESSAGE_RECEIVED', host.chat().length - 1, 'normal');
   };
   return { injected: () => injected };

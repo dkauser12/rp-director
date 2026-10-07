@@ -124,5 +124,47 @@ test('a failed state request keeps the previous state and does not block the tur
   await h.controller.directorSend();
   assert.equal(h.host.generated.length, 1, 'the reply was still written');
   assert.ok(h.controller.record!.inspector.some(e => /Character state kept from before/.test(e.message ?? '')));
-  assert.deepEqual(h.controller.characterStateForUi(), []);
+  assert.ok(h.controller.characterStateForUi()[0]!.meters.every(meter => meter.level === 'not yet judged'));
+});
+
+test('Reassess judges meters from the original pre-turn state and old swipes restore their own state', async () => {
+  const h = await stagedChat();
+  await h.controller.setChatPack('romance');
+  await turn(h, 'Hello.', { move: choice('NONE'), move_count: choice('one'), meter_1_regard: choice('friendly'), meter_1_nerve: choice('steady') }, 'A first reply.');
+  await turn(h, 'I lean closer.', { move: choice('NONE'), move_count: choice('one'), meter_1_regard: choice('warm'), meter_1_nerve: choice('bold') }, 'The original reply.');
+  const source = Object.values(h.controller.record!.attempts).at(-1)!;
+  assert.equal(source.storyBefore!.meters[GUIDE]!.regard, 2);
+  assert.equal(source.storyAfter!.meters[GUIDE]!.regard, 3);
+  const message = h.host.chat().at(-1)!;
+  const originalText = message.mes;
+  const originalExtra = structuredClone(message.extra);
+  const requests = scriptJudge(h.controller, { move: choice('NONE'), move_count: choice('one'), meter_1_regard: choice('smitten'), meter_1_nerve: choice('steady') });
+  h.host.swipeRight = async () => {
+    message.swipe_id = message.swipes!.length;
+    await h.host.emit('MESSAGE_SWIPED', h.host.chat().length - 1);
+    await h.controller.interceptor([], 4096, () => assert.fail('retry aborted'), 'swipe');
+    message.mes = 'The retried reply.';
+    message.swipes!.push(message.mes);
+    await h.host.emit('MESSAGE_RECEIVED', h.host.chat().length - 1, 'swipe');
+  };
+  await h.controller.reassess(true);
+  const state = requests.find(request => 'meter_1_regard' in request.questions)!;
+  assert.deepEqual(Object.keys(state.questions.meter_1_regard!.criteria!), ['guarded', 'friendly', 'warm']);
+  assert.equal(h.controller.characterStateForUi()[0]!.meters[0]!.level, 'friendly', 'invalid two-step answer leaves the pre-turn value');
+  message.swipe_id = 0;
+  message.mes = originalText;
+  message.extra = originalExtra;
+  await h.host.emit('MESSAGE_SWIPED', h.host.chat().length - 1);
+  assert.equal(h.controller.characterStateForUi()[0]!.meters[0]!.level, 'warm', 'selecting original restores its frozen meter');
+  assert.equal(source.storyAfter!.meters[GUIDE]!.regard, 3);
+});
+
+test('a partial first meter judgement retains the initial level for unanswered meters', async () => {
+  const h = await stagedChat();
+  await h.controller.setChatPack('romance');
+  await turn(h, 'Hello.', { move: choice('NONE'), move_count: choice('one'), meter_1_nerve: choice('steady') });
+  const source = Object.values(h.controller.record!.attempts).at(-1)!;
+  assert.equal(source.storyAfter!.meters[GUIDE]!.regard, 2);
+  assert.equal(source.storyAfter!.meters[GUIDE]!.nerve, 2);
+  assert.deepEqual(source.storyAfter!.assessed![GUIDE], { regard: false, nerve: true });
 });

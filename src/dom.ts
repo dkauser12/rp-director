@@ -11,8 +11,8 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<
   return node;
 }
 
-export function button(id: string, label: string, title: string, onClick: () => void, extraClass = ''): HTMLDivElement {
-  const b = el('div', { id, class: `menu_button interactable ${extraClass}`.trim(), title, text: label, tabindex: '0' });
+export function button(id: string, label: string, title: string, onClick: () => void, extraClass = ''): HTMLButtonElement {
+  const b = el('button', { id, type: 'button', class: `menu_button interactable ${extraClass}`.trim(), title, text: label });
   b.addEventListener('click', onClick);
   return b;
 }

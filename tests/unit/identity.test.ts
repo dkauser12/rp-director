@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { hash53, canonicalText, rootCursor, extendCursor, cursorChain, prefixCursor, actorIdFor, drawFromUint32, newId } from '../../src/identity.ts';
-import { autoAttemptFamilyQuestion, autoAttemptGateQuestion, autoAttemptNoulQuestion, buildState, checkBatch, speakerQuestion, gainNoulQuestion } from '../../src/questions.ts';
+import { buildState, checkBatch, speakerQuestion, gainNoulQuestion } from '../../src/questions.ts';
 import { bindingBlock, advisoryBlock, combinedBlock } from '../../src/prompts.ts';
 
 test('hash is deterministic and sensitive', () => {
@@ -81,14 +81,6 @@ test('M3-19: dependent questions and mixed private scopes are rejected from one 
   const dependent = { ...q, follow: { type: 'noul' as const, instructions: 'Given answers.speaker, is the chosen actor hostile to the player right now?' } };
   assert.equal(checkBatch(dependent, 48, ['shared-public']).ok, false);
   assert.equal(checkBatch(q, 1, ['shared-public']).ok, false);
-});
-
-test('automatic attempt gate, family and support questions are atomic and independently batchable', () => {
-  const questions = { attempt_gate: autoAttemptGateQuestion(), attempt_family: autoAttemptFamilyQuestion(), gain_noul: autoAttemptNoulQuestion() };
-  assert.equal(checkBatch(questions, 48, ['shared-public', 'shared-public', 'shared-public']).ok, true);
-  assert.deepEqual(Object.keys((questions.attempt_gate as any).criteria), ['none', 'trivial_or_certain', 'one_consequential', 'multiple_consequential']);
-  assert.ok(Object.keys((questions.attempt_family as any).criteria).includes('detect_discover'));
-  assert.match(questions.gain_noul.instructions, /FIRST primary intended state change/);
 });
 
 test('binding and advisory blocks stay separate; zero influence removes only advisory text', () => {
